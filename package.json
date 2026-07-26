@@ -1,0 +1,16 @@
+{
+  "name": "clip-creator",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Root orchestrator for the frontend (React) and backend (FastAPI) dev servers.",
+  "scripts": {
+    "dev": "concurrently -k -n FRONTEND,BACKEND -c blue,green \"npm:dev:frontend\" \"npm:dev:backend\"",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "uvicorn app.main:app --reload --port 8000 --app-dir backend",
+    "test": "npm run test --prefix frontend -- --run && npm run test:backend",
+    "test:backend": "pytest backend/tests"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
