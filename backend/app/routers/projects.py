@@ -70,7 +70,6 @@ def create_project(body: ProjectCreate):
         'created_at': now,
         'updated_at': now,
         'tags': ['Intro'],
-        'auto_repeat_chorus': False,
         'blocks': blocks,
         'skill_prompt': 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags.',
         'style': '',

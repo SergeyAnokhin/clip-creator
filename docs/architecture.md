@@ -35,7 +35,7 @@ library that wasn't needed.
 | --- | --- |
 | API client | [`src/api/client.js`](../frontend/src/api/client.js) - one function per backend route |
 | i18n | [`src/i18n/dict.js`](../frontend/src/i18n/dict.js) - RU/EN copy, kept in parity per [CLAUDE.md](../CLAUDE.md) |
-| Lyrics logic | [`src/lib/lyrics.js`](../frontend/src/lib/lyrics.js) - pure, unit-tested: chorus auto-repeat compilation, block reordering, line-level block splitting |
+| Lyrics logic | [`src/lib/lyrics.js`](../frontend/src/lib/lyrics.js) - pure, unit-tested: block reordering, line-level and N-line-group block splitting, one-shot chorus repetition, type-clone with intro/outro edge-jump, adjacent tag-block insertion, line bracket toggling |
 | Home screen | [`src/components/home/`](../frontend/src/components/home/) |
 | Workflow screen | [`src/components/workflow/`](../frontend/src/components/workflow/) - sidebar + Lyrics/Suno/Scenes stages |
 | Settings screen | [`src/components/settings/SettingsScreen.jsx`](../frontend/src/components/settings/SettingsScreen.jsx) |
@@ -83,15 +83,42 @@ they never hit the network.
 exclusive - raw text wins if both are filled in). Pasted text is split into
 blocks by `_split_into_blocks` in
 [`app/routers/projects.py`](../backend/app/routers/projects.py): every blank
-line (`\n\s*\n`) starts a new block, all typed `verse` with importance 3 by
-default - the user then re-tags each block (Intro/Chorus/Bridge/...) and
-reorders/duplicates them entirely by tapping, no text editor required. In the
-lyrics stage, an existing block can also be split further: each line of a
-block's content is rendered separately in
-[`BlockCard.jsx`](../frontend/src/components/workflow/BlockCard.jsx) with a
-"split here" button in the gap between two lines, backed by the pure
-`splitBlockAtLine` in [`lyrics.js`](../frontend/src/lib/lyrics.js) - both
-halves keep the original block's type/importance.
+line (`\n\s*\n`) starts a new block, all typed `verse` by default - the user
+then re-tags each block (Intro/Chorus/Bridge/...) and reorders/duplicates them
+entirely by tapping, no text editor required. Each stored block still has an
+`importance` field (1-5) for backward compatibility, but it's no longer read
+or edited anywhere in the UI - it's dead weight kept only so old project files
+keep loading unchanged.
+
+In the lyrics stage, blocks can be split further several ways, all backed by
+pure functions in [`lyrics.js`](../frontend/src/lib/lyrics.js) so the stage
+never needs a backend round-trip beyond the generic project `PATCH`:
+- Per-line "split here"/"wrap in brackets" icon buttons to the left of each
+  line in [`BlockCard.jsx`](../frontend/src/components/workflow/BlockCard.jsx),
+  backed by `splitBlockAtLine` (both halves keep the original block's
+  type/importance) and `toggleLineBrackets`.
+- A one-time "split into groups of N lines" control, shown only while a
+  project has exactly one block (i.e. right after a raw paste), backed by
+  `splitBlockEveryN`.
+- A second, icon-only type-chip next to the normal type selector clones the
+  block into a new type instead of retyping it in place, backed by
+  `cloneBlockWithType`.
+- Setting a block's type to `intro`/`outro` (via either type-chip) jumps it to
+  the start/end of the block list, via `moveToEdgeForType`. A block can also
+  be jumped to the start/end manually at any time via two extra buttons next
+  to the up/down movers in `BlockCard.jsx`'s toolbar, backed by the more
+  general `moveBlockToEdge` (which `moveToEdgeForType` is built on top of).
+- "Repeat Chorus" is a one-shot button (not a persistent toggle) that
+  physically inserts a chorus-block clone after every verse block, via
+  `repeatChorusAfterVerses` - `project.auto_repeat_chorus` no longer exists,
+  and `compileLyrics` is now a plain `{type, content}` mapper with no
+  auto-repeat branch.
+- A configurable list of Suno meta-tags (e.g. `[Vocal Interlude]`), edited in
+  Settings (`special_tags` in `app_data/settings.json`, default seeded in
+  `DEFAULT_SETTINGS` in
+  [`app/routers/settings.py`](../backend/app/routers/settings.py)), can be
+  inserted before/after a block via a popover or a `1`-`9` keyboard shortcut
+  while the block is focused, via `insertBlockAdjacent`.
 
 ### Not implemented yet
 

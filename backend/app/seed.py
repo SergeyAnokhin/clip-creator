@@ -20,7 +20,7 @@ def _seed_projects() -> list[dict]:
     return [
         {
             'author': 'Александр Пушкин', 'title': 'Зимнее утро', 'created_at': now, 'updated_at': now,
-            'tags': ['Intro', 'Verse', 'Chorus'], 'auto_repeat_chorus': False,
+            'tags': ['Intro', 'Verse', 'Chorus'],
             'blocks': [
                 _block('intro', 3, 'Мороз и солнце; день чудесный!\nЕщё ты дремлешь, друг прелестный —'),
                 _block('verse', 4, 'Пора, красавица, проснись:\nОткрой сомкнуты негой взоры\nНавстречу северной Авроры,\nЗвездою севера явись!'),
@@ -43,7 +43,7 @@ def _seed_projects() -> list[dict]:
         },
         {
             'author': 'Марина Цветаева', 'title': 'Мне нравится, что вы больны не мной', 'created_at': '2026-07-24T18:10:00Z', 'updated_at': '2026-07-24T18:10:00Z',
-            'tags': ['Verse', 'Chorus'], 'auto_repeat_chorus': False,
+            'tags': ['Verse', 'Chorus'],
             'blocks': [
                 _block('intro', 3, 'Мне нравится, что вы больны не мной,\nМне нравится, что я больна не вами,'),
                 _block('verse', 4, 'Что никогда тяжёлый шар земной\nНе уплывёт под нашими ногами.'),
@@ -64,7 +64,7 @@ def _seed_projects() -> list[dict]:
         },
         {
             'author': 'Сергей Есенин', 'title': 'Отговорила роща золотая', 'created_at': '2026-07-20T09:40:00Z', 'updated_at': '2026-07-20T09:40:00Z',
-            'tags': ['Intro'], 'auto_repeat_chorus': False,
+            'tags': ['Intro'],
             'blocks': [
                 _block('intro', 2, 'Отговорила роща золотая\nБерёзовым, весёлым языком,'),
                 _block('verse', 3, 'И журавли, печально пролетая,\nУж не жалеют больше ни о ком.'),

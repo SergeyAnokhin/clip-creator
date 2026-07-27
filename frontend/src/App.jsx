@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client.js';
 import { DICT } from './i18n/dict.js';
-import { moveBlock, splitBlockAtLine } from './lib/lyrics.js';
+import {
+  cloneBlockWithType, insertBlockAdjacent, moveBlock, moveBlockToEdge, moveToEdgeForType,
+  repeatChorusAfterVerses, splitBlockAtLine, splitBlockEveryN, toggleLineBrackets,
+} from './lib/lyrics.js';
 import { debounce } from './lib/debounce.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
@@ -37,6 +40,9 @@ function App() {
   const [editingBlockId, setEditingBlockId] = useState(null);
   const [draftContent, setDraftContent] = useState('');
   const [openMenuTypeBlockId, setOpenMenuTypeBlockId] = useState(null);
+  const [openMenuCloneBlockId, setOpenMenuCloneBlockId] = useState(null);
+  const [openTagMenuBlockId, setOpenTagMenuBlockId] = useState(null);
+  const [splitGroupSize, setSplitGroupSize] = useState(4);
 
   const [recordingKind, setRecordingKind] = useState(null);
   const [recordingTarget, setRecordingTarget] = useState(null);
@@ -53,6 +59,7 @@ function App() {
   const [apiKeys, setApiKeys] = useState({ openai: '', anthropic: '', deepseek: '', replicate: '' });
   const [textModelDefault, setTextModelDefault] = useState('claude');
   const [imageModelDefault, setImageModelDefault] = useState('flux');
+  const [specialTags, setSpecialTags] = useState(['[Vocal Interlude]', '[Female vocal interlude]']);
 
   const recInterval = useRef(null);
   const recTimeout = useRef(null);
@@ -68,6 +75,7 @@ function App() {
       setApiKeys(s.api_keys || {});
       setTextModelDefault(s.text_model_default || 'claude');
       setImageModelDefault(s.image_model_default || 'flux');
+      setSpecialTags(s.special_tags || ['[Vocal Interlude]', '[Female vocal interlude]']);
     }).catch(() => {});
     refreshProjects();
   }, []);
@@ -193,19 +201,48 @@ function App() {
   function moveBlockAction(id, dir) {
     updateProject((p) => ({ ...p, blocks: moveBlock(p.blocks, id, dir) }));
   }
+  function moveBlockToEdgeAction(id, edge) {
+    updateProject((p) => ({ ...p, blocks: moveBlockToEdge(p.blocks, id, edge) }));
+  }
   function splitBlock(id, lineIndex) {
     updateProject((p) => ({ ...p, blocks: splitBlockAtLine(p.blocks, id, lineIndex, randomId('blk')) }));
   }
-  function cycleImportance(id) {
+  function splitIntoGroups(id, n) {
+    updateProject((p) => ({ ...p, blocks: splitBlockEveryN(p.blocks, id, n, () => randomId('blk')) }));
+  }
+  function toggleTypeMenu(id) {
+    setOpenMenuTypeBlockId((cur) => (cur === id ? null : id));
+    setOpenMenuCloneBlockId(null);
+  }
+  function toggleCloneMenu(id) {
+    setOpenMenuCloneBlockId((cur) => (cur === id ? null : id));
+    setOpenMenuTypeBlockId(null);
+  }
+  function setBlockType(id, type) {
     updateProject((p) => ({
       ...p,
-      blocks: p.blocks.map((b) => (b.id === id ? { ...b, importance: b.importance >= 5 ? 1 : b.importance + 1 } : b)),
+      blocks: moveToEdgeForType(p.blocks.map((b) => (b.id === id ? { ...b, type } : b)), id, type),
+    }));
+    setOpenMenuTypeBlockId(null);
+  }
+  function cloneBlockAsType(id, type) {
+    updateProject((p) => ({ ...p, blocks: cloneBlockWithType(p.blocks, id, type, randomId('blk')) }));
+    setOpenMenuCloneBlockId(null);
+    showToast(L.toast_duplicated);
+  }
+  function toggleLineBracket(blockId, lineIndex) {
+    updateProject((p) => ({
+      ...p,
+      blocks: p.blocks.map((b) => (b.id === blockId ? { ...b, content: toggleLineBrackets(b.content, lineIndex) } : b)),
     }));
   }
-  function toggleTypeMenu(id) { setOpenMenuTypeBlockId((cur) => (cur === id ? null : id)); }
-  function setBlockType(id, type) {
-    updateProject((p) => ({ ...p, blocks: p.blocks.map((b) => (b.id === id ? { ...b, type } : b)) }));
-    setOpenMenuTypeBlockId(null);
+  function toggleTagMenu(id) { setOpenTagMenuBlockId((cur) => (cur === id ? null : id)); }
+  function insertTagBlock(afterId, tagText, position) {
+    updateProject((p) => ({
+      ...p,
+      blocks: insertBlockAdjacent(p.blocks, afterId, 'interlude', tagText, position, randomId('blk')),
+    }));
+    setOpenTagMenuBlockId(null);
   }
   function startEditBlock(id, content) { setEditingBlockId(id); setDraftContent(content); }
   function saveEditBlock() {
@@ -225,8 +262,9 @@ function App() {
     updateProject((p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== id) }));
     showToast(L.toast_deleted);
   }
-  function toggleAutoRepeat() {
-    updateProject((p) => ({ ...p, auto_repeat_chorus: !p.auto_repeat_chorus }));
+  function repeatChorus() {
+    updateProject((p) => ({ ...p, blocks: repeatChorusAfterVerses(p.blocks, () => randomId('blk')) }));
+    showToast(L.toast_chorusRepeated);
   }
 
   // ---------- voice simulation (block / refinement / scene) ----------
@@ -350,10 +388,19 @@ function App() {
 
   // ---------- settings ----------
   function setApiKey(key, value) { setApiKeys((prev) => ({ ...prev, [key]: value })); }
+  function addSpecialTag(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setSpecialTags((prev) => [...prev, trimmed]);
+  }
+  function removeSpecialTag(index) {
+    setSpecialTags((prev) => prev.filter((_, i) => i !== index));
+  }
   async function saveSettings() {
     try {
       await api.putSettings({
         lang, api_keys: apiKeys, text_model_default: textModelDefault, image_model_default: imageModelDefault,
+        special_tags: specialTags,
       });
       showToast(L.toast_saved);
     } catch {
@@ -362,12 +409,15 @@ function App() {
   }
 
   const lyricsState = {
-    editingBlockId, draftContent, openMenuTypeBlockId,
+    editingBlockId, draftContent, openMenuTypeBlockId, openMenuCloneBlockId, openTagMenuBlockId,
+    specialTags, splitGroupSize,
     recordingBlockId: recordingKind === 'block' ? recordingTarget : null,
     recordingSeconds,
     actions: {
-      toggleAutoRepeat, addBlock, moveBlock: moveBlockAction, splitBlock, toggleTypeMenu, setBlockType,
-      cycleImportance, startVoice, duplicateBlock, deleteBlock,
+      addBlock, moveBlock: moveBlockAction, moveBlockToEdge: moveBlockToEdgeAction, splitBlock, splitIntoGroups, setSplitGroupSize,
+      toggleTypeMenu, setBlockType, toggleCloneMenu, cloneBlockAsType, toggleLineBracket, repeatChorus,
+      toggleTagMenu, insertTagBlock,
+      startVoice, duplicateBlock, deleteBlock,
       startEditBlock, saveEditBlock, cancelEditBlock, setDraftContent,
     },
   };
@@ -423,10 +473,12 @@ function App() {
       {screen === 'settings' && (
         <SettingsScreen
           L={L} lang={lang} apiKeys={apiKeys} textModelDefault={textModelDefault} imageModelDefault={imageModelDefault}
+          specialTags={specialTags}
           onClose={closeSettings}
           actions={{
             setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
             setApiKey, setTextModelDefault, setImageModelDefault, onSave: saveSettings,
+            addSpecialTag, removeSpecialTag,
           }}
         />
       )}

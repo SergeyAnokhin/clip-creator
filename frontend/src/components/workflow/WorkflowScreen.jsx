@@ -37,7 +37,7 @@ export default function WorkflowScreen({
 
         <div className="workflow-main" style={{ padding: isMobile ? '18px 14px' : '28px 32px' }}>
           <div className="workflow-main-inner">
-            {activeStage === 'lyrics' && <LyricsStage L={L} project={project} {...lyricsState} />}
+            {activeStage === 'lyrics' && <LyricsStage L={L} project={project} viewport={viewport} {...lyricsState} />}
             {activeStage === 'suno' && <SunoStage L={L} project={project} {...sunoState} />}
             {activeStage === 'scenes' && <ScenesStage L={L} project={project} isMobile={isMobile} {...scenesState} />}
           </div>

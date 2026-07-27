@@ -1,4 +1,5 @@
-import { ArrowLeft } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, Trash2 } from 'lucide-react';
 
 const API_KEY_ROWS = [
   { key: 'openai', name: 'OpenAI' },
@@ -20,7 +21,9 @@ const IMAGE_MODELS = [
   { id: 'sdxl', label: 'SDXL' },
 ];
 
-export default function SettingsScreen({ L, lang, apiKeys, textModelDefault, imageModelDefault, onClose, actions }) {
+export default function SettingsScreen({ L, lang, apiKeys, textModelDefault, imageModelDefault, specialTags, onClose, actions }) {
+  const [newTagDraft, setNewTagDraft] = useState('');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <div className="home-header">
@@ -97,6 +100,34 @@ export default function SettingsScreen({ L, lang, apiKeys, textModelDefault, ima
                   {m.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="settings-panel">
+            <div className="settings-panel-label">{L.settings_specialTags}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {specialTags.map((tag, i) => (
+                <div className="settings-row" key={i}>
+                  <span className="settings-row-name">{tag}</span>
+                  <button className="icon-btn icon-btn-danger" onClick={() => actions.removeSpecialTag(i)}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <input
+                className="field"
+                value={newTagDraft}
+                onChange={(e) => setNewTagDraft(e.target.value)}
+                placeholder={L.settings_specialTagsPlaceholder}
+              />
+              <button
+                className="btn btn-accent-soft"
+                onClick={() => { actions.addSpecialTag(newTagDraft); setNewTagDraft(''); }}
+              >
+                {L.add}
+              </button>
             </div>
           </div>
 

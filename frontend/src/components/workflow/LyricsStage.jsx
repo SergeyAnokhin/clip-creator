@@ -3,12 +3,84 @@ import BlockCard from './BlockCard.jsx';
 import { compileLyrics, formatLyrics } from '../../lib/lyrics.js';
 
 export default function LyricsStage({
-  L, project, editingBlockId, draftContent, openMenuTypeBlockId,
+  L, project, viewport, editingBlockId, draftContent,
+  openMenuTypeBlockId, openMenuCloneBlockId, openTagMenuBlockId, specialTags, splitGroupSize,
   recordingBlockId, recordingSeconds, actions,
 }) {
   const preview = formatLyrics(
-    compileLyrics(project.blocks, project.auto_repeat_chorus),
+    compileLyrics(project.blocks),
     (type) => L[`type_${type}`],
+  );
+  const isDesktop = viewport === 'desktop';
+  const hasChorus = project.blocks.some((b) => b.type === 'chorus');
+  const isSingleBlock = project.blocks.length === 1;
+
+  const blockList = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: isDesktop ? '1 1 55%' : undefined }}>
+      {isSingleBlock && (
+        <div className="split-groups-row">
+          <span>{L.splitIntoGroupsLabel}</span>
+          <select
+            className="field"
+            style={{ width: 70 }}
+            value={splitGroupSize}
+            onChange={(e) => actions.setSplitGroupSize(Number(e.target.value))}
+          >
+            {Array.from({ length: 9 }, (_, i) => i + 2).map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+          <button
+            className="btn btn-accent-soft"
+            onClick={() => actions.splitIntoGroups(project.blocks[0].id, splitGroupSize)}
+          >
+            {L.splitIntoGroupsAction}
+          </button>
+        </div>
+      )}
+
+      {project.blocks.map((block) => (
+        <BlockCard
+          key={block.id}
+          block={block}
+          L={L}
+          isEditing={editingBlockId === block.id}
+          draftContent={draftContent}
+          typeMenuOpen={openMenuTypeBlockId === block.id}
+          cloneMenuOpen={openMenuCloneBlockId === block.id}
+          tagMenuOpen={openTagMenuBlockId === block.id}
+          specialTags={specialTags}
+          isRecording={recordingBlockId === block.id}
+          recordingSeconds={recordingSeconds}
+          onMoveUp={() => actions.moveBlock(block.id, -1)}
+          onMoveDown={() => actions.moveBlock(block.id, 1)}
+          onMoveToStart={() => actions.moveBlockToEdge(block.id, 'start')}
+          onMoveToEnd={() => actions.moveBlockToEdge(block.id, 'end')}
+          onToggleTypeMenu={() => actions.toggleTypeMenu(block.id)}
+          onSetType={(type) => actions.setBlockType(block.id, type)}
+          onToggleCloneMenu={() => actions.toggleCloneMenu(block.id)}
+          onCloneAsType={(type) => actions.cloneBlockAsType(block.id, type)}
+          onToggleTagMenu={() => actions.toggleTagMenu(block.id)}
+          onInsertTag={(tagText, position) => actions.insertTagBlock(block.id, tagText, position)}
+          onStartVoice={() => actions.startVoice('block', block.id)}
+          onDuplicate={() => actions.duplicateBlock(block.id)}
+          onDelete={() => actions.deleteBlock(block.id)}
+          onStartEdit={() => actions.startEditBlock(block.id, block.content)}
+          onSaveEdit={actions.saveEditBlock}
+          onCancelEdit={actions.cancelEditBlock}
+          onDraftChange={actions.setDraftContent}
+          onSplitLine={(lineIndex) => actions.splitBlock(block.id, lineIndex)}
+          onToggleLineBracket={(lineIndex) => actions.toggleLineBracket(block.id, lineIndex)}
+        />
+      ))}
+    </div>
+  );
+
+  const previewPanel = (
+    <div className={`compiled-preview${isDesktop ? ' compiled-preview-inline' : ''}`} style={isDesktop ? { flex: '1 1 45%' } : undefined}>
+      <div className="compiled-preview-label">{L.compiledPreview}</div>
+      <pre>{preview}</pre>
+    </div>
   );
 
   return (
@@ -18,13 +90,12 @@ export default function LyricsStage({
           <div className="stage-heading-title">{L.lyricsStageTitle}</div>
           <div className="stage-heading-subtitle">{L.lyricsStageSubtitle}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>{L.autoRepeatChorus}</span>
-            <div className={`toggle${project.auto_repeat_chorus ? ' is-on' : ''}`} onClick={actions.toggleAutoRepeat}>
-              <div className="toggle-knob" />
-            </div>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {hasChorus && (
+            <button className="btn btn-accent-soft" onClick={actions.repeatChorus}>
+              {L.repeatChorusAction}
+            </button>
+          )}
           <button className="btn btn-accent-soft" onClick={actions.addBlock}>
             <Plus size={14} />
             {L.addBlock}
@@ -32,38 +103,17 @@ export default function LyricsStage({
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {project.blocks.map((block) => (
-          <BlockCard
-            key={block.id}
-            block={block}
-            L={L}
-            isEditing={editingBlockId === block.id}
-            draftContent={draftContent}
-            typeMenuOpen={openMenuTypeBlockId === block.id}
-            isRecording={recordingBlockId === block.id}
-            recordingSeconds={recordingSeconds}
-            onMoveUp={() => actions.moveBlock(block.id, -1)}
-            onMoveDown={() => actions.moveBlock(block.id, 1)}
-            onToggleTypeMenu={() => actions.toggleTypeMenu(block.id)}
-            onSetType={(type) => actions.setBlockType(block.id, type)}
-            onCycleImportance={() => actions.cycleImportance(block.id)}
-            onStartVoice={() => actions.startVoice('block', block.id)}
-            onDuplicate={() => actions.duplicateBlock(block.id)}
-            onDelete={() => actions.deleteBlock(block.id)}
-            onStartEdit={() => actions.startEditBlock(block.id, block.content)}
-            onSaveEdit={actions.saveEditBlock}
-            onCancelEdit={actions.cancelEditBlock}
-            onDraftChange={actions.setDraftContent}
-            onSplitLine={(lineIndex) => actions.splitBlock(block.id, lineIndex)}
-          />
-        ))}
-      </div>
-
-      <div className="compiled-preview">
-        <div className="compiled-preview-label">{L.compiledPreview}</div>
-        <pre>{preview}</pre>
-      </div>
+      {isDesktop ? (
+        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+          {blockList}
+          {previewPanel}
+        </div>
+      ) : (
+        <>
+          {blockList}
+          {previewPanel}
+        </>
+      )}
     </>
   );
 }

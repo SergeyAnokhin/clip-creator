@@ -9,6 +9,7 @@ DEFAULT_SETTINGS = {
     'api_keys': {'openai': '', 'anthropic': '', 'deepseek': '', 'replicate': ''},
     'text_model_default': 'claude',
     'image_model_default': 'flux',
+    'special_tags': ['[Vocal Interlude]', '[Female vocal interlude]'],
 }
 
 
