@@ -609,13 +609,17 @@
 
 .block-card {
   position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
   background: rgba(255, 255, 255, 0.045);
+  background: color-mix(in srgb, var(--stripe, var(--accent)) 7%, rgba(255, 255, 255, 0.045));
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-left: 4px solid var(--stripe, var(--accent));
   border-radius: 16px;
-  padding: 16px 18px;
+  padding: 8px 12px 8px 6px;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
 }
 
@@ -624,18 +628,26 @@
   outline-offset: 2px;
 }
 
+.block-body {
+  flex: 1;
+  min-width: 0;
+}
+
 .block-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
   flex-wrap: wrap;
 }
 
 .block-move {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 2px 2px;
 }
 
 .block-move button {
@@ -743,13 +755,37 @@
   color: var(--accent);
 }
 
+.block-line-row > .line-icon-btn {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.line-icon-btn-danger:hover,
+.line-icon-btn-danger:focus-visible {
+  color: var(--danger);
+}
+
 .block-line {
   margin: 0;
+  flex: 1;
   font-size: 14.5px;
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.88);
   cursor: text;
-  padding: 2px 0;
+  padding: 1px 0;
+}
+
+.block-line-input {
+  flex: 1;
+  margin: 0;
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 157, 92, 0.4);
+  border-radius: 4px;
+  padding: 0 6px;
 }
 
 .block-textarea {

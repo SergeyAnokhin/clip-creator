@@ -11,6 +11,7 @@ export const DICT = {
     repeatChorusAction: 'Повторить Chorus', addBlock: 'Добавить блок',
     voiceEdit: 'Голосовая правка', duplicate: 'Дублировать', delete: 'Удалить', splitLineHint: 'Разбить здесь',
     cloneAsType: 'Клонировать с новым типом', toggleBrackets: 'Обернуть в скобки',
+    editWholeBlock: 'Редактировать блок целиком', duplicateLineHint: 'Дублировать строку', deleteLineHint: 'Удалить строку',
     moveToStart: 'В начало', moveToEnd: 'В конец',
     splitIntoGroupsLabel: 'Строк в блоке', splitIntoGroupsAction: 'Разбить',
     specialTags: 'Спецтеги', insertBefore: 'Вставить перед', insertAfter: 'Вставить после', add: 'Добавить',
@@ -45,6 +46,7 @@ export const DICT = {
     repeatChorusAction: 'Repeat Chorus', addBlock: 'Add block',
     voiceEdit: 'Voice edit', duplicate: 'Duplicate', delete: 'Delete', splitLineHint: 'Split here',
     cloneAsType: 'Clone with new type', toggleBrackets: 'Wrap in parentheses',
+    editWholeBlock: 'Edit whole block', duplicateLineHint: 'Duplicate line', deleteLineHint: 'Delete line',
     moveToStart: 'Move to start', moveToEnd: 'Move to end',
     splitIntoGroupsLabel: 'Lines per block', splitIntoGroupsAction: 'Split',
     specialTags: 'Special tags', insertBefore: 'Insert before', insertAfter: 'Insert after', add: 'Add',
@@ -69,5 +71,5 @@ export const DICT = {
   },
 };
 
-export const TYPE_COLORS = { intro: '#a3a3a3', verse: '#d4d4d4', chorus: '#ff9d5c', bridge: '#d4d4d4', outro: '#a3a3a3', interlude: '#d4d4d4' };
+export const TYPE_COLORS = { intro: '#7dd3fc', verse: '#d4d4d4', chorus: '#ff9d5c', bridge: '#c4b5fd', outro: '#fda4af', interlude: '#86efac' };
 export const TYPE_ORDER = ['intro', 'verse', 'chorus', 'bridge', 'outro', 'interlude'];

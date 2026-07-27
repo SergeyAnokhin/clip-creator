@@ -5,6 +5,7 @@ import { compileLyrics, formatLyrics } from '../../lib/lyrics.js';
 export default function LyricsStage({
   L, project, viewport, editingBlockId, draftContent,
   openMenuTypeBlockId, openMenuCloneBlockId, openTagMenuBlockId, specialTags, splitGroupSize,
+  editingLineBlockId, editingLineIndex, lineDraft,
   recordingBlockId, recordingSeconds, actions,
 }) {
   const preview = formatLyrics(
@@ -46,6 +47,8 @@ export default function LyricsStage({
           L={L}
           isEditing={editingBlockId === block.id}
           draftContent={draftContent}
+          editingLineIndex={editingLineBlockId === block.id ? editingLineIndex : null}
+          lineDraft={lineDraft}
           typeMenuOpen={openMenuTypeBlockId === block.id}
           cloneMenuOpen={openMenuCloneBlockId === block.id}
           tagMenuOpen={openTagMenuBlockId === block.id}
@@ -65,12 +68,18 @@ export default function LyricsStage({
           onStartVoice={() => actions.startVoice('block', block.id)}
           onDuplicate={() => actions.duplicateBlock(block.id)}
           onDelete={() => actions.deleteBlock(block.id)}
-          onStartEdit={() => actions.startEditBlock(block.id, block.content)}
+          onStartBlockEdit={() => actions.startEditBlock(block.id, block.content)}
           onSaveEdit={actions.saveEditBlock}
           onCancelEdit={actions.cancelEditBlock}
           onDraftChange={actions.setDraftContent}
           onSplitLine={(lineIndex) => actions.splitBlock(block.id, lineIndex)}
           onToggleLineBracket={(lineIndex) => actions.toggleLineBracket(block.id, lineIndex)}
+          onStartLineEdit={(lineIndex, content) => actions.startEditLine(block.id, lineIndex, content)}
+          onSaveLineEdit={actions.saveEditLine}
+          onCancelLineEdit={actions.cancelEditLine}
+          onLineDraftChange={actions.setLineDraft}
+          onDuplicateLine={(lineIndex) => actions.duplicateLine(block.id, lineIndex)}
+          onDeleteLine={(lineIndex) => actions.deleteLine(block.id, lineIndex)}
         />
       ))}
     </div>

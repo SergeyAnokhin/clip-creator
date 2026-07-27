@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  cloneBlockWithType, compileLyrics, formatLyrics, insertBlockAdjacent, moveBlock, moveBlockToEdge, moveToEdgeForType,
-  repeatChorusAfterVerses, splitBlockAtLine, splitBlockEveryN, toggleLineBrackets,
+  cloneBlockWithType, compileLyrics, deleteLine, duplicateLine, formatLyrics, insertBlockAdjacent, moveBlock,
+  moveBlockToEdge, moveToEdgeForType, repeatChorusAfterVerses, setLine, splitBlockAtLine, splitBlockEveryN,
+  toggleLineBrackets,
 } from './lyrics.js';
 
 const blocks = [
@@ -103,6 +104,53 @@ describe('toggleLineBrackets', () => {
   it('is a no-op for an out-of-range line index', () => {
     expect(toggleLineBrackets(content, 5)).toBe(content);
     expect(toggleLineBrackets(content, -1)).toBe(content);
+  });
+});
+
+describe('duplicateLine', () => {
+  const content = 'First line\nSecond line\nThird line';
+
+  it('inserts a copy of the line right after itself', () => {
+    expect(duplicateLine(content, 1)).toBe('First line\nSecond line\nSecond line\nThird line');
+  });
+
+  it('duplicates the last line at the end', () => {
+    expect(duplicateLine(content, 2)).toBe('First line\nSecond line\nThird line\nThird line');
+  });
+
+  it('is a no-op for an out-of-range line index', () => {
+    expect(duplicateLine(content, 5)).toBe(content);
+    expect(duplicateLine(content, -1)).toBe(content);
+  });
+});
+
+describe('deleteLine', () => {
+  const content = 'First line\nSecond line\nThird line';
+
+  it('removes the line at the given index', () => {
+    expect(deleteLine(content, 1)).toBe('First line\nThird line');
+  });
+
+  it('removes the last line', () => {
+    expect(deleteLine(content, 2)).toBe('First line\nSecond line');
+  });
+
+  it('is a no-op for an out-of-range line index', () => {
+    expect(deleteLine(content, 5)).toBe(content);
+    expect(deleteLine(content, -1)).toBe(content);
+  });
+});
+
+describe('setLine', () => {
+  const content = 'First line\nSecond line\nThird line';
+
+  it('replaces the text of the given line', () => {
+    expect(setLine(content, 1, 'Changed')).toBe('First line\nChanged\nThird line');
+  });
+
+  it('is a no-op for an out-of-range line index', () => {
+    expect(setLine(content, 5, 'x')).toBe(content);
+    expect(setLine(content, -1, 'x')).toBe(content);
   });
 });
 

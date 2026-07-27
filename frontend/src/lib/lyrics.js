@@ -73,6 +73,39 @@ export function toggleLineBrackets(content, lineIndex) {
 }
 
 /**
+ * Duplicates one line of a block's `\n`-joined `content`, inserting the copy
+ * immediately after the original. No-op if `lineIndex` is out of range.
+ */
+export function duplicateLine(content, lineIndex) {
+  const lines = content.split('\n');
+  if (lineIndex < 0 || lineIndex >= lines.length) return content;
+  lines.splice(lineIndex + 1, 0, lines[lineIndex]);
+  return lines.join('\n');
+}
+
+/**
+ * Removes one line from a block's `\n`-joined `content`. No-op if
+ * `lineIndex` is out of range.
+ */
+export function deleteLine(content, lineIndex) {
+  const lines = content.split('\n');
+  if (lineIndex < 0 || lineIndex >= lines.length) return content;
+  lines.splice(lineIndex, 1);
+  return lines.join('\n');
+}
+
+/**
+ * Replaces the text of one line in a block's `\n`-joined `content`. No-op if
+ * `lineIndex` is out of range.
+ */
+export function setLine(content, lineIndex, value) {
+  const lines = content.split('\n');
+  if (lineIndex < 0 || lineIndex >= lines.length) return content;
+  lines[lineIndex] = value;
+  return lines.join('\n');
+}
+
+/**
  * Moves the block with `id` to the very start (`'start'`) or end (`'end'`)
  * of the array. No-op if `id` isn't found or `edge` is unrecognized.
  */

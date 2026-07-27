@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client.js';
 import { DICT } from './i18n/dict.js';
 import {
-  cloneBlockWithType, insertBlockAdjacent, moveBlock, moveBlockToEdge, moveToEdgeForType,
-  repeatChorusAfterVerses, splitBlockAtLine, splitBlockEveryN, toggleLineBrackets,
+  cloneBlockWithType, deleteLine, duplicateLine, insertBlockAdjacent, moveBlock, moveBlockToEdge, moveToEdgeForType,
+  repeatChorusAfterVerses, setLine, splitBlockAtLine, splitBlockEveryN, toggleLineBrackets,
 } from './lib/lyrics.js';
 import { debounce } from './lib/debounce.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
@@ -39,6 +39,9 @@ function App() {
 
   const [editingBlockId, setEditingBlockId] = useState(null);
   const [draftContent, setDraftContent] = useState('');
+  const [editingLineBlockId, setEditingLineBlockId] = useState(null);
+  const [editingLineIndex, setEditingLineIndex] = useState(null);
+  const [lineDraft, setLineDraft] = useState('');
   const [openMenuTypeBlockId, setOpenMenuTypeBlockId] = useState(null);
   const [openMenuCloneBlockId, setOpenMenuCloneBlockId] = useState(null);
   const [openTagMenuBlockId, setOpenTagMenuBlockId] = useState(null);
@@ -250,6 +253,34 @@ function App() {
     setEditingBlockId(null);
   }
   function cancelEditBlock() { setEditingBlockId(null); }
+  function startEditLine(blockId, lineIndex, content) {
+    setEditingLineBlockId(blockId);
+    setEditingLineIndex(lineIndex);
+    setLineDraft(content);
+  }
+  function saveEditLine() {
+    updateProject((p) => ({
+      ...p,
+      blocks: p.blocks.map((b) => (
+        b.id === editingLineBlockId ? { ...b, content: setLine(b.content, editingLineIndex, lineDraft) } : b
+      )),
+    }));
+    setEditingLineBlockId(null);
+    setEditingLineIndex(null);
+  }
+  function cancelEditLine() { setEditingLineBlockId(null); setEditingLineIndex(null); }
+  function duplicateLineAction(blockId, lineIndex) {
+    updateProject((p) => ({
+      ...p,
+      blocks: p.blocks.map((b) => (b.id === blockId ? { ...b, content: duplicateLine(b.content, lineIndex) } : b)),
+    }));
+  }
+  function deleteLineAction(blockId, lineIndex) {
+    updateProject((p) => ({
+      ...p,
+      blocks: p.blocks.map((b) => (b.id === blockId ? { ...b, content: deleteLine(b.content, lineIndex) } : b)),
+    }));
+  }
   function duplicateBlock(id) {
     updateProject((p) => {
       const idx = p.blocks.findIndex((b) => b.id === id);
@@ -411,6 +442,7 @@ function App() {
   const lyricsState = {
     editingBlockId, draftContent, openMenuTypeBlockId, openMenuCloneBlockId, openTagMenuBlockId,
     specialTags, splitGroupSize,
+    editingLineBlockId, editingLineIndex, lineDraft,
     recordingBlockId: recordingKind === 'block' ? recordingTarget : null,
     recordingSeconds,
     actions: {
@@ -419,6 +451,8 @@ function App() {
       toggleTagMenu, insertTagBlock,
       startVoice, duplicateBlock, deleteBlock,
       startEditBlock, saveEditBlock, cancelEditBlock, setDraftContent,
+      startEditLine, saveEditLine, cancelEditLine, setLineDraft, duplicateLine: duplicateLineAction,
+      deleteLine: deleteLineAction,
     },
   };
 
