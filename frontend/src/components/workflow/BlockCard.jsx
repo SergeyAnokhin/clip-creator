@@ -16,6 +16,8 @@ export default function BlockCard({
 }) {
   const stripe = TYPE_COLORS[block.type];
   const lines = block.content.split('\n');
+  const isInterlude = block.type === 'interlude';
+  const chipLabel = isInterlude ? block.content.replace(/^\[|\]$/g, '') : L[`type_${block.type}`];
 
   function handleKeyDown(e) {
     if (isEditing) return;
@@ -41,12 +43,12 @@ export default function BlockCard({
   }
 
   return (
-    <div className="block-card" style={{ '--stripe': stripe }} tabIndex={0} onKeyDown={handleKeyDown}>
-      <div className="block-move">
-        <button title={L.moveToStart} onClick={onMoveToStart}><ChevronsUp size={13} /></button>
+    <div className={`block-card${isInterlude ? ' block-card-tag' : ''}`} style={{ '--stripe': stripe }} tabIndex={0} onKeyDown={handleKeyDown}>
+      <div className={`block-move${isInterlude ? ' block-move-compact' : ''}`}>
+        {!isInterlude && <button title={L.moveToStart} onClick={onMoveToStart}><ChevronsUp size={13} /></button>}
         <button onClick={onMoveUp}><ChevronUp size={13} /></button>
         <button onClick={onMoveDown}><ChevronDown size={13} /></button>
-        <button title={L.moveToEnd} onClick={onMoveToEnd}><ChevronsDown size={13} /></button>
+        {!isInterlude && <button title={L.moveToEnd} onClick={onMoveToEnd}><ChevronsDown size={13} /></button>}
       </div>
 
       <div className="block-body">
@@ -54,17 +56,19 @@ export default function BlockCard({
           <div style={{ position: 'relative' }}>
             <button className="type-chip" style={{ '--stripe': stripe }} onClick={onToggleTypeMenu}>
               <Tag size={11} />
-              {L[`type_${block.type}`]}
+              {chipLabel}
             </button>
             {typeMenuOpen && <TypeMenu L={L} onSelect={onSetType} />}
           </div>
 
-          <div style={{ position: 'relative' }}>
-            <button className="type-chip type-chip-clone" style={{ '--stripe': stripe }} title={L.cloneAsType} onClick={onToggleCloneMenu}>
-              <CopyPlus size={11} />
-            </button>
-            {cloneMenuOpen && <TypeMenu L={L} onSelect={onCloneAsType} />}
-          </div>
+          {!isInterlude && (
+            <div style={{ position: 'relative' }}>
+              <button className="type-chip type-chip-clone" style={{ '--stripe': stripe }} title={L.cloneAsType} onClick={onToggleCloneMenu}>
+                <CopyPlus size={11} />
+              </button>
+              {cloneMenuOpen && <TypeMenu L={L} onSelect={onCloneAsType} />}
+            </div>
+          )}
 
           <div style={{ flex: 1 }} />
           <div style={{ position: 'relative' }}>
@@ -73,12 +77,16 @@ export default function BlockCard({
             </button>
             {tagMenuOpen && <TagMenu L={L} tags={specialTags} onInsert={onInsertTag} />}
           </div>
-          <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.voiceEdit} onClick={onStartVoice}>
-            <Mic size={13} />
-          </button>
-          <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.editWholeBlock} onClick={onStartBlockEdit}>
-            <Pencil size={13} />
-          </button>
+          {!isInterlude && (
+            <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.voiceEdit} onClick={onStartVoice}>
+              <Mic size={13} />
+            </button>
+          )}
+          {!isInterlude && (
+            <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.editWholeBlock} onClick={onStartBlockEdit}>
+              <Pencil size={13} />
+            </button>
+          )}
           <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.duplicate} onClick={onDuplicate}>
             <Copy size={13} />
           </button>
@@ -87,7 +95,7 @@ export default function BlockCard({
           </button>
         </div>
 
-        {isEditing ? (
+        {isInterlude ? null : isEditing ? (
           <>
             <textarea
               className="block-textarea"

@@ -130,7 +130,16 @@ never needs a backend round-trip beyond the generic project `PATCH`:
   `DEFAULT_SETTINGS` in
   [`app/routers/settings.py`](../backend/app/routers/settings.py)), can be
   inserted before/after a block via a popover or a `1`-`9` keyboard shortcut
-  while the block is focused, via `insertBlockAdjacent`.
+  while the block is focused, via `insertBlockAdjacent`. These inserted blocks
+  always get type `interlude`, which `BlockCard.jsx` renders as a compact,
+  single-line "tag" card instead of a normal block: the type-chip shows the
+  tag text itself (content with its outer brackets stripped) rather than the
+  "Interlude" type label, the per-line editor/clone-as-type/voice/edit-whole
+  buttons are hidden (there's no real text to edit), and the move rail is
+  reduced to just the up/down buttons. `formatLyrics` in `lyrics.js` mirrors
+  this in the compiled output: `interlude` segments are emitted as their raw
+  content with no `[TypeLabel]` wrapper, since the content is already the
+  full tag (e.g. `[Vocal Interlude]`).
 
 ### Not implemented yet
 

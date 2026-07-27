@@ -663,6 +663,19 @@
   color: #fff;
 }
 
+.block-card-tag {
+  padding: 6px 10px 6px 6px;
+}
+
+.block-card-tag .block-toolbar {
+  margin-bottom: 0;
+}
+
+.block-move-compact {
+  justify-content: center;
+  gap: 10px;
+}
+
 .type-chip {
   border-radius: 20px;
   padding: 5px 12px;

@@ -30,6 +30,15 @@ describe('formatLyrics', () => {
     ];
     expect(formatLyrics(segments, (t) => t.toUpperCase())).toBe('[INTRO]\nA\n\n[CHORUS]\nB');
   });
+
+  it('emits interlude segments as-is, without a type-label wrapper', () => {
+    const segments = [
+      { type: 'intro', content: 'A' },
+      { type: 'interlude', content: '[Vocal Interlude]' },
+      { type: 'verse', content: 'B' },
+    ];
+    expect(formatLyrics(segments, (t) => t.toUpperCase())).toBe('[INTRO]\nA\n\n[Vocal Interlude]\n\n[VERSE]\nB');
+  });
 });
 
 describe('moveBlock', () => {

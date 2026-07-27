@@ -15,8 +15,15 @@ export function compileLyrics(blocks) {
   return blocks.map((b) => ({ type: b.type, content: b.content }));
 }
 
+/**
+ * `interlude` segments are raw tags (e.g. `[Vocal Interlude]`) that already
+ * carry their own brackets, so they're emitted as-is instead of getting a
+ * `[TypeLabel]` wrapper like other block types.
+ */
 export function formatLyrics(segments, typeLabel) {
-  return segments.map((s) => `[${typeLabel(s.type)}]\n${s.content}`).join('\n\n');
+  return segments
+    .map((s) => (s.type === 'interlude' ? s.content : `[${typeLabel(s.type)}]\n${s.content}`))
+    .join('\n\n');
 }
 
 /**
