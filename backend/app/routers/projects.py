@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from .. import storage
 from ..models import ProjectCreate
+from ..providers import url_parser
 from ..slug import make_slug
 
 router = APIRouter(prefix='/api/projects', tags=['projects'])
@@ -47,19 +48,24 @@ def list_projects():
 
 
 @router.post('', status_code=201)
-def create_project(body: ProjectCreate):
-    # Real link parsing (title/author/text extraction from a URL) is still a
-    # stub - see docs/architecture.md. Pasted raw text, however, is split
-    # into blocks for real (see _split_into_blocks below).
+async def create_project(body: ProjectCreate):
     now = _now()
-    author, title = 'Неизвестный автор', 'Новое стихотворение'
+    author, title, raw_text = 'Неизвестный автор', 'Новое стихотворение', body.raw_text
+
+    if not raw_text.strip() and body.url.strip():
+        parsed = await url_parser.parse(body.url)
+        if parsed:
+            author = parsed['author'] or author
+            title = parsed['title'] or title
+            raw_text = parsed['raw_text']
+
     base_slug = make_slug(author, title)
     slug, i = base_slug, 2
     while storage.load_project(slug) is not None:
         slug = f'{base_slug}-{i}'
         i += 1
 
-    blocks = _split_into_blocks(body.raw_text) if body.raw_text.strip() else [
+    blocks = _split_into_blocks(raw_text) if raw_text.strip() else [
         {'id': f'blk_{uuid4().hex[:8]}', 'type': 'intro', 'importance': 3, 'content': 'Новый импортированный текст появится здесь.'},
     ]
 

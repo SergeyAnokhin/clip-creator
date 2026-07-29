@@ -1,4 +1,10 @@
-def test_create_list_patch_delete_roundtrip(client):
+from unittest.mock import AsyncMock
+
+from app.routers import projects as projects_router
+
+
+def test_create_list_patch_delete_roundtrip(client, monkeypatch):
+    monkeypatch.setattr(projects_router.url_parser, 'parse', AsyncMock(return_value=None))
     created = client.post('/api/projects', json={'url': 'https://example.com/poem'}).json()
     pid = created['id']
     assert created['source_url'] == 'https://example.com/poem'
@@ -36,7 +42,34 @@ def test_create_with_raw_text_splits_blocks_on_blank_lines(client):
     assert all(b['type'] == 'verse' for b in created['blocks'])
 
 
-def test_create_without_raw_text_falls_back_to_placeholder_block(client):
+def test_create_without_raw_text_falls_back_to_placeholder_block(client, monkeypatch):
+    monkeypatch.setattr(projects_router.url_parser, 'parse', AsyncMock(return_value=None))
     created = client.post('/api/projects', json={'url': 'https://example.com/poem'}).json()
     assert len(created['blocks']) == 1
     assert created['blocks'][0]['type'] == 'intro'
+
+
+def test_create_with_url_uses_parsed_author_title_and_text(client, monkeypatch):
+    monkeypatch.setattr(
+        projects_router.url_parser, 'parse',
+        AsyncMock(return_value={
+            'author': 'Александр Пушкин',
+            'title': 'Зимнее утро',
+            'raw_text': 'Мороз и солнце; день чудесный!\n\nЕщё ты дремлешь, друг прелестный.',
+        }),
+    )
+    created = client.post('/api/projects', json={'url': 'https://example.com/poem'}).json()
+    assert created['author'] == 'Александр Пушкин'
+    assert created['title'] == 'Зимнее утро'
+    assert [b['content'] for b in created['blocks']] == [
+        'Мороз и солнце; день чудесный!',
+        'Ещё ты дремлешь, друг прелестный.',
+    ]
+
+
+def test_create_prefers_raw_text_over_url_parsing(client, monkeypatch):
+    parse_mock = AsyncMock()
+    monkeypatch.setattr(projects_router.url_parser, 'parse', parse_mock)
+    created = client.post('/api/projects', json={'url': 'https://example.com/poem', 'raw_text': 'Явный текст'}).json()
+    parse_mock.assert_not_called()
+    assert created['blocks'][0]['content'] == 'Явный текст'

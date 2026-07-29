@@ -141,12 +141,35 @@ never needs a backend round-trip beyond the generic project `PATCH`:
   content with no `[TypeLabel]` wrapper, since the content is already the
   full tag (e.g. `[Vocal Interlude]`).
 
+### URL parsing for "New Workflow"
+
+When "New Workflow" is submitted with a `url` and no pasted `raw_text`,
+[`app/providers/url_parser.py`](../backend/app/providers/url_parser.py)
+fetches the page (`httpx`) and extracts `{author, title, raw_text}` with a
+generic, non-site-specific heuristic (`BeautifulSoup`, stdlib `html.parser`):
+title from `<h1>` (falling back to `<title>`, with a common
+` | Site Name`-style suffix stripped), author from a `<meta name="author">` /
+`<meta property="article:author">` tag or a `rel="author"` element, and body
+text from the first of `<pre>`, `<article>`, `<main>`, or (as a last resort)
+the element with the most text on the page - `<script>`/`<nav>`/`<header>`/
+`<footer>`/etc. are stripped first. `<br>` tags and block-level tag
+boundaries (`<p>`, `<div>`, ...) become line breaks, so an empty `<p></p>`
+spacer or a double `<br><br>` between stanzas is preserved as a blank line
+for `_split_into_blocks` to split on downstream.
+
+This is a best-effort heuristic, not a scraper tuned to any particular poetry
+site - it extracts cleanly from pages with `<article>`/`<main>`/`<pre>`
+semantic markup and an author meta tag, but on pages without that structure
+(e.g. a Wikisource article, which wraps the poem in generic `<div>`s among
+nav/category chrome) it can pull in surrounding page text along with the
+poem. There's no user-facing preview step before the project is created -
+the same "fix it in the Lyrics stage" expectation already applies to the
+pasted-text path (blocks are freely editable/deletable there). If the fetch
+fails (network error, non-2xx, timeout) or `url` is empty, `create_project`
+falls back to the placeholder-project behavior unchanged.
+
 ### Not implemented yet
 
-- Real link parsing for "New Workflow" (`POST /api/projects` with a `url`
-  still creates a placeholder project, ignoring the URL's actual page
-  content - see "Lyrics builder: paste-and-split" above for the raw-text
-  path, which does work).
 - Real speech-to-text for the voice-input buttons.
 - Real AI provider calls (see above).
 
@@ -155,6 +178,8 @@ never needs a backend round-trip beyond the generic project `PATCH`:
 - Frontend: `npm run test --prefix frontend` (Vitest) - covers the lyrics
   compilation/reordering logic in [`src/lib/lyrics.test.js`](../frontend/src/lib/lyrics.test.js).
 - Backend: `pytest backend/tests` - covers slug sanitization, the project
-  CRUD round-trip against a temp storage root, and the generation routes
-  against mocked provider seams.
+  CRUD round-trip against a temp storage root, the generation routes against
+  mocked provider seams, and the URL parser (`extract()` unit tests against
+  raw HTML, no network; the `url` project-creation path with
+  `url_parser.parse` mocked so it never hits the network either).
 - `npm test` from the repo root runs both.
