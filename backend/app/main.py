@@ -19,7 +19,11 @@ app = FastAPI(title='Versecraft API', lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['http://localhost:5174'],
+    # Regex (not a fixed origin) so multiple local dev sessions can each get
+    # their own Vite port (see vite.config.js reading $PORT) without editing
+    # this file — single-user local tool, so a same-machine localhost check
+    # is enough.
+    allow_origin_regex=r'^http://localhost:\d+$',
     allow_methods=['*'],
     allow_headers=['*'],
 )

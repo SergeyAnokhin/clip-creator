@@ -1,4 +1,5 @@
-import { Copy, MessageSquare, Mic, Sparkles, Zap } from 'lucide-react';
+import { Copy, MessageSquare, Mic, Save, Sparkles, Zap } from 'lucide-react';
+import ModelPicker from './ModelPicker.jsx';
 
 export const SKILLS = [
   {
@@ -18,7 +19,7 @@ export const SKILLS = [
 
 export default function SunoStage({
   L, project, skillId, refinementText, isRecordingRefinement, recordingSeconds,
-  sunoLoading, trackUrl, actions,
+  sunoLoading, trackUrl, wishLibrary, wishModel, simpleModelFavorites, actions,
 }) {
   return (
     <>
@@ -66,7 +67,35 @@ export default function SunoStage({
           <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={actions.applyRefinement}>
             {L.apply}
           </button>
+          <ModelPicker
+            favorites={simpleModelFavorites}
+            value={wishModel}
+            onChange={actions.selectWishModel}
+            emptyLabel={L.modelPickerEmpty}
+          />
+          <button
+            className="icon-btn"
+            style={{ width: 38, height: 38 }}
+            title={L.saveWishToLibrary}
+            onClick={() => actions.saveWishToLibrary(refinementText)}
+          >
+            <Save size={15} />
+          </button>
         </div>
+        {!!wishLibrary?.length && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            {wishLibrary.map((wish) => (
+              <button
+                key={wish.id}
+                className="chip"
+                title={wish.text}
+                onClick={() => actions.setRefinementText(wish.text)}
+              >
+                {wish.title}
+              </button>
+            ))}
+          </div>
+        )}
         {isRecordingRefinement && (
           <div className="recording-banner" style={{ marginTop: 10 }}>
             <span className="recording-dot" />

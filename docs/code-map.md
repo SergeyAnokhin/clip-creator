@@ -8,20 +8,30 @@ details live in [architecture.md](architecture.md), data shapes in
 
 | File | Responsibility |
 | --- | --- |
-| [`main.py`](../backend/app/main.py) | FastAPI app, CORS (`:5174`), `/media` static mount over `app_data/`, seeds demo data on startup |
+| [`main.py`](../backend/app/main.py) | FastAPI app, CORS (any `localhost:<port>`, regex), `/media` static mount over `app_data/`, seeds demo data on startup |
 | [`storage.py`](../backend/app/storage.py) | All disk I/O: `app_data/settings.json`, `app_data/projects/<slug>/config.json`. `APP_DATA_DIR` env var overrides the root (tests use it) |
 | [`slug.py`](../backend/app/slug.py) | `(author, title)` → filesystem-safe folder name = project `id` |
 | [`seed.py`](../backend/app/seed.py) | 3 demo projects, written only when `app_data/projects/` is empty |
 | [`models.py`](../backend/app/models.py) | Only `ProjectCreate`. Every other payload is an untyped `dict` body |
 | [`routers/projects.py`](../backend/app/routers/projects.py) | Project CRUD + `_split_into_blocks` (blank line → new block) + `_to_summary` (list-view projection) |
-| [`routers/settings.py`](../backend/app/routers/settings.py) | `GET/PUT /api/settings`; `DEFAULT_SETTINGS` lives here |
-| [`routers/generation.py`](../backend/app/routers/generation.py) | Suno generate/refine, storyboard, scene images, reference-image upload/delete — all thin: load → call provider → persist |
-| [`providers/suno.py`](../backend/app/providers/suno.py) | **Stub seam.** `generate`/`refine`; `_format_lyrics` mirrors `formatLyrics` in `lyrics.js` |
+| [`routers/settings.py`](../backend/app/routers/settings.py) | `GET/PUT /api/settings`; `GET /api/settings/models/{provider}`; `GET /api/settings/image-models/{provider}`; `POST /api/settings/wish-library`; `DEFAULT_SETTINGS` lives here |
+| [`routers/generation.py`](../backend/app/routers/generation.py) | Suno generate/refine, storyboard, scene images (`POST .../images` starts jobs, `GET .../images/jobs/{job_id}` polls one), reference-image upload/delete — all thin: load → call provider → persist |
+| [`providers/suno.py`](../backend/app/providers/suno.py) | **Real seam.** `generate` parses the `"{provider}:{model_id}"` composite `model`; calls Gemini when `provider=='google'` and a key is set, else falls back to the old stub; `refine` stays local/no-network; `_format_lyrics` mirrors `formatLyrics` in `lyrics.js` |
+| [`providers/text_models.py`](../backend/app/providers/text_models.py) | **Real seam (Google/OpenRouter), curated fallback (Replicate/FAL).** `list_models` for the Settings "refresh models" catalog; `generate_wish_title` for wish-library auto-titling (truncate fallback when no simple model/key configured) |
+| [`providers/image_models.py`](../backend/app/providers/image_models.py) | **Real seam (Google, filtered to `predict`/Imagen models), curated fallback (Replicate/FAL/OpenRouter/Krea).** `list_models` for the Settings image-model catalog, mirrors `text_models.py`'s shape; the catalog ids it returns are what `providers/images.py` actually dispatches on |
+| [`providers/suno_prompt_defaults.py`](../backend/app/providers/suno_prompt_defaults.py) | Seed text for `settings.suno_base_prompt` / `suno_reference_examples` — edited from Settings afterward, not from here |
 | [`providers/scenes.py`](../backend/app/providers/scenes.py) | **Stub seam.** Splits blocks into N ordered scene chunks with canned prompts |
-| [`providers/images.py`](../backend/app/providers/images.py) | **Stub seam,** but writes real placeholder SVG files under `app_data/projects/<slug>/images/` |
+| [`providers/images.py`](../backend/app/providers/images.py) | **Real seam.** `start_jobs`/`get_job`: one background `asyncio` task + in-memory job per requested image variant, dispatched by provider (Krea/Replicate/FAL job-polling, Google Imagen single call) to a real API call, writing the result under `app_data/projects/<slug>/images/` and persisting it onto the project on completion |
 | [`providers/url_parser.py`](../backend/app/providers/url_parser.py) | `httpx` + `BeautifulSoup` heuristic → `{author, title, raw_text}` |
 
 Tests: [`backend/tests/`](../backend/tests/) — `test_projects.py`, `test_generation.py`,
+`test_suno_provider.py` (Gemini prompt assembly/call/parsing, with `httpx` mocked),
+`test_text_models.py` (model listing + wish title generation, `httpx` mocked),
+`test_image_models.py` (image-model catalog listing, `httpx` mocked),
+`test_images_provider.py` (per-provider request/response shapes for Krea/Replicate/FAL/Google
+image generation and the `start_jobs`/`get_job` job store, all with `httpx` mocked and
+`asyncio.sleep` faked to skip real poll delays),
+`test_settings.py` (settings routes, wish-library endpoint),
 `test_url_parser.py`, `test_slug.py`. `conftest.py` points `APP_DATA_DIR` at a tmp dir.
 
 ## Frontend — [`frontend/src/`](../frontend/src/)
@@ -40,9 +50,11 @@ Tests: [`backend/tests/`](../backend/tests/) — `test_projects.py`, `test_gener
 | `components/home/` | `HomeScreen` + `Header`, `FilterChips`, `ProjectGrid`, `ProjectCard`, `EmptyState`, `NewProjectModal` |
 | `components/workflow/` | `WorkflowScreen` → `WorkflowHeader`, `Sidebar`, and the three stages |
 | [`components/workflow/LyricsStage.jsx`](../frontend/src/components/workflow/LyricsStage.jsx) | Block list; per-block UI is in `BlockCard.jsx` (+ `TypeMenu`, `TagMenu` popovers) |
-| [`components/workflow/SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx) | Skill picker, prompt editor, refinement, style/lyrics output. **`SKILLS` (the skill templates) is defined here** |
-| [`components/workflow/ScenesStage.jsx`](../frontend/src/components/workflow/ScenesStage.jsx) | Style description, references, scene list; per-scene UI in `SceneCard.jsx`, images in `ImageThumb.jsx` |
-| [`components/settings/SettingsScreen.jsx`](../frontend/src/components/settings/SettingsScreen.jsx) | Language, API keys, default models, special tags |
+| [`components/workflow/SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx) | Skill picker, prompt editor, refinement, style/lyrics output, and a `ModelPicker` over `simple_models.favorites` next to "Save to library". **`SKILLS` (the skill templates) is defined here** |
+| [`components/workflow/ScenesStage.jsx`](../frontend/src/components/workflow/ScenesStage.jsx) | Style description, references, scene list, `ModelPicker`s for the scene-text model (`text_models.favorites`) and the scene-image model (`image_models.favorites`); per-scene UI in `SceneCard.jsx`, images in `ImageThumb.jsx` |
+| [`components/workflow/ModelPicker.jsx`](../frontend/src/components/workflow/ModelPicker.jsx) | Plain `<select>` over a favorites list (`{provider, id, label}[]`) → `"{provider}:{id}"` composite; shared by `SunoStage` and `ScenesStage` so each generation call can override the settings default, not just silently use it |
+| [`components/settings/SettingsScreen.jsx`](../frontend/src/components/settings/SettingsScreen.jsx) | Tabbed (General/Providers/Models/Suno prompts/Wishes): language, API keys (Replicate/Google/FAL/OpenRouter/Krea), text/simple model favorites (4 providers) + image model favorites (same 4 + Krea, image/video-only), special tags, Suno base prompt, reference examples, wish library |
+| [`components/settings/ModelFavorites.jsx`](../frontend/src/components/settings/ModelFavorites.jsx) | Favorites list + default picker + provider-catalog search/add, shared by the text-model, simple-model and image-model panels (each with its own catalog fetch) |
 
 Tests: `lib/lyrics.test.js`, `lib/scenes.test.js` (Vitest). Only the pure `lib/`
 code is covered — components and hooks have no tests.
@@ -56,11 +68,11 @@ so the wiring is explicit and there is no context/provider indirection.
 | --- | --- |
 | [`useToast`](../frontend/src/hooks/useToast.js) | The single transient message. Every other hook depends on `showToast` |
 | [`useViewport`](../frontend/src/hooks/useViewport.js) | Breakpoint + workflow sidebar |
-| [`useSettings`](../frontend/src/hooks/useSettings.js) | Language (and therefore `L`), API keys, default models, special tags |
+| [`useSettings`](../frontend/src/hooks/useSettings.js) | Language (and therefore `L`), API keys, text/simple/image model favorites+default, special tags, wish library |
 | [`useProjects`](../frontend/src/hooks/useProjects.js) | Project list, New-Workflow modal, open project, **and persistence** (`updateProject`, `flushPendingSave`) |
 | [`useLyricsStage`](../frontend/src/hooks/useLyricsStage.js) | Block/line editing state and every block mutation |
-| [`useSunoStage`](../frontend/src/hooks/useSunoStage.js) | Skill, prompt, refinement, generation |
-| [`useScenesStage`](../frontend/src/hooks/useScenesStage.js) | Storyboard, references, image variants, ratings |
+| [`useSunoStage`](../frontend/src/hooks/useSunoStage.js) | Skill, prompt, refinement, generation, and `wishModel` (which `simple_models` favorite the next "Save to library" click uses) |
+| [`useScenesStage`](../frontend/src/hooks/useScenesStage.js) | Storyboard, references, image variants, ratings; `imageModel`/`sceneTextModel` (which favorite each generation call uses) are seeded from `settings.image_models.default`/`text_models.default` in `resetForProject`, then overridable per-screen via `ModelPicker` |
 | [`useVoice`](../frontend/src/hooks/useVoice.js) | The mic simulation. Created **last** — it writes into the Suno refinement box |
 
 Stage hooks return `{ state, actions }`; `App.jsx` merges in the cross-cutting

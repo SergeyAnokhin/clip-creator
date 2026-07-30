@@ -42,7 +42,14 @@ async def generate(
     style_description: str = '',
     reference_images: list[str] | None = None,
     scene_count: int = DEFAULT_SCENE_COUNT,
+    model: str = '',
 ) -> list[dict]:
+    # `model` (a "{provider}:{model_id}" composite, see text_models.py) is
+    # accepted but not yet used - there's no real LLM call here to route it
+    # to. It's threaded through router -> provider now so the frontend's
+    # per-screen model picker has something to bind to, and so wiring in the
+    # real call later needs no router/frontend changes (same seam pattern as
+    # images.py).
     await asyncio.sleep(0.05)
     reference_images = reference_images or []
     style = style_description.strip() or DEFAULT_STYLE

@@ -28,8 +28,9 @@ npm run dev
 ```
 
 This starts both dev servers together (labeled `FRONTEND`/`BACKEND` in one
-console): the frontend on http://localhost:5174 and the backend on
-http://localhost:8000.
+console): the frontend on http://localhost:5174 by default (falls back to the
+next free port — see [docs/architecture.md](docs/architecture.md)) and the
+backend on http://localhost:8000.
 
 Run tests for both sides:
 

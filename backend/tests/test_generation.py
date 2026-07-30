@@ -1,8 +1,46 @@
 import os
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 from app.routers import generation as generation_router
+
+
+class _FakeImagesResponse:
+    def __init__(self, status_code, payload=None, text=''):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+class _FakeImagesAsyncClient:
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, headers=None, json=None, params=None):
+        return self._responses.pop(0)
+
+    async def get(self, url, headers=None, params=None):
+        return self._responses.pop(0)
+
+
+def _poll_until_done(client, pid, scene_index, job_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = client.get(f'/api/projects/{pid}/scenes/{scene_index}/images/jobs/{job_id}').json()
+        if job['status'] != 'pending':
+            return job
+        time.sleep(0.05)
+    raise AssertionError('Job did not complete in time')
 
 
 def test_generate_suno_calls_provider_seam_and_persists(client, monkeypatch):
@@ -93,56 +131,102 @@ def test_generate_scenes_missing_project_returns_404(client):
     assert client.post('/api/projects/does-not-exist/scenes/generate', json={}).status_code == 404
 
 
-def test_generate_scene_images_calls_provider_seam_and_appends(client, monkeypatch):
+def test_generate_scenes_forwards_model_to_provider(client, monkeypatch):
+    """The scene-text model picker sends `model`; the router must forward it
+    to the provider seam even though the stub itself ignores it."""
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(
-        generation_router.images, 'generate',
-        AsyncMock(return_value=[{'image_id': 'img_x', 'file_path': 'images/x.svg', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}]),
-    )
+    fake_generate = AsyncMock(return_value=[])
+    monkeypatch.setattr(generation_router.scenes, 'generate', fake_generate)
 
-    resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 2, 'model': 'flux'})
+    client.post(f'/api/projects/{pid}/scenes/generate', json={'model': 'google:gemini-2.5-flash'})
+
+    assert fake_generate.call_args.kwargs['model'] == 'google:gemini-2.5-flash'
+
+
+def test_generate_scene_images_starts_jobs_and_forwards_prompt_and_model(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['scenes'][2]['static_prompt'] = 'a cinematic frame'
+    client.patch(f'/api/projects/{pid}', json=project)
+    monkeypatch.setattr(generation_router.images, 'start_jobs', lambda *a, **kw: ['job_1', 'job_2'])
+
+    resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 2, 'model': 'krea:krea/krea-2/medium'})
 
     assert resp.status_code == 200
-    assert resp.json()['images'][-1] == {
-        'image_id': 'img_x', 'file_path': 'images/x.svg', 'rating': 0, 'is_selected': False, 'generated_at': 'now',
-    }
-    generation_router.images.generate.assert_awaited_once()
-    args, kwargs = generation_router.images.generate.await_args
-    assert args[:2] == (pid, 2)
-    assert kwargs == {'count': 2, 'model': 'flux'}
+    assert resp.json() == {'job_ids': ['job_1', 'job_2']}
 
 
-def test_generate_scene_images_writes_real_placeholder_file(client):
+def test_generate_scene_images_zero_count_returns_no_jobs(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-
-    resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'flux'})
-
-    assert resp.status_code == 200
-    image = resp.json()['images'][-1]
-    assert image['file_path'] == 'images/scene_3_var_1.svg'
-    assert image['rating'] == 0
-    assert image['is_selected'] is False
-    assert image['image_id'].startswith('img_')
-    assert image['generated_at']
-
-    data_root = Path(os.environ['APP_DATA_DIR'])
-    written = data_root / 'projects' / pid / image['file_path']
-    assert written.is_file()
-    assert '<svg' in written.read_text(encoding='utf-8')
-
-
-def test_generate_scene_images_zero_count_returns_no_new_images(client):
-    pid = client.get('/api/projects').json()[0]['id']
-    before = client.get(f'/api/projects/{pid}').json()['scenes'][2]['images']
+    monkeypatch.setattr(generation_router.images, 'start_jobs', lambda *a, **kw: [])
 
     resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 0})
 
-    assert resp.json()['images'] == before
+    assert resp.json() == {'job_ids': []}
 
 
 def test_generate_scene_images_out_of_range_returns_404(client):
     pid = client.get('/api/projects').json()[0]['id']
     assert client.post(f'/api/projects/{pid}/scenes/99/images', json={}).status_code == 404
+
+
+def test_get_scene_image_job_returns_status(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    image = {'image_id': 'img_x', 'file_path': 'images/x.png', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}
+    monkeypatch.setattr(generation_router.images, 'get_job', lambda job_id: {'status': 'completed', 'image': image, 'error': None})
+
+    resp = client.get(f'/api/projects/{pid}/scenes/2/images/jobs/job_1')
+
+    assert resp.status_code == 200
+    assert resp.json() == {'status': 'completed', 'image': image, 'error': None}
+
+
+def test_get_scene_image_job_missing_returns_404(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(generation_router.images, 'get_job', lambda job_id: None)
+
+    resp = client.get(f'/api/projects/{pid}/scenes/2/images/jobs/does-not-exist')
+
+    assert resp.status_code == 404
+
+
+def test_generate_scene_images_end_to_end_with_google_writes_file_and_persists(client, monkeypatch):
+    """Exercises the real job pipeline (router -> images.start_jobs -> background
+    task -> disk write -> project persistence) with only the Google Imagen HTTP
+    call itself mocked - see test_images_provider.py for per-provider request/
+    response shape coverage."""
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['scenes'][2]['static_prompt'] = 'a cinematic frame'
+    settings = client.get('/api/settings').json()
+    settings['api_keys']['google'] = 'test-key'
+    client.patch(f'/api/projects/{pid}', json=project)
+    client.put('/api/settings', json=settings)
+
+    import base64
+    payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
+    fake_client = _FakeImagesAsyncClient([_FakeImagesResponse(200, payload)])
+    monkeypatch.setattr(generation_router.images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'google:imagen-4.0-generate-001'})
+    assert resp.status_code == 200
+    job_id = resp.json()['job_ids'][0]
+
+    job = _poll_until_done(client, pid, 2, job_id)
+
+    assert job['status'] == 'completed'
+    image = job['image']
+    assert image['file_path'].startswith('images/scene_3_') and image['file_path'].endswith('.png')
+    assert image['rating'] == 0
+    assert image['is_selected'] is False
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / image['file_path']
+    assert written.is_file()
+    assert written.read_bytes() == b'PNGDATA'
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['scenes'][2]['images'][-1] == image
 
 
 def test_generate_suno_missing_project_returns_404(client):

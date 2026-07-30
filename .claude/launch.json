@@ -5,13 +5,15 @@
       "name": "dev",
       "runtimeExecutable": "npm.cmd",
       "runtimeArgs": ["run", "dev"],
-      "port": 5174
+      "port": 5174,
+      "autoPort": true
     },
     {
       "name": "frontend-only",
       "runtimeExecutable": "npm.cmd",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
-      "port": 5174
+      "port": 5174,
+      "autoPort": true
     }
   ]
 }

@@ -500,6 +500,30 @@
   font-weight: 400;
 }
 
+.workflow-title-editable {
+  cursor: text;
+  border-radius: 5px;
+  padding: 2px 5px;
+  margin: -2px -5px;
+}
+
+.workflow-title-editable:hover {
+  background: var(--bg-input);
+}
+
+.workflow-title-input {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-input);
+  border: 1px solid rgba(255, 157, 92, 0.4);
+  border-radius: 5px;
+  padding: 2px 5px;
+  margin: -2px -5px;
+  outline: none;
+  min-width: 40px;
+  max-width: 100%;
+}
+
 .workflow-body {
   flex: 1;
   display: flex;
@@ -1083,5 +1107,50 @@
   width: 90px;
   font-size: 12.5px;
   color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.settings-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-panel, #1c1c24);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.settings-suggestion-item {
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-suggestion-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-suggestion-provider {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
   flex-shrink: 0;
 }

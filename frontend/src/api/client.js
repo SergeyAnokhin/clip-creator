@@ -35,12 +35,16 @@ export const api = {
 
   getSettings: () => request('/api/settings'),
   putSettings: (settings) => request('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+  listModels: (provider) => request(`/api/settings/models/${encodeURIComponent(provider)}`),
+  listImageModels: (provider) => request(`/api/settings/image-models/${encodeURIComponent(provider)}`),
+  saveWishToLibrary: (text, model) => request('/api/settings/wish-library', { method: 'POST', body: JSON.stringify({ text, model }) }),
 
   generateSuno: (id, body) => request(`${projectPath(id)}/suno/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   refineSuno: (id, comment) => request(`${projectPath(id)}/suno/refine`, { method: 'POST', body: JSON.stringify({ comment }) }),
 
   generateSceneStoryboard: (id, body) => request(`${projectPath(id)}/scenes/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  getSceneImageJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/jobs/${encodeURIComponent(jobId)}`),
 
   uploadReferenceImage: (id, file) => {
     const form = new FormData();

@@ -4,16 +4,20 @@ import { api } from '../api/client.js';
 /** Suno stage: the active skill, its (editable) prompt, the refinement box,
  * and the generated style/lyrics pair. The skill *templates* themselves live
  * in `SKILLS` in components/workflow/SunoStage.jsx. */
-export function useSunoStage({ activeProject, setActiveProject, updateProject, showToast, L, textModelDefault }) {
+export function useSunoStage({
+  activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, simpleModelDefault,
+}) {
   const [skillId, setSkillId] = useState('skill_a');
   const [refinementText, setRefinementText] = useState('');
   const [sunoLoading, setSunoLoading] = useState(false);
   const [trackUrl, setTrackUrl] = useState('');
+  const [wishModel, setWishModel] = useState(simpleModelDefault || '');
 
   function resetForProject(project) {
     setSkillId(project.skill_id || 'skill_a');
     setRefinementText('');
     setTrackUrl(project.track_url || '');
+    setWishModel(simpleModelDefault || '');
   }
 
   function setSkillPrompt(value) {
@@ -68,11 +72,11 @@ export function useSunoStage({ activeProject, setActiveProject, updateProject, s
   }
 
   return {
-    state: { skillId, refinementText, sunoLoading, trackUrl },
+    state: { skillId, refinementText, sunoLoading, trackUrl, wishModel },
     resetForProject,
     actions: {
       selectSkill, setSkillPrompt, setRefinementText, applyRefinement,
-      generateSuno, copyStyle, copyLyrics, setTrackUrl, saveTrackUrl,
+      generateSuno, copyStyle, copyLyrics, setTrackUrl, saveTrackUrl, selectWishModel: setWishModel,
     },
   };
 }

@@ -6,7 +6,7 @@ import ScenesStage from './ScenesStage.jsx';
 
 export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
-  lyricsState, sunoState, scenesState,
+  lyricsState, sunoState, scenesState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
 }) {
   const isMobile = viewport === 'mobile';
@@ -22,6 +22,8 @@ export default function WorkflowScreen({
         onToggleSidebar={onToggleSidebar}
         onToggleLang={onToggleLang}
         onOpenSettings={onOpenSettings}
+        onChangeTitle={(title) => updateProject((p) => ({ ...p, title }), { immediate: false })}
+        onChangeAuthor={(author) => updateProject((p) => ({ ...p, author }), { immediate: false })}
       />
 
       <div className="workflow-body">

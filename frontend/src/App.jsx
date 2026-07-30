@@ -34,10 +34,12 @@ function App() {
   const lyrics = useLyricsStage({ updateProject, showToast, L });
   const suno = useSunoStage({
     activeProject, setActiveProject, updateProject, showToast, L,
-    textModelDefault: settings.textModelDefault,
+    textModelDefault: settings.textModels.default,
+    simpleModelDefault: settings.simpleModels.default,
   });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+    imageModels: settings.imageModels, textModels: settings.textModels,
   });
   // Depends on suno's refinement box, so it must be created after it.
   const voice = useVoice({ updateProject, showToast, L, setRefinementText: suno.actions.setRefinementText });
@@ -75,13 +77,20 @@ function App() {
     ...suno.state,
     isRecordingRefinement: voice.recordingKind === 'refinement',
     recordingSeconds: voice.recordingSeconds,
-    actions: { ...suno.actions, startVoice: voice.startVoice },
+    wishLibrary: settings.wishLibrary,
+    simpleModelFavorites: settings.simpleModels.favorites,
+    actions: {
+      ...suno.actions, startVoice: voice.startVoice,
+      saveWishToLibrary: (text) => settings.actions.saveWishToLibrary(text, suno.state.wishModel),
+    },
   };
 
   const scenesState = {
     ...scenes.state,
     sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
     recordingSeconds: voice.recordingSeconds,
+    imageModelFavorites: settings.imageModels.favorites,
+    textModelFavorites: settings.textModels.favorites,
     actions: { ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx) },
   };
 
@@ -108,7 +117,7 @@ function App() {
         <WorkflowScreen
           L={L} langLabel={settings.langLabel} viewport={view.viewport}
           project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
-          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState}
+          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
         />
@@ -117,8 +126,11 @@ function App() {
       {screen === 'settings' && (
         <SettingsScreen
           L={L} lang={settings.lang} apiKeys={settings.apiKeys}
-          textModelDefault={settings.textModelDefault} imageModelDefault={settings.imageModelDefault}
+          textModels={settings.textModels} simpleModels={settings.simpleModels}
+          imageModels={settings.imageModels}
           specialTags={settings.specialTags}
+          sunoBasePrompt={settings.sunoBasePrompt}
+          referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
           onClose={closeSettings}
           actions={settings.actions}
         />

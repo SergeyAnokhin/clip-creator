@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 
 from .. import storage
 from ..providers import images, scenes, suno
+from .settings import DEFAULT_SETTINGS
 
 router = APIRouter(prefix='/api/projects', tags=['generation'])
 
@@ -24,8 +25,12 @@ async def generate_suno(project_id: str, body: dict = Body(default={})):
     skill_id = body.get('skill_id', project.get('skill_id', 'skill_a'))
     skill_prompt = body.get('skill_prompt', project.get('skill_prompt', ''))
     model = body.get('model', '')
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
 
-    result = await suno.generate(project, skill_prompt=skill_prompt, model=model)
+    try:
+        result = await suno.generate(project, skill_prompt=skill_prompt, model=model, settings=settings)
+    except Exception as exc:
+        raise HTTPException(502, f'Не удалось сгенерировать через {model or "провайдер"}: {exc}') from exc
     project['style'] = result['style']
     project['lyrics'] = result['lyrics']
     project['skill_id'] = skill_id
@@ -64,12 +69,14 @@ async def generate_scenes(project_id: str, body: dict = Body(default={})):
 
     style_description = body.get('style_description', project.get('style_description', ''))
     scene_count = body.get('scene_count', scenes.DEFAULT_SCENE_COUNT)
+    model = body.get('model', '')
 
     result = await scenes.generate(
         project,
         style_description=style_description,
         reference_images=project.get('reference_images', []),
         scene_count=scene_count,
+        model=model,
     )
     project['scenes'] = result
     project['style_description'] = style_description
@@ -90,11 +97,17 @@ async def generate_scene_images(project_id: str, scene_index: int, body: dict = 
     scene = scene_list[scene_index]
     count = body.get('count', 1)
     model = body.get('model', '')
-    new_images = await images.generate(project_id, scene_index, scene.get('images', []), count=count, model=model)
-    scene['images'] = [*scene.get('images', []), *new_images]
-    project['updated_at'] = _now()
-    storage.save_project(project_id, project)
-    return {'images': scene['images']}
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    job_ids = images.start_jobs(project_id, scene_index, scene.get('static_prompt', ''), count, model, settings)
+    return {'job_ids': job_ids}
+
+
+@router.get('/{project_id}/scenes/{scene_index}/images/jobs/{job_id}')
+async def get_scene_image_job(project_id: str, scene_index: int, job_id: str):
+    job = images.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    return job
 
 
 @router.post('/{project_id}/reference-images')

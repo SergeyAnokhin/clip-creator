@@ -2,16 +2,11 @@ import { useRef } from 'react';
 import { Minus, Plus, RefreshCw, Upload, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import SceneCard from './SceneCard.jsx';
-
-const IMAGE_MODELS = [
-  { id: 'flux', label: 'FLUX 1.1 Pro' },
-  { id: 'dalle', label: 'DALL-E 3' },
-  { id: 'midjourney', label: 'Midjourney' },
-  { id: 'sdxl', label: 'SDXL' },
-];
+import ModelPicker from './ModelPicker.jsx';
 
 export default function ScenesStage({
-  L, project, isMobile, imageModel, variantCount, styleDescription, storyboardLoading, referenceUploading,
+  L, project, isMobile, imageModel, sceneTextModel, imageModelFavorites, textModelFavorites,
+  variantCount, styleDescription, storyboardLoading, referenceUploading,
   sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, actions,
 }) {
   const fileInputRef = useRef(null);
@@ -23,10 +18,18 @@ export default function ScenesStage({
           <div className="stage-heading-title">{L.scenesStageTitle}</div>
           <div className="stage-heading-subtitle">{L.scenesStageSubtitle}</div>
         </div>
-        <button className="btn btn-accent-soft" onClick={actions.generateStoryboard} disabled={storyboardLoading}>
-          <RefreshCw size={12} />
-          {storyboardLoading ? L.generatingStoryboard : L.generateStoryboard}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ModelPicker
+            favorites={textModelFavorites}
+            value={sceneTextModel}
+            onChange={actions.selectSceneTextModel}
+            emptyLabel={L.modelPickerEmpty}
+          />
+          <button className="btn btn-accent-soft" onClick={actions.generateStoryboard} disabled={storyboardLoading}>
+            <RefreshCw size={12} />
+            {storyboardLoading ? L.generatingStoryboard : L.generateStoryboard}
+          </button>
+        </div>
       </div>
 
       <div className="glass-card" style={{ marginBottom: 18 }}>
@@ -81,16 +84,12 @@ export default function ScenesStage({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, color: 'var(--text-faint)', marginRight: 2 }}>{L.imageModel}:</span>
-        {IMAGE_MODELS.map((m) => (
-          <button
-            key={m.id}
-            className={`chip${imageModel === m.id ? ' is-active' : ''}`}
-            style={{ padding: '6px 13px', fontSize: 12 }}
-            onClick={() => actions.selectImageModel(m.id)}
-          >
-            {m.label}
-          </button>
-        ))}
+        <ModelPicker
+          favorites={imageModelFavorites}
+          value={imageModel}
+          onChange={actions.selectImageModel}
+          emptyLabel={L.modelPickerEmpty}
+        />
 
         <span style={{ fontSize: 12, color: 'var(--text-faint)', marginLeft: 10, marginRight: 2 }}>{L.variantCountLabel}:</span>
         <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setVariantCount(Math.max(0, variantCount - 1))}>

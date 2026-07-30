@@ -8,8 +8,11 @@ import { pickMainByRating } from '../lib/scenes.js';
  * Storyboard and image generation replace project state server-side, so both
  * call `flushPendingSave()` first - see the autosave race in
  * docs/architecture.md. */
-export function useScenesStage({ activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L }) {
-  const [imageModel, setImageModel] = useState('flux');
+export function useScenesStage({
+  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, textModels,
+}) {
+  const [imageModel, setImageModel] = useState(imageModels.default || '');
+  const [sceneTextModel, setSceneTextModel] = useState(textModels.default || '');
   const [sceneLoadingIdx, setSceneLoadingIdx] = useState(null);
   const [variantCount, setVariantCount] = useState(1);
   const [styleDescription, setStyleDescription] = useState('');
@@ -18,6 +21,8 @@ export function useScenesStage({ activeProject, setActiveProject, updateProject,
 
   function resetForProject(project) {
     setStyleDescription(project.style_description || '');
+    setImageModel(imageModels.default || '');
+    setSceneTextModel(textModels.default || '');
   }
 
   function onSceneStaticChange(idx, value) {
@@ -41,7 +46,9 @@ export function useScenesStage({ activeProject, setActiveProject, updateProject,
     setStoryboardLoading(true);
     try {
       await flushPendingSave();
-      const result = await api.generateSceneStoryboard(activeProject.id, { style_description: styleDescription });
+      const result = await api.generateSceneStoryboard(activeProject.id, {
+        style_description: styleDescription, model: sceneTextModel,
+      });
       setActiveProject((p) => ({ ...p, scenes: result.scenes, style_description: result.style_description }));
       showToast(L.toast_generated);
     } catch {
@@ -72,17 +79,33 @@ export function useScenesStage({ activeProject, setActiveProject, updateProject,
       showToast('Не удалось удалить изображение');
     }
   }
+  async function pollImageJob(projectId, sceneIdx, jobId) {
+    for (;;) {
+      const job = await api.getSceneImageJob(projectId, sceneIdx, jobId);
+      if (job.status === 'completed' || job.status === 'failed') return job;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
   async function generateSceneImages(idx) {
     if (!activeProject) return;
     setSceneLoadingIdx(idx);
     try {
       await flushPendingSave();
-      const result = await api.generateSceneImages(activeProject.id, idx, { count: variantCount, model: imageModel });
-      setActiveProject((p) => ({
-        ...p,
-        scenes: p.scenes.map((s, i) => (i === idx ? { ...s, images: result.images } : s)),
-      }));
-      showToast(L.toast_generated);
+      const { job_ids: jobIds } = await api.generateSceneImages(activeProject.id, idx, { count: variantCount, model: imageModel });
+      const jobs = await Promise.all(jobIds.map((jobId) => pollImageJob(activeProject.id, idx, jobId)));
+      const newImages = jobs.filter((j) => j.status === 'completed').map((j) => j.image);
+      if (newImages.length) {
+        setActiveProject((p) => ({
+          ...p,
+          scenes: p.scenes.map((s, i) => (i === idx ? { ...s, images: [...s.images, ...newImages] } : s)),
+        }));
+      }
+      const failedJob = jobs.find((j) => j.status === 'failed');
+      if (failedJob) {
+        showToast(failedJob.error || 'Не удалось сгенерировать часть изображений');
+      } else {
+        showToast(L.toast_generated);
+      }
     } catch {
       showToast('Не удалось сгенерировать изображения');
     } finally {
@@ -110,10 +133,12 @@ export function useScenesStage({ activeProject, setActiveProject, updateProject,
   }
 
   return {
-    state: { imageModel, variantCount, styleDescription, storyboardLoading, referenceUploading, sceneLoadingIdx },
+    state: {
+      imageModel, sceneTextModel, variantCount, styleDescription, storyboardLoading, referenceUploading, sceneLoadingIdx,
+    },
     resetForProject,
     actions: {
-      selectImageModel: setImageModel, setVariantCount,
+      selectImageModel: setImageModel, selectSceneTextModel: setSceneTextModel, setVariantCount,
       onStyleDescriptionChange, generateStoryboard,
       uploadReference, removeReference,
       onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
