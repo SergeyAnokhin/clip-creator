@@ -37,10 +37,20 @@ Run tests for both sides:
 npm test
 ```
 
+## Local test data
+
+[`docs/examples/poem-to-lyrics/`](docs/examples/poem-to-lyrics/) holds 7
+hand-written `INPUT:` / `OUTPUT:` pairs — a raw Russian poem and the
+Suno-formatted lyrics it should turn into. Use them as the reference set when
+working on the lyrics builder or on the (currently stubbed) Suno provider,
+instead of inventing sample poems.
+
 ## Documentation
 
 | Doc | Covers |
 | --- | --- |
-| [docs/architecture.md](docs/architecture.md) | How frontend, backend, and storage fit together |
+| [docs/architecture.md](docs/architecture.md) | How it fits together, the 3-stage workflow, provider seams, gotchas |
+| [docs/code-map.md](docs/code-map.md) | Which file does what — start here to find where to change something |
+| [docs/data-model.md](docs/data-model.md) | JSON shapes on disk + the full API route table |
 | [CLAUDE.md](CLAUDE.md) | Working conventions for AI-assisted changes in this repo |
 | [docs/specs/](docs/specs/) | Frozen V1 product specification (reference only) |

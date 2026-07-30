@@ -1,596 +1,126 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from './api/client.js';
-import { DICT } from './i18n/dict.js';
-import {
-  cloneBlockWithType, deleteLine, duplicateLine, insertBlockAdjacent, moveBlock, moveBlockToEdge, moveToEdgeForType,
-  repeatChorusAfterVerses, setLine, splitBlockAtLine, splitBlockEveryN, toggleLineBrackets,
-} from './lib/lyrics.js';
-import { pickMainByRating } from './lib/scenes.js';
-import { debounce } from './lib/debounce.js';
+import { useState } from 'react';
+import { useToast } from './hooks/useToast.js';
+import { useViewport } from './hooks/useViewport.js';
+import { useSettings } from './hooks/useSettings.js';
+import { useProjects } from './hooks/useProjects.js';
+import { useLyricsStage } from './hooks/useLyricsStage.js';
+import { useSunoStage } from './hooks/useSunoStage.js';
+import { useScenesStage } from './hooks/useScenesStage.js';
+import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
 import SettingsScreen from './components/settings/SettingsScreen.jsx';
 import Toast from './components/Toast.jsx';
 import './styles/theme.css';
 
-const VOICE_RECORDING_MS = 2400;
-
-function randomId(prefix) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
+/**
+ * Composition root: owns only navigation (which screen / which stage), wires
+ * the hooks together in dependency order, and assembles the per-stage prop
+ * bundles. All domain state and actions live in `src/hooks/`.
+ */
 function App() {
   const [screen, setScreen] = useState('home');
   const [prevScreen, setPrevScreen] = useState('home');
-  const [viewport, setViewport] = useState('desktop');
-  const [lang, setLang] = useState('ru');
-  const [toast, setToast] = useState(null);
-
-  const [projects, setProjects] = useState([]);
-  const [homeFilter, setHomeFilter] = useState('all');
-  const [homeSearch, setHomeSearch] = useState('');
-  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
-  const [modalUrl, setModalUrl] = useState('');
-  const [modalRawText, setModalRawText] = useState('');
-  const [modalLoading, setModalLoading] = useState(false);
-
-  const [activeProject, setActiveProject] = useState(null);
   const [activeStage, setActiveStage] = useState('lyrics');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const [editingBlockId, setEditingBlockId] = useState(null);
-  const [draftContent, setDraftContent] = useState('');
-  const [editingLineBlockId, setEditingLineBlockId] = useState(null);
-  const [editingLineIndex, setEditingLineIndex] = useState(null);
-  const [lineDraft, setLineDraft] = useState('');
-  const [openMenuTypeBlockId, setOpenMenuTypeBlockId] = useState(null);
-  const [openMenuCloneBlockId, setOpenMenuCloneBlockId] = useState(null);
-  const [openTagMenuBlockId, setOpenTagMenuBlockId] = useState(null);
-  const [splitGroupSize, setSplitGroupSize] = useState(4);
+  const { toast, showToast } = useToast();
+  const view = useViewport();
+  const settings = useSettings({ showToast });
+  const L = settings.L;
 
-  const [recordingKind, setRecordingKind] = useState(null);
-  const [recordingTarget, setRecordingTarget] = useState(null);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const projects = useProjects({ showToast, L });
+  const { activeProject, setActiveProject, updateProject, flushPendingSave } = projects;
 
-  const [skillId, setSkillId] = useState('skill_a');
-  const [refinementText, setRefinementText] = useState('');
-  const [sunoLoading, setSunoLoading] = useState(false);
-  const [trackUrl, setTrackUrl] = useState('');
+  const lyrics = useLyricsStage({ updateProject, showToast, L });
+  const suno = useSunoStage({
+    activeProject, setActiveProject, updateProject, showToast, L,
+    textModelDefault: settings.textModelDefault,
+  });
+  const scenes = useScenesStage({
+    activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+  });
+  // Depends on suno's refinement box, so it must be created after it.
+  const voice = useVoice({ updateProject, showToast, L, setRefinementText: suno.actions.setRefinementText });
 
-  const [imageModel, setImageModel] = useState('flux');
-  const [sceneLoadingIdx, setSceneLoadingIdx] = useState(null);
-  const [variantCount, setVariantCount] = useState(1);
-  const [styleDescription, setStyleDescription] = useState('');
-  const [storyboardLoading, setStoryboardLoading] = useState(false);
-  const [referenceUploading, setReferenceUploading] = useState(false);
-
-  const [apiKeys, setApiKeys] = useState({ openai: '', anthropic: '', deepseek: '', replicate: '' });
-  const [textModelDefault, setTextModelDefault] = useState('claude');
-  const [imageModelDefault, setImageModelDefault] = useState('flux');
-  const [specialTags, setSpecialTags] = useState(['[Vocal Interlude]', '[Female vocal interlude]']);
-
-  const recInterval = useRef(null);
-  const recTimeout = useRef(null);
-  const toastTimer = useRef(null);
-
-  const L = DICT[lang];
-  const langLabel = lang === 'ru' ? 'EN' : 'RU';
-
-  // ---------- bootstrap ----------
-  useEffect(() => {
-    api.getSettings().then((s) => {
-      setLang(s.lang || 'ru');
-      setApiKeys(s.api_keys || {});
-      setTextModelDefault(s.text_model_default || 'claude');
-      setImageModelDefault(s.image_model_default || 'flux');
-      setSpecialTags(s.special_tags || ['[Vocal Interlude]', '[Female vocal interlude]']);
-    }).catch(() => {});
-    refreshProjects();
-  }, []);
-
-  useEffect(() => {
-    function onResize() {
-      const w = window.innerWidth;
-      const vp = w < 760 ? 'mobile' : w < 1180 ? 'tablet' : 'desktop';
-      setViewport((prev) => {
-        if (prev === vp) return prev;
-        setSidebarOpen(vp !== 'mobile');
-        return vp;
-      });
-    }
-    onResize();
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      clearInterval(recInterval.current);
-      clearTimeout(recTimeout.current);
-      clearTimeout(toastTimer.current);
-    };
-  }, []);
-
-  function showToast(message) {
-    clearTimeout(toastTimer.current);
-    setToast(message);
-    toastTimer.current = setTimeout(() => setToast(null), 2200);
-  }
-
-  async function refreshProjects() {
-    try {
-      setProjects(await api.listProjects());
-    } catch {
-      showToast('Не удалось загрузить проекты');
-    }
-  }
-
-  // ---------- project persistence ----------
-  const debouncedPatch = useMemo(
-    () => debounce((id, project) => {
-      api.patchProject(id, project).catch(() => showToast('Не удалось сохранить'));
-    }, 400),
-    [],
-  );
-
-  function updateProject(patchFn, { immediate = true } = {}) {
-    setActiveProject((prev) => {
-      if (!prev) return prev;
-      const next = patchFn(prev);
-      if (immediate) {
-        api.patchProject(next.id, next).catch(() => showToast('Не удалось сохранить'));
-      } else {
-        debouncedPatch(next.id, next);
-      }
-      return next;
-    });
-  }
-
-  /** Cancels any in-flight debounced autosave and synchronously persists the
-   * current project first. Without this, a debounced edit (e.g. typing the
-   * style description) can land *after* a server-side action that replaces
-   * `scenes` wholesale (storyboard generation, image generation) and silently
-   * revert it to a stale snapshot - call this right before such actions. */
-  async function flushPendingSave() {
-    debouncedPatch.cancel();
-    if (activeProject) {
-      try {
-        await api.patchProject(activeProject.id, activeProject);
-      } catch {
-        showToast('Не удалось сохранить');
-      }
-    }
-  }
-
-  // ---------- home ----------
-  function openNewProjectModal() { setShowNewProjectModal(true); setModalUrl(''); setModalRawText(''); }
-  function closeNewProjectModal() { setShowNewProjectModal(false); }
-
-  async function submitNewProject() {
-    setModalLoading(true);
-    try {
-      await api.createProject(modalUrl, modalRawText);
-      await refreshProjects();
-      setShowNewProjectModal(false);
-      showToast(L.toast_created);
-    } catch {
-      showToast('Не удалось создать проект');
-    } finally {
-      setModalLoading(false);
-    }
-  }
-
-  async function deleteProject(id) {
-    try {
-      await api.deleteProject(id);
-      setProjects((prev) => prev.filter((p) => p.id !== id));
-      showToast(L.toast_deletedProject);
-    } catch {
-      showToast('Не удалось удалить проект');
-    }
-  }
-
+  // ---------- navigation ----------
   async function openProject(id) {
-    try {
-      const project = await api.getProject(id);
-      setActiveProject(project);
-      setActiveStage('lyrics');
-      setSidebarOpen(viewport !== 'mobile');
-      setSkillId(project.skill_id || 'skill_a');
-      setRefinementText('');
-      setTrackUrl(project.track_url || '');
-      setStyleDescription(project.style_description || '');
-      setScreen('workflow');
-    } catch {
-      showToast('Не удалось открыть проект');
-    }
+    const project = await projects.loadProject(id);
+    if (!project) return;
+    setActiveStage('lyrics');
+    view.resetSidebar();
+    suno.resetForProject(project);
+    scenes.resetForProject(project);
+    setScreen('workflow');
   }
 
-  async function goHome() {
+  function goHome() {
     setScreen('home');
-    setActiveProject(null);
-    refreshProjects();
+    projects.closeProject();
+    projects.refreshProjects();
   }
 
   function openSettings() { setPrevScreen(screen); setScreen('settings'); }
   function closeSettings() { setScreen(prevScreen); }
-  function toggleLang() { setLang((l) => (l === 'ru' ? 'en' : 'ru')); }
-  function toggleSidebar() { setSidebarOpen((s) => !s); }
-  function closeSidebarMobile() { setSidebarOpen(false); }
-  function selectStage(stage) { setActiveStage(stage); }
 
-  // ---------- lyrics stage ----------
-  function addBlock() {
-    updateProject((p) => ({
-      ...p,
-      blocks: [...p.blocks, { id: randomId('blk'), type: 'verse', importance: 3, content: 'Новый блок текста...' }],
-    }));
-  }
-  function moveBlockAction(id, dir) {
-    updateProject((p) => ({ ...p, blocks: moveBlock(p.blocks, id, dir) }));
-  }
-  function moveBlockToEdgeAction(id, edge) {
-    updateProject((p) => ({ ...p, blocks: moveBlockToEdge(p.blocks, id, edge) }));
-  }
-  function splitBlock(id, lineIndex) {
-    updateProject((p) => ({ ...p, blocks: splitBlockAtLine(p.blocks, id, lineIndex, randomId('blk')) }));
-  }
-  function splitIntoGroups(id, n) {
-    updateProject((p) => ({ ...p, blocks: splitBlockEveryN(p.blocks, id, n, () => randomId('blk')) }));
-  }
-  function toggleTypeMenu(id) {
-    setOpenMenuTypeBlockId((cur) => (cur === id ? null : id));
-    setOpenMenuCloneBlockId(null);
-  }
-  function toggleCloneMenu(id) {
-    setOpenMenuCloneBlockId((cur) => (cur === id ? null : id));
-    setOpenMenuTypeBlockId(null);
-  }
-  function setBlockType(id, type) {
-    updateProject((p) => ({
-      ...p,
-      blocks: moveToEdgeForType(p.blocks.map((b) => (b.id === id ? { ...b, type } : b)), id, type),
-    }));
-    setOpenMenuTypeBlockId(null);
-  }
-  function cloneBlockAsType(id, type) {
-    updateProject((p) => ({ ...p, blocks: cloneBlockWithType(p.blocks, id, type, randomId('blk')) }));
-    setOpenMenuCloneBlockId(null);
-    showToast(L.toast_duplicated);
-  }
-  function toggleLineBracket(blockId, lineIndex) {
-    updateProject((p) => ({
-      ...p,
-      blocks: p.blocks.map((b) => (b.id === blockId ? { ...b, content: toggleLineBrackets(b.content, lineIndex) } : b)),
-    }));
-  }
-  function toggleTagMenu(id) { setOpenTagMenuBlockId((cur) => (cur === id ? null : id)); }
-  function insertTagBlock(afterId, tagText, position) {
-    updateProject((p) => ({
-      ...p,
-      blocks: insertBlockAdjacent(p.blocks, afterId, 'interlude', tagText, position, randomId('blk')),
-    }));
-    setOpenTagMenuBlockId(null);
-  }
-  function startEditBlock(id, content) { setEditingBlockId(id); setDraftContent(content); }
-  function saveEditBlock() {
-    updateProject((p) => ({ ...p, blocks: p.blocks.map((b) => (b.id === editingBlockId ? { ...b, content: draftContent } : b)) }));
-    setEditingBlockId(null);
-  }
-  function cancelEditBlock() { setEditingBlockId(null); }
-  function startEditLine(blockId, lineIndex, content) {
-    setEditingLineBlockId(blockId);
-    setEditingLineIndex(lineIndex);
-    setLineDraft(content);
-  }
-  function saveEditLine() {
-    updateProject((p) => ({
-      ...p,
-      blocks: p.blocks.map((b) => (
-        b.id === editingLineBlockId ? { ...b, content: setLine(b.content, editingLineIndex, lineDraft) } : b
-      )),
-    }));
-    setEditingLineBlockId(null);
-    setEditingLineIndex(null);
-  }
-  function cancelEditLine() { setEditingLineBlockId(null); setEditingLineIndex(null); }
-  function duplicateLineAction(blockId, lineIndex) {
-    updateProject((p) => ({
-      ...p,
-      blocks: p.blocks.map((b) => (b.id === blockId ? { ...b, content: duplicateLine(b.content, lineIndex) } : b)),
-    }));
-  }
-  function deleteLineAction(blockId, lineIndex) {
-    updateProject((p) => ({
-      ...p,
-      blocks: p.blocks.map((b) => (b.id === blockId ? { ...b, content: deleteLine(b.content, lineIndex) } : b)),
-    }));
-  }
-  function duplicateBlock(id) {
-    updateProject((p) => {
-      const idx = p.blocks.findIndex((b) => b.id === id);
-      const copy = { ...p.blocks[idx], id: randomId('blk') };
-      return { ...p, blocks: [...p.blocks.slice(0, idx + 1), copy, ...p.blocks.slice(idx + 1)] };
-    });
-    showToast(L.toast_duplicated);
-  }
-  function deleteBlock(id) {
-    updateProject((p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== id) }));
-    showToast(L.toast_deleted);
-  }
-  function repeatChorus() {
-    updateProject((p) => ({ ...p, blocks: repeatChorusAfterVerses(p.blocks, () => randomId('blk')) }));
-    showToast(L.toast_chorusRepeated);
-  }
-
-  // ---------- voice simulation (block / refinement / scene) ----------
-  function startVoice(kind, target) {
-    clearInterval(recInterval.current);
-    clearTimeout(recTimeout.current);
-    setRecordingKind(kind);
-    setRecordingTarget(target ?? null);
-    setRecordingSeconds(0);
-    recInterval.current = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
-    recTimeout.current = setTimeout(() => stopVoice(kind, target), VOICE_RECORDING_MS);
-  }
-  function stopVoice(kind, target) {
-    clearInterval(recInterval.current);
-    if (kind === 'block') {
-      updateProject((p) => ({
-        ...p,
-        blocks: p.blocks.map((b) => (b.id === target ? { ...b, content: `${b.content}\n[+ голосом: усильте образность строфы]` } : b)),
-      }));
-    } else if (kind === 'refinement') {
-      setRefinementText('Добавь больше джазовых акцентов и сделай упор на саксофонные соло');
-    } else if (kind === 'scene') {
-      updateProject((p) => ({
-        ...p,
-        scenes: p.scenes.map((s, i) => (i === target ? { ...s, static_prompt: `${s.static_prompt}, dramatic fog and neon rim light` } : s)),
-      }));
-    }
-    setRecordingKind(null);
-    setRecordingTarget(null);
-    showToast(L.toast_voice);
-  }
-
-  // ---------- suno stage ----------
-  function setSkillPrompt(value) {
-    updateProject((p) => ({ ...p, skill_prompt: value }), { immediate: false });
-  }
-  function selectSkill(id, template) {
-    setSkillId(id);
-    updateProject((p) => ({ ...p, skill_id: id, skill_prompt: template }));
-  }
-  async function applyRefinement() {
-    if (!refinementText.trim() || !activeProject) return;
-    const comment = refinementText;
-    try {
-      const result = await api.refineSuno(activeProject.id, comment);
-      setActiveProject((p) => ({
-        ...p, skill_prompt: result.skill_prompt, refinement_comments: result.refinement_comments,
-      }));
-      setRefinementText('');
-      showToast(L.toast_generated);
-    } catch {
-      showToast('Не удалось применить правку');
-    }
-  }
-  async function generateSuno() {
-    if (!activeProject) return;
-    setSunoLoading(true);
-    try {
-      const result = await api.generateSuno(activeProject.id, {
-        skill_id: skillId, skill_prompt: activeProject.skill_prompt, model: textModelDefault,
-      });
-      setActiveProject((p) => ({
-        ...p, style: result.style, lyrics: result.lyrics, skill_id: result.skill_id, model_used: result.model_used,
-      }));
-      showToast(L.toast_generated);
-    } catch {
-      showToast('Не удалось сгенерировать');
-    } finally {
-      setSunoLoading(false);
-    }
-  }
-  function copyStyle() {
-    navigator.clipboard?.writeText(activeProject?.style || '').catch(() => {});
-    showToast(L.toast_copied);
-  }
-  function copyLyrics() {
-    navigator.clipboard?.writeText(activeProject?.lyrics || '').catch(() => {});
-    showToast(L.toast_copied);
-  }
-  function saveTrackUrl() {
-    updateProject((p) => ({ ...p, track_url: trackUrl }));
-    showToast(L.toast_saved);
-  }
-
-  // ---------- scenes stage ----------
-  function onSceneStaticChange(idx, value) {
-    updateProject((p) => ({
-      ...p,
-      scenes: p.scenes.map((s, i) => (i === idx ? { ...s, static_prompt: value } : s)),
-    }), { immediate: false });
-  }
-  function onSceneMotionChange(idx, value) {
-    updateProject((p) => ({
-      ...p,
-      scenes: p.scenes.map((s, i) => (i === idx ? { ...s, motion_prompt: value } : s)),
-    }), { immediate: false });
-  }
-  function onStyleDescriptionChange(value) {
-    setStyleDescription(value);
-    updateProject((p) => ({ ...p, style_description: value }), { immediate: false });
-  }
-  async function generateStoryboard() {
-    if (!activeProject) return;
-    setStoryboardLoading(true);
-    try {
-      await flushPendingSave();
-      const result = await api.generateSceneStoryboard(activeProject.id, { style_description: styleDescription });
-      setActiveProject((p) => ({ ...p, scenes: result.scenes, style_description: result.style_description }));
-      showToast(L.toast_generated);
-    } catch {
-      showToast('Не удалось сгенерировать раскадровку');
-    } finally {
-      setStoryboardLoading(false);
-    }
-  }
-  async function uploadReference(file) {
-    if (!activeProject || !file) return;
-    setReferenceUploading(true);
-    try {
-      const result = await api.uploadReferenceImage(activeProject.id, file);
-      setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
-    } catch {
-      showToast('Не удалось загрузить изображение');
-    } finally {
-      setReferenceUploading(false);
-    }
-  }
-  async function removeReference(path) {
-    if (!activeProject) return;
-    const filename = path.split('/').pop();
-    try {
-      const result = await api.deleteReferenceImage(activeProject.id, filename);
-      setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
-    } catch {
-      showToast('Не удалось удалить изображение');
-    }
-  }
-  async function generateSceneImages(idx) {
-    if (!activeProject) return;
-    setSceneLoadingIdx(idx);
-    try {
-      await flushPendingSave();
-      const result = await api.generateSceneImages(activeProject.id, idx, { count: variantCount, model: imageModel });
-      setActiveProject((p) => ({
-        ...p,
-        scenes: p.scenes.map((s, i) => (i === idx ? { ...s, images: result.images } : s)),
-      }));
-      showToast(L.toast_generated);
-    } catch {
-      showToast('Не удалось сгенерировать изображения');
-    } finally {
-      setSceneLoadingIdx(null);
-    }
-  }
-  function rateImage(sceneIdx, imgIdx, rating) {
-    updateProject((p) => ({
-      ...p,
-      scenes: p.scenes.map((s, i) => {
-        if (i !== sceneIdx) return s;
-        const images = s.images.map((img, j) => (j === imgIdx ? { ...img, rating } : img));
-        return { ...s, images: pickMainByRating(images) };
-      }),
-    }));
-  }
-  function selectMainImage(sceneIdx, imgIdx) {
-    updateProject((p) => ({
-      ...p,
-      scenes: p.scenes.map((s, i) => (i !== sceneIdx ? s : {
-        ...s,
-        images: s.images.map((img, j) => ({ ...img, is_selected: j === imgIdx })),
-      })),
-    }));
-  }
-
-  // ---------- settings ----------
-  function setApiKey(key, value) { setApiKeys((prev) => ({ ...prev, [key]: value })); }
-  function addSpecialTag(text) {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setSpecialTags((prev) => [...prev, trimmed]);
-  }
-  function removeSpecialTag(index) {
-    setSpecialTags((prev) => prev.filter((_, i) => i !== index));
-  }
-  async function saveSettings() {
-    try {
-      await api.putSettings({
-        lang, api_keys: apiKeys, text_model_default: textModelDefault, image_model_default: imageModelDefault,
-        special_tags: specialTags,
-      });
-      showToast(L.toast_saved);
-    } catch {
-      showToast('Не удалось сохранить настройки');
-    }
-  }
-
+  // ---------- per-stage prop bundles ----------
   const lyricsState = {
-    editingBlockId, draftContent, openMenuTypeBlockId, openMenuCloneBlockId, openTagMenuBlockId,
-    specialTags, splitGroupSize,
-    editingLineBlockId, editingLineIndex, lineDraft,
-    recordingBlockId: recordingKind === 'block' ? recordingTarget : null,
-    recordingSeconds,
-    actions: {
-      addBlock, moveBlock: moveBlockAction, moveBlockToEdge: moveBlockToEdgeAction, splitBlock, splitIntoGroups, setSplitGroupSize,
-      toggleTypeMenu, setBlockType, toggleCloneMenu, cloneBlockAsType, toggleLineBracket, repeatChorus,
-      toggleTagMenu, insertTagBlock,
-      startVoice, duplicateBlock, deleteBlock,
-      startEditBlock, saveEditBlock, cancelEditBlock, setDraftContent,
-      startEditLine, saveEditLine, cancelEditLine, setLineDraft, duplicateLine: duplicateLineAction,
-      deleteLine: deleteLineAction,
-    },
+    ...lyrics.state,
+    specialTags: settings.specialTags,
+    recordingBlockId: voice.recordingKind === 'block' ? voice.recordingTarget : null,
+    recordingSeconds: voice.recordingSeconds,
+    actions: { ...lyrics.actions, startVoice: voice.startVoice },
   };
 
   const sunoState = {
-    skillId, refinementText,
-    isRecordingRefinement: recordingKind === 'refinement',
-    recordingSeconds, sunoLoading, trackUrl,
-    actions: {
-      selectSkill, setSkillPrompt, setRefinementText, startVoice, applyRefinement,
-      generateSuno, copyStyle, copyLyrics, setTrackUrl, saveTrackUrl,
-    },
+    ...suno.state,
+    isRecordingRefinement: voice.recordingKind === 'refinement',
+    recordingSeconds: voice.recordingSeconds,
+    actions: { ...suno.actions, startVoice: voice.startVoice },
   };
 
   const scenesState = {
-    imageModel, variantCount, styleDescription, storyboardLoading, referenceUploading,
-    sceneLoadingIdx,
-    sceneRecordingIdx: recordingKind === 'scene' ? recordingTarget : null,
-    recordingSeconds,
-    actions: {
-      selectImageModel: setImageModel, setVariantCount,
-      onStyleDescriptionChange, generateStoryboard,
-      uploadReference, removeReference,
-      onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
-      onGenerate: generateSceneImages, onVoiceEdit: (idx) => startVoice('scene', idx),
-      onSelectMain: selectMainImage, onRate: rateImage,
-    },
+    ...scenes.state,
+    sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
+    recordingSeconds: voice.recordingSeconds,
+    actions: { ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx) },
   };
 
   return (
     <div className="app-shell">
       {screen === 'home' && (
         <HomeScreen
-          L={L} lang={lang} langLabel={langLabel} viewport={viewport}
-          projects={projects} homeFilter={homeFilter} homeSearch={homeSearch}
-          showNewProjectModal={showNewProjectModal} modalUrl={modalUrl} modalRawText={modalRawText} modalLoading={modalLoading}
-          onToggleLang={toggleLang} onOpenSettings={openSettings}
-          onOpenNewProjectModal={openNewProjectModal} onCloseNewProjectModal={closeNewProjectModal}
-          onModalUrlChange={setModalUrl} onModalRawTextChange={setModalRawText} onSubmitNewProject={submitNewProject}
-          onFilterChange={setHomeFilter} onSearchChange={setHomeSearch}
-          onOpenProject={openProject} onDeleteProject={deleteProject}
+          L={L} lang={settings.lang} langLabel={settings.langLabel} viewport={view.viewport}
+          projects={projects.projects} homeFilter={projects.homeFilter} homeSearch={projects.homeSearch}
+          showNewProjectModal={projects.showNewProjectModal} modalUrl={projects.modalUrl}
+          modalRawText={projects.modalRawText} modalLoading={projects.modalLoading}
+          onToggleLang={settings.toggleLang} onOpenSettings={openSettings}
+          onOpenNewProjectModal={projects.homeActions.openNewProjectModal}
+          onCloseNewProjectModal={projects.homeActions.closeNewProjectModal}
+          onModalUrlChange={projects.homeActions.setModalUrl}
+          onModalRawTextChange={projects.homeActions.setModalRawText}
+          onSubmitNewProject={projects.homeActions.submitNewProject}
+          onFilterChange={projects.homeActions.setHomeFilter} onSearchChange={projects.homeActions.setHomeSearch}
+          onOpenProject={openProject} onDeleteProject={projects.homeActions.deleteProject}
         />
       )}
 
       {screen === 'workflow' && activeProject && (
         <WorkflowScreen
-          L={L} langLabel={langLabel} viewport={viewport}
-          project={activeProject} activeStage={activeStage} sidebarOpen={sidebarOpen}
+          L={L} langLabel={settings.langLabel} viewport={view.viewport}
+          project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
           lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState}
-          onGoHome={goHome} onToggleSidebar={toggleSidebar} onCloseSidebarMobile={closeSidebarMobile}
-          onToggleLang={toggleLang} onOpenSettings={openSettings} onSelectStage={selectStage}
+          onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
+          onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
         />
       )}
 
       {screen === 'settings' && (
         <SettingsScreen
-          L={L} lang={lang} apiKeys={apiKeys} textModelDefault={textModelDefault} imageModelDefault={imageModelDefault}
-          specialTags={specialTags}
+          L={L} lang={settings.lang} apiKeys={settings.apiKeys}
+          textModelDefault={settings.textModelDefault} imageModelDefault={settings.imageModelDefault}
+          specialTags={settings.specialTags}
           onClose={closeSettings}
-          actions={{
-            setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
-            setApiKey, setTextModelDefault, setImageModelDefault, onSave: saveSettings,
-            addSpecialTag, removeSpecialTag,
-          }}
+          actions={settings.actions}
         />
       )}
 
