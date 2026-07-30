@@ -1142,7 +1142,7 @@
   z-index: 5;
   max-height: 220px;
   overflow-y: auto;
-  background: var(--bg-panel, #1c1c24);
+  background: rgba(24, 21, 18, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   backdrop-filter: blur(20px);
