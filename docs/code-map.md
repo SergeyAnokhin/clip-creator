@@ -73,7 +73,7 @@ so the wiring is explicit and there is no context/provider indirection.
 | [`useLyricsStage`](../frontend/src/hooks/useLyricsStage.js) | Block/line editing state and every block mutation |
 | [`useSunoStage`](../frontend/src/hooks/useSunoStage.js) | Skill, prompt, refinement, generation, and `wishModel` (which `simple_models` favorite the next "Save to library" click uses) |
 | [`useScenesStage`](../frontend/src/hooks/useScenesStage.js) | Storyboard, references, image variants, ratings; `imageModel`/`sceneTextModel` (which favorite each generation call uses) are seeded from `settings.image_models.default`/`text_models.default` in `resetForProject`, then overridable per-screen via `ModelPicker` |
-| [`useVoice`](../frontend/src/hooks/useVoice.js) | The mic simulation. Created **last** — it writes into the Suno refinement box |
+| [`useVoice`](../frontend/src/hooks/useVoice.js) | Speech-to-text via the native Web Speech API (real recognition, no backend call — see [architecture.md](architecture.md#voice-input-speech-to-text)). Created **last** — it writes into the Suno refinement box |
 
 Stage hooks return `{ state, actions }`; `App.jsx` merges in the cross-cutting
 bits (`specialTags` from settings, `startVoice` and the recording flags from

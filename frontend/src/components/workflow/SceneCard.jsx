@@ -1,7 +1,9 @@
-import { Film, Image as ImageIcon, ImagePlus, Mic } from 'lucide-react';
+import { Film, Image as ImageIcon, ImagePlus, Mic, MicOff } from 'lucide-react';
 import ImageThumb from './ImageThumb.jsx';
 
-export default function SceneCard({ L, projectId, scene, index, isRecording, recordingSeconds, isLoading, columns, actions }) {
+export default function SceneCard({
+  L, projectId, scene, index, isRecording, recordingSeconds, voiceSupported, isLoading, columns, actions,
+}) {
   return (
     <div className="glass-card">
       <div className="scene-card-header">
@@ -39,9 +41,15 @@ export default function SceneCard({ L, projectId, scene, index, isRecording, rec
           <ImagePlus size={13} />
           {L.generateImages}
         </button>
-        <button className="icon-btn" style={{ width: 34, height: 34 }} onClick={() => actions.onVoiceEdit(index)}>
-          <Mic size={13} />
-        </button>
+        {voiceSupported && (
+          <button
+            className={`icon-btn${isRecording ? ' icon-btn-recording' : ''}`}
+            style={{ width: 34, height: 34 }}
+            onClick={() => actions.onVoiceEdit(index)}
+          >
+            {isRecording ? <MicOff size={13} /> : <Mic size={13} />}
+          </button>
+        )}
         {isRecording && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#f87171' }}>
             <span className="recording-dot" style={{ width: 8, height: 8 }} />

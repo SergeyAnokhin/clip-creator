@@ -7,7 +7,7 @@ import ModelPicker from './ModelPicker.jsx';
 export default function ScenesStage({
   L, project, isMobile, imageModel, sceneTextModel, imageModelFavorites, textModelFavorites,
   variantCount, styleDescription, storyboardLoading, referenceUploading,
-  sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, actions,
+  sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, voiceSupported, actions,
 }) {
   const fileInputRef = useRef(null);
 
@@ -116,6 +116,7 @@ export default function ScenesStage({
               scene={scene}
               isRecording={sceneRecordingIdx === index}
               recordingSeconds={recordingSeconds}
+              voiceSupported={voiceSupported}
               isLoading={sceneLoadingIdx === index}
               columns={isMobile ? '1fr' : '1fr 1fr'}
               actions={actions}

@@ -42,7 +42,7 @@ function App() {
     imageModels: settings.imageModels, textModels: settings.textModels,
   });
   // Depends on suno's refinement box, so it must be created after it.
-  const voice = useVoice({ updateProject, showToast, L, setRefinementText: suno.actions.setRefinementText });
+  const voice = useVoice({ updateProject, showToast, L, lang: settings.lang, setRefinementText: suno.actions.setRefinementText });
 
   // ---------- navigation ----------
   async function openProject(id) {
@@ -70,6 +70,7 @@ function App() {
     specialTags: settings.specialTags,
     recordingBlockId: voice.recordingKind === 'block' ? voice.recordingTarget : null,
     recordingSeconds: voice.recordingSeconds,
+    voiceSupported: voice.isSupported,
     actions: { ...lyrics.actions, startVoice: voice.startVoice },
   };
 
@@ -77,6 +78,7 @@ function App() {
     ...suno.state,
     isRecordingRefinement: voice.recordingKind === 'refinement',
     recordingSeconds: voice.recordingSeconds,
+    voiceSupported: voice.isSupported,
     wishLibrary: settings.wishLibrary,
     simpleModelFavorites: settings.simpleModels.favorites,
     actions: {
@@ -89,6 +91,7 @@ function App() {
     ...scenes.state,
     sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
     recordingSeconds: voice.recordingSeconds,
+    voiceSupported: voice.isSupported,
     imageModelFavorites: settings.imageModels.favorites,
     textModelFavorites: settings.textModels.favorites,
     actions: { ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx) },

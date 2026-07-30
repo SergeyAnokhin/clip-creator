@@ -111,6 +111,13 @@
   color: var(--danger);
 }
 
+.icon-btn-recording {
+  background: rgba(248, 113, 113, 0.18);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: var(--danger);
+  animation: wf-pulse 1s infinite;
+}
+
 .icon-btn-danger:hover {
   background: rgba(248, 113, 113, 0.15);
   border-color: rgba(248, 113, 113, 0.3);

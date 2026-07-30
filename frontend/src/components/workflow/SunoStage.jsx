@@ -1,4 +1,4 @@
-import { Copy, MessageSquare, Mic, Save, Sparkles, Zap } from 'lucide-react';
+import { Copy, MessageSquare, Mic, MicOff, Save, Sparkles, Zap } from 'lucide-react';
 import ModelPicker from './ModelPicker.jsx';
 
 export const SKILLS = [
@@ -18,7 +18,7 @@ export const SKILLS = [
 ];
 
 export default function SunoStage({
-  L, project, skillId, refinementText, isRecordingRefinement, recordingSeconds,
+  L, project, skillId, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported,
   sunoLoading, trackUrl, wishLibrary, wishModel, simpleModelFavorites, actions,
 }) {
   return (
@@ -59,11 +59,17 @@ export default function SunoStage({
             className="field"
             value={refinementText}
             onChange={(e) => actions.setRefinementText(e.target.value)}
-            placeholder={L.refinementPlaceholder}
+            placeholder={isRecordingRefinement ? L.listening : L.refinementPlaceholder}
           />
-          <button className="icon-btn" style={{ width: 38, height: 38 }} onClick={() => actions.startVoice('refinement')}>
-            <Mic size={15} />
-          </button>
+          {voiceSupported && (
+            <button
+              className={`icon-btn${isRecordingRefinement ? ' icon-btn-recording' : ''}`}
+              style={{ width: 38, height: 38 }}
+              onClick={() => actions.startVoice('refinement')}
+            >
+              {isRecordingRefinement ? <MicOff size={15} /> : <Mic size={15} />}
+            </button>
+          )}
           <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={actions.applyRefinement}>
             {L.apply}
           </button>

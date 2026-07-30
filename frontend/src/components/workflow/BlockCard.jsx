@@ -1,6 +1,6 @@
 import {
-  ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Copy, CopyPlus, Mic, Parentheses, Pencil, Scissors, Tag, Tags,
-  Trash2, X,
+  ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Copy, CopyPlus, Mic, MicOff, Parentheses, Pencil, Scissors, Tag,
+  Tags, Trash2, X,
 } from 'lucide-react';
 import { TYPE_COLORS } from '../../i18n/dict.js';
 import TypeMenu from './TypeMenu.jsx';
@@ -8,7 +8,7 @@ import TagMenu from './TagMenu.jsx';
 
 export default function BlockCard({
   block, L, isEditing, draftContent, editingLineIndex, lineDraft, typeMenuOpen, cloneMenuOpen, tagMenuOpen, specialTags,
-  isRecording, recordingSeconds,
+  isRecording, recordingSeconds, voiceSupported,
   onMoveUp, onMoveDown, onMoveToStart, onMoveToEnd, onToggleTypeMenu, onSetType, onToggleCloneMenu, onCloneAsType,
   onToggleTagMenu, onInsertTag, onStartVoice,
   onDuplicate, onDelete, onStartBlockEdit, onSaveEdit, onCancelEdit, onDraftChange, onSplitLine, onToggleLineBracket,
@@ -78,9 +78,14 @@ export default function BlockCard({
             </button>
             {tagMenuOpen && <TagMenu L={L} tags={specialTags} onInsert={onInsertTag} />}
           </div>
-          {!isInterlude && (
-            <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.voiceEdit} onClick={onStartVoice}>
-              <Mic size={13} />
+          {!isInterlude && voiceSupported && (
+            <button
+              className={`icon-btn${isRecording ? ' icon-btn-recording' : ''}`}
+              style={{ width: 30, height: 30, opacity: isRecording ? 1 : 0.75 }}
+              title={L.voiceEdit}
+              onClick={onStartVoice}
+            >
+              {isRecording ? <MicOff size={13} /> : <Mic size={13} />}
             </button>
           )}
           {!isInterlude && (

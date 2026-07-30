@@ -201,9 +201,58 @@ without knowing whether the result is canned or real. Keys come from
     just-written `scenes[n].images` is longer than it was for the old
     synchronous stub.
 
-Not implemented at all: real speech-to-text (the mic buttons are a timed fake
-transcript, matching the design mock) and image-to-image conditioning from
-`reference_images`.
+Not implemented at all: image-to-image conditioning from `reference_images`.
+
+## Voice input (speech-to-text)
+
+Dictation into text fields uses the browser's native **Web Speech API**
+(`window.SpeechRecognition` / `window.webkitSpeechRecognition`) — no backend
+call, no third-party library. All of it lives in
+[`useVoice.js`](../frontend/src/hooks/useVoice.js), which `App.jsx` wires up
+last (it writes into the Suno refinement box, so it depends on `suno`).
+
+- **Feature detection, not a polyfill.** `isVoiceInputSupported` is a
+  module-level `!!(window.SpeechRecognition || window.webkitSpeechRecognition)`
+  check. `useVoice` exposes it as `isSupported`; `App.jsx` forwards it to each
+  stage as `voiceSupported`, and the three mic buttons
+  ([`BlockCard.jsx`](../frontend/src/components/workflow/BlockCard.jsx),
+  [`SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx)'s
+  refinement box,
+  [`SceneCard.jsx`](../frontend/src/components/workflow/SceneCard.jsx)'s
+  static-prompt edit) only render when it's `true`. No error message, no
+  fallback UI — the button simply isn't there in unsupported browsers.
+- **One global recorder.** `recordingKind`/`recordingTarget` track which field
+  is currently listening; clicking a mic button toggles — starts a new
+  `SpeechRecognition` if none is running, calls `.stop()` on the stored
+  instance if one is. `recordingSeconds` ticks a `setInterval` purely for the
+  `L.recording · Ns` banner; it has no effect on when recognition actually
+  stops (the browser ends it once the user stops talking, since
+  `continuous` is left at its `false` default).
+- **Language** comes from `settings.lang` (`'ru'`/`'en'`), mapped to BCP-47
+  (`ru-RU`/`en-US`, defaulting to `en-US`) — there's no BCP-47 value stored
+  anywhere else in settings.
+- **Result handling:** `interimResults: false`, `maxAlternatives: 1`; the
+  final transcript (`event.results[0][0].transcript`) is spliced into the
+  target field via the same callback the mock used to use
+  (`updateProject` for a lyrics block/scene prompt, `setRefinementText` for
+  the Suno wish box) — never stored inside the hook itself, so the field
+  stays a normal controlled `value`/`onChange` component.
+- **Errors** are split three ways in `onerror`: `'not-allowed'` (mic
+  permission denied), `'no-speech'` (nothing heard), and everything else —
+  each shows its own short toast (`L.toast_voice_denied` /
+  `L.toast_voice_no_speech` / `L.toast_voice_error`).
+- **Cleanup:** the hook's `useEffect` calls `.stop()` on unmount so a
+  navigation away never leaves a live mic connection behind.
+
+**Adding voice input to a new field** follows the same shape every time:
+gate the mic button on a `voiceSupported` prop threaded down from
+`voice.isSupported`, wire its `onClick` to `startVoice(kind, target)` (a new
+`kind` needs a branch in `useVoice`'s `applyTranscript`), and show the
+`isRecording`/`recordingSeconds` state your stage already receives from
+`App.jsx`. Reach for this only on free-form natural-language fields the user
+would plausibly *say out loud* — prompt/instruction text for an AI step,
+lyrics, style descriptions — not on precise/copy-pasted input like URLs, API
+keys, or titles.
 
 ## The Suno prompt: base instructions, examples, per-song wish
 

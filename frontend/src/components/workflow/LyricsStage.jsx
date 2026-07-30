@@ -6,7 +6,7 @@ export default function LyricsStage({
   L, project, viewport, editingBlockId, draftContent,
   openMenuTypeBlockId, openMenuCloneBlockId, openTagMenuBlockId, specialTags, splitGroupSize,
   editingLineBlockId, editingLineIndex, lineDraft,
-  recordingBlockId, recordingSeconds, actions,
+  recordingBlockId, recordingSeconds, voiceSupported, actions,
 }) {
   const preview = formatLyrics(
     compileLyrics(project.blocks),
@@ -55,6 +55,7 @@ export default function LyricsStage({
           specialTags={specialTags}
           isRecording={recordingBlockId === block.id}
           recordingSeconds={recordingSeconds}
+          voiceSupported={voiceSupported}
           onMoveUp={() => actions.moveBlock(block.id, -1)}
           onMoveDown={() => actions.moveBlock(block.id, 1)}
           onMoveToStart={() => actions.moveBlockToEdge(block.id, 'start')}
