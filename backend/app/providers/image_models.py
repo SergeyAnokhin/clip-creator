@@ -11,8 +11,9 @@ is its own fixed REST path (`POST /generate/image/{id}` against
 `https://api.krea.ai`, e.g. `/generate/image/bfl/flux-1-dev`) rather than
 one endpoint with a model parameter, confirmed against
 https://www.krea.ai/docs/api-reference/ (2026-07). So those three, plus
-OpenRouter (which doesn't route image models), fall back to a small curated
-constant. The user can still add any model id manually in the UI.
+OpenRouter and DeepSeek (neither of which route image models), fall back to
+a small curated constant. The user can still add any model id manually in
+the UI.
 
 Krea is image/video-only (no text/LLM models), so it's deliberately absent
 from text_models.py's provider set - see settings.py's
@@ -37,6 +38,7 @@ CURATED_IMAGE_MODELS = {
         {'id': 'fal-ai/aura-flow', 'name': 'AuraFlow'},
     ],
     'openrouter': [],
+    'deepseek': [],
     'krea': [
         {'id': 'krea/krea-2/medium', 'name': 'Krea 2 (Medium)'},
         {'id': 'krea/krea-2/large', 'name': 'Krea 2 (Large)'},

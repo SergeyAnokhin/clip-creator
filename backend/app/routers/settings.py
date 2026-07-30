@@ -9,14 +9,14 @@ from ..providers.suno_prompt_defaults import DEFAULT_REFERENCE_EXAMPLES, DEFAULT
 
 router = APIRouter(prefix='/api/settings', tags=['settings'])
 
-_MODEL_PROVIDERS = {'google', 'openrouter', 'replicate', 'fal'}
+_MODEL_PROVIDERS = {'google', 'openrouter', 'deepseek', 'replicate', 'fal'}
 # Krea (krea.ai) only does image/video generation, no text/LLM models, so it's
 # valid for the image-models endpoint but not the text one.
 _IMAGE_MODEL_PROVIDERS = _MODEL_PROVIDERS | {'krea'}
 
 DEFAULT_SETTINGS = {
     'lang': 'ru',
-    'api_keys': {'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'krea': ''},
+    'api_keys': {'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'deepseek': '', 'krea': ''},
     'text_models': {'favorites': [], 'default': 'google:gemini-2.5-flash'},
     'simple_models': {'favorites': [], 'default': ''},
     'image_models': {'favorites': [], 'default': ''},

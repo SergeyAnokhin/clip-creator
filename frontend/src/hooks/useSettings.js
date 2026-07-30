@@ -12,7 +12,7 @@ const DEFAULT_IMAGE_MODELS = { favorites: [], default: '' };
  * every other hook uses for toast copy. */
 export function useSettings({ showToast }) {
   const [lang, setLang] = useState('ru');
-  const [apiKeys, setApiKeys] = useState({ replicate: '', google: '', fal: '', openrouter: '', krea: '' });
+  const [apiKeys, setApiKeys] = useState({ replicate: '', google: '', fal: '', openrouter: '', deepseek: '', krea: '' });
   const [textModels, setTextModels] = useState(DEFAULT_TEXT_MODELS);
   const [simpleModels, setSimpleModels] = useState(DEFAULT_SIMPLE_MODELS);
   const [imageModels, setImageModels] = useState(DEFAULT_IMAGE_MODELS);
@@ -118,6 +118,57 @@ export function useSettings({ showToast }) {
       .then((res) => { setWishLibrary(res.suno_wish_library); showToast(L.toast_saved); })
       .catch(() => {});
   }
+  function readJSONFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try { resolve(JSON.parse(reader.result)); } catch (e) { reject(e); }
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  async function importApiKeys(file) {
+    try {
+      const data = await readJSONFile(file);
+      const keys = (data && data.api_keys) || data || {};
+      setApiKeys((prev) => ({ ...prev, ...keys }));
+      await api.putSettings({ api_keys: { ...apiKeys, ...keys } });
+      showToast(L.toast_imported);
+    } catch {
+      showToast(L.toast_importFailed);
+    }
+  }
+
+  async function importGeneralSettings(file) {
+    try {
+      const src = await readJSONFile(file);
+      const next = {
+        lang: src.lang ?? lang,
+        text_models: src.text_models ?? textModels,
+        simple_models: src.simple_models ?? simpleModels,
+        image_models: src.image_models ?? imageModels,
+        special_tags: src.special_tags ?? specialTags,
+        suno_base_prompt: src.suno_base_prompt ?? sunoBasePrompt,
+        suno_reference_examples: src.suno_reference_examples ?? referenceExamples,
+        suno_wish_library: src.suno_wish_library ?? wishLibrary,
+      };
+      setLang(next.lang);
+      setTextModels(next.text_models);
+      setSimpleModels(next.simple_models);
+      setImageModels(next.image_models);
+      setSpecialTags(next.special_tags);
+      setSunoBasePrompt(next.suno_base_prompt);
+      setReferenceExamples(next.suno_reference_examples);
+      setWishLibrary(next.suno_wish_library);
+      await api.putSettings(next);
+      showToast(L.toast_imported);
+    } catch {
+      showToast(L.toast_importFailed);
+    }
+  }
+
   async function saveSettings() {
     try {
       await api.putSettings({
@@ -138,7 +189,7 @@ export function useSettings({ showToast }) {
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
-      setApiKey, onSave: saveSettings,
+      setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings,
       addSpecialTag, removeSpecialTag, setSunoBasePrompt,
       addReferenceExample, removeReferenceExample, saveWishToLibrary, removeWishSnippet,
       addTextModelFavorite, removeTextModelFavorite, setTextModelDefault,

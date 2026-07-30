@@ -1081,11 +1081,21 @@
 /* ---------- Settings ---------- */
 
 .settings-panel {
+  position: relative;
+  z-index: 0;
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 16px;
   padding: 20px;
+}
+
+/* backdrop-filter above makes each panel its own stacking context, so a
+   dropdown inside it would otherwise be painted under later sibling panels
+   (and the bottom Save button) regardless of its own z-index. Lift the
+   whole panel while it has focus so its dropdown clears everything after it. */
+.settings-panel:focus-within {
+  z-index: 20;
 }
 
 .settings-panel-label {

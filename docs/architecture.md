@@ -96,9 +96,11 @@ without knowing whether the result is canned or real. Keys come from
     fallback — see [`routers/generation.py`](../backend/app/routers/generation.py).
 - `text_models.list_models(provider, api_key)` backs the Settings "refresh
   models" button (`GET /api/settings/models/{provider}`):
-  - Google and OpenRouter both expose a real, filterable models list, so
-    those two are **live** calls (Google's Generative Language API, filtered
-    to `generateContent`-capable models; OpenRouter's public `/models`).
+  - Google, OpenRouter and DeepSeek all expose a real, filterable models
+    list, so those three are **live** calls (Google's Generative Language
+    API, filtered to `generateContent`-capable models; OpenRouter's public
+    `/models`; DeepSeek's OpenAI-compatible `/models` at
+    `api.deepseek.com/v1`).
   - Replicate and FAL don't have an equivalent "list chat/text models"
     endpoint worth calling here (Replicate's catalog spans every modality;
     FAL has no public model-listing API), so those two always return a small
@@ -109,19 +111,22 @@ without knowing whether the result is canned or real. Keys come from
   .default` (or the request's own `model`, if the "Save to library" model
   picker in `SunoStage.jsx` was used to override it for that one save - see
   `routers/settings.py::add_wish`, which applies the override to a throwaway
-  settings copy so it never overwrites the real default) points at Google or
-  OpenRouter with a key configured, it asks that model for a short title;
-  otherwise (no default set, unsupported provider, missing key, or any API
-  failure) it falls back to a local truncate of the wish text. Never raises —
-  title generation must not block saving a wish.
+  settings copy so it never overwrites the real default) points at Google,
+  OpenRouter or DeepSeek with a key configured, it asks that model for a
+  short title (DeepSeek and OpenRouter both use the same OpenAI-compatible
+  `/chat/completions` shape); otherwise (no default set, unsupported
+  provider, missing key, or any API failure) it falls back to a local
+  truncate of the wish text. Never raises — title generation must not block
+  saving a wish.
 - `image_models.list_models(provider, api_key)` backs the Settings image-model
   "refresh models" button (`GET /api/settings/image-models/{provider}`),
   mirroring `text_models.list_models`'s shape and split:
   - Google is a **live** call to the same "list models" endpoint as
     `text_models`, filtered to `predict`-capable (Imagen) models instead of
     `generateContent`-capable ones.
-  - Replicate, FAL, OpenRouter and Krea return a curated `CURATED_IMAGE_MODELS`
-    list (empty for OpenRouter, which doesn't route image models). Krea
+  - Replicate, FAL, OpenRouter, DeepSeek and Krea return a curated
+    `CURATED_IMAGE_MODELS` list (empty for OpenRouter and DeepSeek, neither
+    of which route image models). Krea
     (krea.ai) has no model-discovery endpoint at all — each model is its own
     fixed REST path (`POST /generate/image/{id}` against `api.krea.ai`,
     async job + `GET /jobs/{id}` polling), confirmed against

@@ -1,19 +1,31 @@
-import { useState } from 'react';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { ArrowLeft, Download, Trash2, Upload } from 'lucide-react';
 import { api } from '../../api/client.js';
 import ModelFavorites from './ModelFavorites.jsx';
+
+function downloadJSON(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 const API_KEY_ROWS = [
   { key: 'replicate', name: 'Replicate' },
   { key: 'google', name: 'Google (Gemini)' },
   { key: 'fal', name: 'FAL' },
   { key: 'openrouter', name: 'OpenRouter' },
+  { key: 'deepseek', name: 'DeepSeek' },
   { key: 'krea', name: 'Krea AI' },
 ];
 
 const MODEL_PROVIDERS = [
   { id: 'google', name: 'Google (Gemini)' },
   { id: 'openrouter', name: 'OpenRouter' },
+  { id: 'deepseek', name: 'DeepSeek' },
   { id: 'replicate', name: 'Replicate' },
   { id: 'fal', name: 'FAL' },
 ];
@@ -37,6 +49,29 @@ export default function SettingsScreen({
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [imageCatalog, setImageCatalog] = useState({});
   const [refreshingImageModels, setRefreshingImageModels] = useState(false);
+  const apiKeysFileRef = useRef(null);
+  const generalFileRef = useRef(null);
+
+  function exportApiKeysFile() {
+    downloadJSON('versecraft-api-keys.json', { api_keys: apiKeys });
+  }
+  function exportGeneralFile() {
+    downloadJSON('versecraft-settings.json', {
+      lang, text_models: textModels, simple_models: simpleModels, image_models: imageModels,
+      special_tags: specialTags, suno_base_prompt: sunoBasePrompt,
+      suno_reference_examples: referenceExamples, suno_wish_library: wishLibrary,
+    });
+  }
+  function handleApiKeysFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) actions.importApiKeys(file);
+  }
+  function handleGeneralFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) actions.importGeneralSettings(file);
+  }
 
   const tabLabels = {
     general: L.settings_tab_general, providers: L.settings_tab_providers, models: L.settings_tab_models,
@@ -116,6 +151,32 @@ export default function SettingsScreen({
             </div>
           )}
 
+          {activeTab === 'general' && (
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.settings_backup}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="settings-row">
+                  <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>{L.settings_backupOther}</span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-accent-soft" onClick={exportGeneralFile}>
+                      <Download size={13} /> {L.settings_exportBtn}
+                    </button>
+                    <button className="btn btn-accent-soft" onClick={() => generalFileRef.current?.click()}>
+                      <Upload size={13} /> {L.settings_importBtn}
+                    </button>
+                    <input
+                      ref={generalFileRef}
+                      type="file"
+                      accept="application/json"
+                      style={{ display: 'none' }}
+                      onChange={handleGeneralFile}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'providers' && (
             <div className="settings-panel">
               <div className="settings-panel-label">{L.settings_apiKeys}</div>
@@ -132,6 +193,24 @@ export default function SettingsScreen({
                     />
                   </div>
                 ))}
+                <div className="settings-row">
+                  <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>{L.settings_backupApiKeys}</span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-accent-soft" onClick={exportApiKeysFile}>
+                      <Download size={13} /> {L.settings_exportBtn}
+                    </button>
+                    <button className="btn btn-accent-soft" onClick={() => apiKeysFileRef.current?.click()}>
+                      <Upload size={13} /> {L.settings_importBtn}
+                    </button>
+                    <input
+                      ref={apiKeysFileRef}
+                      type="file"
+                      accept="application/json"
+                      style={{ display: 'none' }}
+                      onChange={handleApiKeysFile}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           )}

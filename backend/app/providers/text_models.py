@@ -1,12 +1,13 @@
 """Provider seam for generic text-model catalog lookups and short completions
 (distinct from suno.py, which owns the Suno style/lyrics prompt shape).
 
-Google and OpenRouter expose a real "list models" API, so refreshing the
-catalog for those two is a live call. Replicate and FAL don't have a
-filterable list-of-chat-models endpoint worth calling here (Replicate's
-catalog spans every modality; FAL has no equivalent public listing), so
-those two fall back to a small curated constant - the user can still add any
-model id manually in the UI.
+Google, OpenRouter and DeepSeek expose a real "list models" API, so
+refreshing the catalog for those is a live call (DeepSeek's API is
+OpenAI-compatible: GET/POST against https://api.deepseek.com/v1). Replicate
+and FAL don't have a filterable list-of-chat-models endpoint worth calling
+here (Replicate's catalog spans every modality; FAL has no equivalent public
+listing), so those two fall back to a small curated constant - the user can
+still add any model id manually in the UI.
 """
 
 import httpx
@@ -15,6 +16,8 @@ _GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 _GEMINI_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
 _OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 _OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions'
+_DEEPSEEK_MODELS_URL = 'https://api.deepseek.com/v1/models'
+_DEEPSEEK_CHAT_URL = 'https://api.deepseek.com/v1/chat/completions'
 
 CURATED_MODELS = {
     'replicate': [
@@ -41,6 +44,8 @@ async def list_models(provider: str, api_key: str) -> dict:
             return await _list_google(api_key)
         if provider == 'openrouter':
             return await _list_openrouter(api_key)
+        if provider == 'deepseek':
+            return await _list_deepseek(api_key)
         if provider in CURATED_MODELS:
             return {'provider': provider, 'source': 'curated', 'models': CURATED_MODELS[provider]}
         return {'provider': provider, 'source': 'error', 'models': [], 'error': f'Unknown provider: {provider}'}
@@ -81,6 +86,22 @@ async def _list_openrouter(api_key: str) -> dict:
     return {'provider': 'openrouter', 'source': 'live', 'models': models}
 
 
+async def _list_deepseek(api_key: str) -> dict:
+    if not api_key:
+        return {'provider': 'deepseek', 'source': 'error', 'models': [], 'error': 'Нет API-ключа DeepSeek'}
+    headers = {'Authorization': f'Bearer {api_key}'}
+    async with httpx.AsyncClient(timeout=20) as http_client:
+        resp = await http_client.get(_DEEPSEEK_MODELS_URL, headers=headers)
+    if resp.status_code != 200:
+        return {'provider': 'deepseek', 'source': 'error', 'models': [], 'error': f'{resp.status_code}: {resp.text[:200]}'}
+    data = resp.json()
+    models = [
+        {'id': m.get('id', ''), 'name': m.get('id', '')}
+        for m in data.get('data', []) if m.get('id')
+    ]
+    return {'provider': 'deepseek', 'source': 'live', 'models': models}
+
+
 def truncate_title(text: str) -> str:
     words = text.strip().split()
     short = ' '.join(words[:6])
@@ -105,6 +126,8 @@ async def generate_wish_title(text: str, settings: dict) -> str:
             title = await _complete_google(model_id, api_key, text)
         elif provider == 'openrouter' and model_id and api_key:
             title = await _complete_openrouter(model_id, api_key, text)
+        elif provider == 'deepseek' and model_id and api_key:
+            title = await _complete_deepseek(model_id, api_key, text)
         else:
             return truncate_title(text)
         return title.strip().strip('"').strip() or truncate_title(text)
@@ -135,5 +158,18 @@ async def _complete_openrouter(model_id: str, api_key: str, text: str) -> str:
         )
     if resp.status_code != 200:
         raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:200]}')
+    data = resp.json()
+    return data['choices'][0]['message']['content']
+
+
+async def _complete_deepseek(model_id: str, api_key: str, text: str) -> str:
+    async with httpx.AsyncClient(timeout=20) as http_client:
+        resp = await http_client.post(
+            _DEEPSEEK_CHAT_URL,
+            headers={'Authorization': f'Bearer {api_key}'},
+            json={'model': model_id, 'messages': [{'role': 'user', 'content': _TITLE_PROMPT.format(text=text)}]},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f'DeepSeek API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
     return data['choices'][0]['message']['content']

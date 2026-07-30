@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 
 /** Favorites list + default picker for a "which model" setting (text models,
@@ -9,24 +9,26 @@ export default function ModelFavorites({
   onRefresh, onAddFavorite, onRemoveFavorite, onSetDefault,
 }) {
   const [query, setQuery] = useState('');
+  const [focused, setFocused] = useState(false);
   const [manualProvider, setManualProvider] = useState(providers[0]?.id || '');
+  const inputRef = useRef(null);
 
   const providerLabel = (id) => providers.find((p) => p.id === id)?.name || id;
 
-  const suggestions = query.trim()
-    ? providers.flatMap((p) => {
-      const entry = catalog[p.id];
-      if (!entry) return [];
-      const q = query.trim().toLowerCase();
-      return entry.models
-        .filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
-        .map((m) => ({ provider: p.id, id: m.id, name: m.name }));
-    }).slice(0, 20)
-    : [];
+  const q = query.trim().toLowerCase();
+  const matchingModels = providers.flatMap((p) => {
+    const entry = catalog[p.id];
+    if (!entry) return [];
+    return entry.models
+      .filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      .map((m) => ({ provider: p.id, id: m.id, name: m.name }));
+  }).slice(0, 20);
+  const suggestions = focused ? matchingModels : [];
 
   function addSuggestion(s) {
     onAddFavorite({ provider: s.provider, id: s.id, label: s.name });
     setQuery('');
+    inputRef.current?.blur();
   }
   function addManual() {
     const trimmed = query.trim();
@@ -74,9 +76,12 @@ export default function ModelFavorites({
 
       <div style={{ position: 'relative' }}>
         <input
+          ref={inputRef}
           className="field"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           placeholder={L.settings_modelSearchPlaceholder}
         />
         {suggestions.length > 0 && (
@@ -95,7 +100,7 @@ export default function ModelFavorites({
         )}
       </div>
 
-      {query.trim() && suggestions.length === 0 && (
+      {query.trim() && matchingModels.length === 0 && (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <select
             className="field"

@@ -2,7 +2,7 @@ def test_get_settings_returns_defaults(client):
     resp = client.get('/api/settings')
     assert resp.status_code == 200
     body = resp.json()
-    assert body['api_keys'] == {'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'krea': ''}
+    assert body['api_keys'] == {'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'deepseek': '', 'krea': ''}
     assert body['text_models'] == {'favorites': [], 'default': 'google:gemini-2.5-flash'}
     assert body['simple_models'] == {'favorites': [], 'default': ''}
     assert body['image_models'] == {'favorites': [], 'default': ''}
@@ -27,6 +27,12 @@ def test_get_models_curated_provider_needs_no_key(client):
     body = resp.json()
     assert body['source'] == 'curated'
     assert len(body['models']) > 0
+
+
+def test_get_models_deepseek_without_key_returns_error_not_404(client):
+    resp = client.get('/api/settings/models/deepseek')
+    assert resp.status_code == 200
+    assert resp.json()['source'] == 'error'
 
 
 def test_get_models_unknown_provider_returns_404(client):

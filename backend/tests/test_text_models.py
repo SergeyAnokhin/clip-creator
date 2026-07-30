@@ -80,6 +80,25 @@ def test_list_models_openrouter_maps_ids(monkeypatch):
     assert result['models'] == [{'id': 'openai/gpt-4o-mini', 'name': 'GPT-4o mini'}]
 
 
+def test_list_models_deepseek_without_key_returns_error():
+    import asyncio
+    result = asyncio.run(text_models.list_models('deepseek', ''))
+    assert result['source'] == 'error'
+    assert result['models'] == []
+
+
+def test_list_models_deepseek_maps_ids(monkeypatch):
+    payload = {'data': [{'id': 'deepseek-chat'}]}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    result = asyncio.run(text_models.list_models('deepseek', 'test-key'))
+
+    assert result['source'] == 'live'
+    assert result['models'] == [{'id': 'deepseek-chat', 'name': 'deepseek-chat'}]
+
+
 def test_list_models_unknown_provider_returns_error():
     import asyncio
     result = asyncio.run(text_models.list_models('anthropic', 'key'))
@@ -134,6 +153,19 @@ def test_generate_wish_title_calls_openrouter_when_configured(monkeypatch):
 
     assert title == 'Больше саксофона'
     assert fake_client.last_call['json']['model'] == 'openai/gpt-4o-mini'
+
+
+def test_generate_wish_title_calls_deepseek_when_configured(monkeypatch):
+    payload = {'choices': [{'message': {'content': 'Больше саксофона'}}]}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    settings = {'simple_models': {'default': 'deepseek:deepseek-chat'}, 'api_keys': {'deepseek': 'test-key'}}
+    title = asyncio.run(text_models.generate_wish_title('добавь больше саксофона', settings))
+
+    assert title == 'Больше саксофона'
+    assert fake_client.last_call['json']['model'] == 'deepseek-chat'
 
 
 def test_generate_wish_title_falls_back_on_api_error(monkeypatch):

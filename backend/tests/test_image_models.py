@@ -21,6 +21,12 @@ def test_list_models_returns_empty_curated_for_openrouter():
     assert result['models'] == []
 
 
+def test_list_models_returns_empty_curated_for_deepseek():
+    result = asyncio.run(image_models.list_models('deepseek', ''))
+    assert result['source'] == 'curated'
+    assert result['models'] == []
+
+
 def test_list_models_returns_curated_for_krea():
     result = asyncio.run(image_models.list_models('krea', ''))
     assert result['source'] == 'curated'

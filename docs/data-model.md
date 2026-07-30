@@ -48,7 +48,7 @@ one `is_selected` per scene once anything is rated.
 
 ## Settings (`settings.json`)
 
-`{lang, api_keys{replicate,google,fal,openrouter,krea}, text_models{favorites[],default},
+`{lang, api_keys{replicate,google,fal,openrouter,deepseek,krea}, text_models{favorites[],default},
 simple_models{favorites[],default}, image_models{favorites[],default}, special_tags[],
 suno_base_prompt, suno_reference_examples[], suno_wish_library[]}`. Reads and
 writes merge over `DEFAULT_SETTINGS` in
@@ -62,9 +62,9 @@ partial merge server-side, so the frontend can persist e.g. just
 - `text_models` / `simple_models` / `image_models` — same shape: `favorites`
   is `{provider, id, label}[]`; `default` is a composite `"{provider}:{id}"`
   string (e.g. `"google:gemini-2.5-flash"`). `text_models`/`simple_models`
-  only accept `provider` `google|openrouter|replicate|fal`; `image_models`
-  additionally accepts `krea` (Krea AI is image/video-only, so it's excluded
-  from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
+  only accept `provider` `google|openrouter|deepseek|replicate|fal`;
+  `image_models` additionally accepts `krea` (Krea AI is image/video-only, so
+  it's excluded from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
   `_MODEL_PROVIDERS` in `routers/settings.py`). `text_models.default` is
   what `suno.generate` parses to decide whether to call the real Gemini API
   (see below); `simple_models.default` is used for lightweight tasks —
@@ -83,9 +83,17 @@ partial merge server-side, so the frontend can persist e.g. just
   (distinct from a project's own `refinement_comments` history), each
   `{id, title, text, created_at}`. `title` is generated once, on save, by
   `generate_wish_title` (real LLM call if `simple_models.default` points at
-  Google/OpenRouter with a key configured, otherwise a local truncate of
-  `text`). Legacy plain-string entries are normalized to this shape on
+  Google/OpenRouter/DeepSeek with a key configured, otherwise a local
+  truncate of `text`). Legacy plain-string entries are normalized to this shape on
   `GET /api/settings` (not rewritten to disk until the next save).
+- The Settings screen's "Backup" controls (`SettingsScreen.jsx`, general and
+  providers tabs) export/import `api_keys` separately from every other
+  settings field as downloadable JSON files. This is pure client-side file
+  I/O (`Blob` download, `FileReader` + hidden `<input type="file">`) — there
+  is no dedicated `/export`/`/import` route; import just calls the existing
+  `PUT /api/settings` with the parsed file content
+  ([`hooks/useSettings.js`](../frontend/src/hooks/useSettings.js)
+  `importApiKeys`/`importGeneralSettings`).
 
 ## API
 
@@ -100,8 +108,8 @@ reference-image upload (multipart).
 | `PATCH /api/projects/{id}` | Partial project (the frontend sends the **whole** object) → full project |
 | `DELETE /api/projects/{id}` | → 204 |
 | `GET /api/settings` / `PUT /api/settings` | Settings dict (merged over defaults) |
-| `GET /api/settings/models/{provider}` | `provider` = `google\|openrouter\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/OpenRouter query the provider's real API with the stored key; Replicate/FAL always return the curated fallback (see `code-map.md`) |
-| `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)) |
+| `GET /api/settings/models/{provider}` | `provider` = `google\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/OpenRouter/DeepSeek query the provider's real API with the stored key; Replicate/FAL always return the curated fallback (see `code-map.md`) |
+| `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)) |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. Generates `wish.title` via `model` if given (a `"{provider}:{model_id}"` composite, applied to a throwaway settings copy so it never overwrites `simple_models.default`), else the configured simple model, else a truncate fallback; appends, persists |
 | `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model}` → `{style, lyrics, skill_id, model_used}`. `model` is the `"{provider}:{model_id}"` composite from `settings.text_models.default`; `provider == 'google'` + a Google key calls the real Gemini API; a failed call returns `502` instead of falling back |
 | `POST /api/projects/{id}/suno/refine` | `{comment}` → `{skill_prompt, refinement_comments}` |
