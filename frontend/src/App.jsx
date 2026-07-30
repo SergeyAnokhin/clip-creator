@@ -5,6 +5,7 @@ import {
   cloneBlockWithType, deleteLine, duplicateLine, insertBlockAdjacent, moveBlock, moveBlockToEdge, moveToEdgeForType,
   repeatChorusAfterVerses, setLine, splitBlockAtLine, splitBlockEveryN, toggleLineBrackets,
 } from './lib/lyrics.js';
+import { pickMainByRating } from './lib/scenes.js';
 import { debounce } from './lib/debounce.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
@@ -58,6 +59,10 @@ function App() {
 
   const [imageModel, setImageModel] = useState('flux');
   const [sceneLoadingIdx, setSceneLoadingIdx] = useState(null);
+  const [variantCount, setVariantCount] = useState(1);
+  const [styleDescription, setStyleDescription] = useState('');
+  const [storyboardLoading, setStoryboardLoading] = useState(false);
+  const [referenceUploading, setReferenceUploading] = useState(false);
 
   const [apiKeys, setApiKeys] = useState({ openai: '', anthropic: '', deepseek: '', replicate: '' });
   const [textModelDefault, setTextModelDefault] = useState('claude');
@@ -138,6 +143,22 @@ function App() {
     });
   }
 
+  /** Cancels any in-flight debounced autosave and synchronously persists the
+   * current project first. Without this, a debounced edit (e.g. typing the
+   * style description) can land *after* a server-side action that replaces
+   * `scenes` wholesale (storyboard generation, image generation) and silently
+   * revert it to a stale snapshot - call this right before such actions. */
+  async function flushPendingSave() {
+    debouncedPatch.cancel();
+    if (activeProject) {
+      try {
+        await api.patchProject(activeProject.id, activeProject);
+      } catch {
+        showToast('Не удалось сохранить');
+      }
+    }
+  }
+
   // ---------- home ----------
   function openNewProjectModal() { setShowNewProjectModal(true); setModalUrl(''); setModalRawText(''); }
   function closeNewProjectModal() { setShowNewProjectModal(false); }
@@ -172,9 +193,10 @@ function App() {
       setActiveProject(project);
       setActiveStage('lyrics');
       setSidebarOpen(viewport !== 'mobile');
-      setSkillId('skill_a');
+      setSkillId(project.skill_id || 'skill_a');
       setRefinementText('');
       setTrackUrl(project.track_url || '');
+      setStyleDescription(project.style_description || '');
       setScreen('workflow');
     } catch {
       showToast('Не удалось открыть проект');
@@ -332,19 +354,34 @@ function App() {
   function setSkillPrompt(value) {
     updateProject((p) => ({ ...p, skill_prompt: value }), { immediate: false });
   }
-  function applyRefinement() {
-    if (!refinementText.trim()) return;
-    const addition = `\n// Refined: ${refinementText}`;
-    updateProject((p) => ({ ...p, skill_prompt: p.skill_prompt + addition }));
-    setRefinementText('');
-    showToast(L.toast_generated);
+  function selectSkill(id, template) {
+    setSkillId(id);
+    updateProject((p) => ({ ...p, skill_id: id, skill_prompt: template }));
+  }
+  async function applyRefinement() {
+    if (!refinementText.trim() || !activeProject) return;
+    const comment = refinementText;
+    try {
+      const result = await api.refineSuno(activeProject.id, comment);
+      setActiveProject((p) => ({
+        ...p, skill_prompt: result.skill_prompt, refinement_comments: result.refinement_comments,
+      }));
+      setRefinementText('');
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось применить правку');
+    }
   }
   async function generateSuno() {
     if (!activeProject) return;
     setSunoLoading(true);
     try {
-      const result = await api.generateSuno(activeProject.id);
-      setActiveProject((p) => ({ ...p, style: result.style, lyrics: result.lyrics }));
+      const result = await api.generateSuno(activeProject.id, {
+        skill_id: skillId, skill_prompt: activeProject.skill_prompt, model: textModelDefault,
+      });
+      setActiveProject((p) => ({
+        ...p, style: result.style, lyrics: result.lyrics, skill_id: result.skill_id, model_used: result.model_used,
+      }));
       showToast(L.toast_generated);
     } catch {
       showToast('Не удалось сгенерировать');
@@ -378,11 +415,52 @@ function App() {
       scenes: p.scenes.map((s, i) => (i === idx ? { ...s, motion_prompt: value } : s)),
     }), { immediate: false });
   }
+  function onStyleDescriptionChange(value) {
+    setStyleDescription(value);
+    updateProject((p) => ({ ...p, style_description: value }), { immediate: false });
+  }
+  async function generateStoryboard() {
+    if (!activeProject) return;
+    setStoryboardLoading(true);
+    try {
+      await flushPendingSave();
+      const result = await api.generateSceneStoryboard(activeProject.id, { style_description: styleDescription });
+      setActiveProject((p) => ({ ...p, scenes: result.scenes, style_description: result.style_description }));
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось сгенерировать раскадровку');
+    } finally {
+      setStoryboardLoading(false);
+    }
+  }
+  async function uploadReference(file) {
+    if (!activeProject || !file) return;
+    setReferenceUploading(true);
+    try {
+      const result = await api.uploadReferenceImage(activeProject.id, file);
+      setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
+    } catch {
+      showToast('Не удалось загрузить изображение');
+    } finally {
+      setReferenceUploading(false);
+    }
+  }
+  async function removeReference(path) {
+    if (!activeProject) return;
+    const filename = path.split('/').pop();
+    try {
+      const result = await api.deleteReferenceImage(activeProject.id, filename);
+      setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
+    } catch {
+      showToast('Не удалось удалить изображение');
+    }
+  }
   async function generateSceneImages(idx) {
     if (!activeProject) return;
     setSceneLoadingIdx(idx);
     try {
-      const result = await api.generateSceneImages(activeProject.id, idx);
+      await flushPendingSave();
+      const result = await api.generateSceneImages(activeProject.id, idx, { count: variantCount, model: imageModel });
       setActiveProject((p) => ({
         ...p,
         scenes: p.scenes.map((s, i) => (i === idx ? { ...s, images: result.images } : s)),
@@ -394,17 +472,14 @@ function App() {
       setSceneLoadingIdx(null);
     }
   }
-  async function regenerateAllScenes() {
-    if (!activeProject) return;
-    await Promise.all(activeProject.scenes.map((_, idx) => generateSceneImages(idx)));
-  }
   function rateImage(sceneIdx, imgIdx, rating) {
     updateProject((p) => ({
       ...p,
-      scenes: p.scenes.map((s, i) => (i !== sceneIdx ? s : {
-        ...s,
-        images: s.images.map((img, j) => (j === imgIdx ? { ...img, rating } : img)),
-      })),
+      scenes: p.scenes.map((s, i) => {
+        if (i !== sceneIdx) return s;
+        const images = s.images.map((img, j) => (j === imgIdx ? { ...img, rating } : img));
+        return { ...s, images: pickMainByRating(images) };
+      }),
     }));
   }
   function selectMainImage(sceneIdx, imgIdx) {
@@ -412,7 +487,7 @@ function App() {
       ...p,
       scenes: p.scenes.map((s, i) => (i !== sceneIdx ? s : {
         ...s,
-        images: s.images.map((img, j) => ({ ...img, main: j === imgIdx })),
+        images: s.images.map((img, j) => ({ ...img, is_selected: j === imgIdx })),
       })),
     }));
   }
@@ -461,18 +536,20 @@ function App() {
     isRecordingRefinement: recordingKind === 'refinement',
     recordingSeconds, sunoLoading, trackUrl,
     actions: {
-      selectSkill: setSkillId, setSkillPrompt, setRefinementText, startVoice, applyRefinement,
+      selectSkill, setSkillPrompt, setRefinementText, startVoice, applyRefinement,
       generateSuno, copyStyle, copyLyrics, setTrackUrl, saveTrackUrl,
     },
   };
 
   const scenesState = {
-    imageModel,
+    imageModel, variantCount, styleDescription, storyboardLoading, referenceUploading,
     sceneLoadingIdx,
     sceneRecordingIdx: recordingKind === 'scene' ? recordingTarget : null,
     recordingSeconds,
     actions: {
-      selectImageModel: setImageModel, regenerateAll: regenerateAllScenes,
+      selectImageModel: setImageModel, setVariantCount,
+      onStyleDescriptionChange, generateStoryboard,
+      uploadReference, removeReference,
       onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
       onGenerate: generateSceneImages, onVoiceEdit: (idx) => startVoice('scene', idx),
       onSelectMain: selectMainImage, onRate: rateImage,

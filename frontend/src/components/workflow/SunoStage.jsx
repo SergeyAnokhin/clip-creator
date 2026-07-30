@@ -1,8 +1,19 @@
 import { Copy, MessageSquare, Mic, Sparkles, Zap } from 'lucide-react';
 
-const SKILLS = [
-  { id: 'skill_a', label: 'Suno Structure & Style Pro' },
-  { id: 'skill_b', label: 'Suno Lyrics Adapter' },
+export const SKILLS = [
+  {
+    id: 'skill_a',
+    label: 'Suno Structure & Style Pro',
+    template: 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags '
+      + '([Verse], [Chorus], [Bridge], [Fade Out]). Optimize rhythm for singing, keep the original imagery, '
+      + 'and produce a compact Style of Music description (genre, instrumentation, vocal type, BPM, mood).',
+  },
+  {
+    id: 'skill_b',
+    label: 'Suno Lyrics Adapter',
+    template: 'Transform the following structured lyrics into a Suno-ready format. Place meta-tags for vocals, '
+      + 'pauses and instruments ([Verse], [Chorus], [Guitar Solo], [Fade Out]) and optimize the rhythm for singing.',
+  },
 ];
 
 export default function SunoStage({
@@ -24,7 +35,7 @@ export default function SunoStage({
             <button
               key={sk.id}
               className={`chip${skillId === sk.id ? ' is-active' : ''}`}
-              onClick={() => actions.selectSkill(sk.id)}
+              onClick={() => actions.selectSkill(sk.id, sk.template)}
             >
               {sk.label}
             </button>
@@ -60,6 +71,16 @@ export default function SunoStage({
           <div className="recording-banner" style={{ marginTop: 10 }}>
             <span className="recording-dot" />
             {L.recording} · {recordingSeconds}s
+          </div>
+        )}
+        {!!project.refinement_comments?.length && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+              {L.refinementHistory}
+            </div>
+            {project.refinement_comments.map((comment, i) => (
+              <div key={i} style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.6)' }}>· {comment}</div>
+            ))}
           </div>
         )}
       </div>

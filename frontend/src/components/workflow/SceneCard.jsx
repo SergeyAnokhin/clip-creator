@@ -1,12 +1,12 @@
 import { Film, Image as ImageIcon, ImagePlus, Mic } from 'lucide-react';
 import ImageThumb from './ImageThumb.jsx';
 
-export default function SceneCard({ L, scene, index, isRecording, recordingSeconds, isLoading, columns, actions }) {
+export default function SceneCard({ L, projectId, scene, index, isRecording, recordingSeconds, isLoading, columns, actions }) {
   return (
     <div className="glass-card">
       <div className="scene-card-header">
         <span className="scene-number">{index + 1}</span>
-        <span className="scene-lyric-segment">{scene.lyricSegment}</span>
+        <span className="scene-lyric-segment">{scene.lyric_segment}</span>
       </div>
 
       <div className="scene-prompt-grid" style={{ gridTemplateColumns: columns }}>
@@ -57,6 +57,7 @@ export default function SceneCard({ L, scene, index, isRecording, recordingSecon
           {scene.images.map((img, imgIdx) => (
             <ImageThumb
               key={imgIdx}
+              projectId={projectId}
               image={img}
               onSelectMain={() => actions.onSelectMain(index, imgIdx)}
               onRate={(rating) => actions.onRate(index, imgIdx, rating)}

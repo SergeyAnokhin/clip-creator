@@ -11,8 +11,21 @@ def _block(type_, importance, content):
     return {'id': f'blk_{uuid4().hex[:8]}', 'type': type_, 'importance': importance, 'content': content}
 
 
-def _empty_scenes(count=5):
-    return [{'static_prompt': '', 'motion_prompt': '', 'images': []} for _ in range(count)]
+def _image(scene_number, var_num, rating, is_selected, generated_at):
+    return {
+        'image_id': f'img_{uuid4().hex[:8]}',
+        'file_path': f'images/scene_{scene_number}_var_{var_num}.svg',
+        'rating': rating,
+        'is_selected': is_selected,
+        'generated_at': generated_at,
+    }
+
+
+def _scene(lyric_segment, static_prompt, motion_prompt, images=None):
+    return {
+        'lyric_segment': lyric_segment, 'static_prompt': static_prompt, 'motion_prompt': motion_prompt,
+        'images': images or [],
+    }
 
 
 def _seed_projects() -> list[dict]:
@@ -29,16 +42,25 @@ def _seed_projects() -> list[dict]:
                 _block('bridge', 4, 'Вся комната янтарным блеском\nОзарена. Весёлым треском\nТрещит затопленная печь.'),
                 _block('outro', 3, 'Приятно думать у лежанки.\nНо знаешь: не велеть ли в санки\nКобылку бурую запречь?'),
             ],
+            'skill_id': 'skill_a',
             'skill_prompt': 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags [Verse], [Chorus], [Bridge], [Fade Out]. Optimize rhythm for singing, keep original imagery.',
+            'refinement_comments': [],
             'style': 'Melodic Folk-Pop, Orchestral Strings, Warm Male Vocal, 92 BPM, Nostalgic Winter Atmosphere',
             'lyrics': '[Intro]\nМороз и солнце; день чудесный!\nЕщё ты дремлешь, друг прелестный —\n\n[Verse 1]\nПора, красавица, проснись...\n\n[Chorus]\nПод голубыми небесами...\n\n[Bridge]\nВся комната янтарным блеском...\n\n[Outro]\nПриятно думать у лежанки...',
+            'model_used': 'claude',
             'track_url': '',
+            'style_description': 'Cinematic dark synthwave, neon glow, atmospheric fog, 8k, detailed',
+            'reference_images': [],
             'scenes': [
-                {'static_prompt': 'Cinematic wide shot of a frozen Russian countryside at sunrise, golden light on snow, warm amber sky, highly detailed, 8k', 'motion_prompt': 'Slow camera pan across the frost, shimmering snow particles drifting in the wind', 'images': [{'label': 'Вариант 1', 'rating': 5, 'main': True}, {'label': 'Вариант 2', 'rating': 3, 'main': False}]},
-                {'static_prompt': 'Close-up of a frosted window with morning light breaking through, warm interior glow contrasted with icy blue outside', 'motion_prompt': 'Gentle push-in through the window, light rays slowly intensifying', 'images': [{'label': 'Вариант 1', 'rating': 4, 'main': True}]},
-                {'static_prompt': 'A young woman waking by a window, soft golden hour light, cozy wooden interior, painterly realism', 'motion_prompt': 'Slow motion of curtain moving in the breeze, hair gently drifting', 'images': []},
-                {'static_prompt': 'Snow-covered pine forest under pale blue winter sky, frozen river reflecting light', 'motion_prompt': 'Camera glides low over the frozen river, snow sparkling', 'images': []},
-                {'static_prompt': 'Interior of a wooden cabin, crackling fireplace casting amber light across the room, rustic textures', 'motion_prompt': 'Flickering firelight animation, gentle camera drift toward the hearth', 'images': []},
+                _scene('Мороз и солнце; день чудесный!', 'Cinematic wide shot of a frozen Russian countryside at sunrise, golden light on snow, warm amber sky, highly detailed, 8k', 'Slow camera pan across the frost, shimmering snow particles drifting in the wind', [
+                    _image(1, 1, 5, True, '2026-07-26T22:10:00Z'), _image(1, 2, 3, False, '2026-07-26T22:12:00Z'),
+                ]),
+                _scene('Ещё ты дремлешь, друг прелестный —', 'Close-up of a frosted window with morning light breaking through, warm interior glow contrasted with icy blue outside', 'Gentle push-in through the window, light rays slowly intensifying', [
+                    _image(2, 1, 4, True, '2026-07-26T22:14:00Z'),
+                ]),
+                _scene('Пора, красавица, проснись:', 'A young woman waking by a window, soft golden hour light, cozy wooden interior, painterly realism', 'Slow motion of curtain moving in the breeze, hair gently drifting'),
+                _scene('Под голубыми небесами', 'Snow-covered pine forest under pale blue winter sky, frozen river reflecting light', 'Camera glides low over the frozen river, snow sparkling'),
+                _scene('Вся комната янтарным блеском', 'Interior of a wooden cabin, crackling fireplace casting amber light across the room, rustic textures', 'Flickering firelight animation, gentle camera drift toward the hearth'),
             ],
         },
         {
@@ -50,16 +72,23 @@ def _seed_projects() -> list[dict]:
                 _block('chorus', 5, 'Мне нравится, что можно быть смешной —\nРаспущенной — и не играть словами,'),
                 _block('outro', 3, 'И не краснеть удушливой волной,\nСлегка соприкоснувшись рукавами.'),
             ],
+            'skill_id': 'skill_a',
             'skill_prompt': 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags. Emphasize intimate, conversational phrasing suited to a slow tempo.',
+            'refinement_comments': [],
             'style': 'Indie Chamber-Pop, Soft Piano, Female Vocal, 78 BPM, Intimate & Wistful',
             'lyrics': '[Intro]\nМне нравится, что вы больны не мной...\n\n[Verse]\nЧто никогда тяжёлый шар земной...\n\n[Chorus]\nМне нравится, что можно быть смешной...',
+            'model_used': 'claude',
             'track_url': '',
+            'style_description': 'Intimate indie chamber-pop mood board, soft film grain, muted warm tones',
+            'reference_images': [],
             'scenes': [
-                {'static_prompt': 'Two silhouettes standing apart in a softly lit room, muted warm tones, contemplative mood', 'motion_prompt': 'Very slow drift of dust particles in a light beam between them', 'images': [{'label': 'Вариант 1', 'rating': 4, 'main': True}]},
-                {'static_prompt': '', 'motion_prompt': '', 'images': []},
-                {'static_prompt': '', 'motion_prompt': '', 'images': []},
-                {'static_prompt': '', 'motion_prompt': '', 'images': []},
-                {'static_prompt': '', 'motion_prompt': '', 'images': []},
+                _scene('Мне нравится, что вы больны не мной,', 'Two silhouettes standing apart in a softly lit room, muted warm tones, contemplative mood', 'Very slow drift of dust particles in a light beam between them', [
+                    _image(1, 1, 4, True, '2026-07-24T18:20:00Z'),
+                ]),
+                _scene('Что никогда тяжёлый шар земной', '', ''),
+                _scene('Мне нравится, что можно быть смешной —', '', ''),
+                _scene('И не краснеть удушливой волной,', '', ''),
+                _scene('', '', ''),
             ],
         },
         {
@@ -69,9 +98,12 @@ def _seed_projects() -> list[dict]:
                 _block('intro', 2, 'Отговорила роща золотая\nБерёзовым, весёлым языком,'),
                 _block('verse', 3, 'И журавли, печально пролетая,\nУж не жалеют больше ни о ком.'),
             ],
+            'skill_id': 'skill_a',
             'skill_prompt': 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags [Verse], [Chorus], [Fade Out].',
-            'style': '', 'lyrics': '', 'track_url': '',
-            'scenes': _empty_scenes(),
+            'refinement_comments': [],
+            'style': '', 'lyrics': '', 'model_used': '', 'track_url': '',
+            'style_description': '', 'reference_images': [],
+            'scenes': [],
         },
     ]
 

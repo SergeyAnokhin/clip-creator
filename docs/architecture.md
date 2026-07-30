@@ -59,7 +59,7 @@ matching the design mock - there is no real speech-to-text integration.
 | [`app/seed.py`](../backend/app/seed.py) | Seeds the 3 demo poems (from the design mock) on first run |
 | [`app/routers/projects.py`](../backend/app/routers/projects.py) | `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/{id}` |
 | [`app/routers/settings.py`](../backend/app/routers/settings.py) | `GET/PUT /api/settings` |
-| [`app/routers/generation.py`](../backend/app/routers/generation.py) | `POST /api/projects/{id}/suno/generate`, `POST /api/projects/{id}/scenes/{n}/images` |
+| [`app/routers/generation.py`](../backend/app/routers/generation.py) | `POST /api/projects/{id}/suno/generate`, `POST /api/projects/{id}/suno/refine`, `POST /api/projects/{id}/scenes/generate`, `POST /api/projects/{id}/scenes/{n}/images`, `POST`/`DELETE /api/projects/{id}/reference-images[/{filename}]` |
 
 A project is one JSON file: `app_data/projects/<slug>/config.json`. There's no
 schema migration system - the file is whatever shape `storage.save_project`
@@ -67,15 +67,136 @@ last wrote, since a single-user local app doesn't need one yet.
 
 ### AI provider seams
 
-[`app/providers/suno.py`](../backend/app/providers/suno.py) and
+[`app/providers/suno.py`](../backend/app/providers/suno.py),
+[`app/providers/scenes.py`](../backend/app/providers/scenes.py) and
 [`app/providers/images.py`](../backend/app/providers/images.py) are **stubs**:
-they return deterministic canned data (no network calls). They exist as a
-deliberate seam - routers call `providers.suno.generate(project)` /
-`providers.images.generate(scene)` and don't know or care whether that's a
-stub or a real OpenAI/Anthropic/Suno/Replicate call. Wiring in the real APIs
-(using the keys from `app_data/settings.json`) means editing only these two
-files. Tests (`backend/tests/test_generation.py`) mock exactly this seam, so
-they never hit the network.
+they return deterministic canned/derived data (no network calls). They exist
+as a deliberate seam - routers call `providers.suno.generate(project, ...)` /
+`providers.suno.refine(project, comment)` /
+`providers.scenes.generate(project, style_description, reference_images, scene_count)` /
+`providers.images.generate(slug, scene_index, existing_images, count, model)`
+and don't know or care whether that's a stub or a real
+OpenAI/Anthropic/Suno/FLUX/DALL-E call. Wiring in the real APIs (using the
+keys from `app_data/settings.json`) means editing only these three files.
+Tests (`backend/tests/test_generation.py`) mock the suno/scenes seams the same
+way, so those calls never hit the network - `images.generate` is exercised
+unmocked instead, since it's already a real (if placeholder) file-write, not a
+network call; see "Scenes stage" below.
+
+### Suno stage: skills, refinement, and generation
+
+Per [`docs/specs/spec3.md`](specs/spec3.md), the Suno stage
+([`SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx)) picks
+an AI "skill" (a base instruction template), lets the user tweak it by hand or
+via a free-text "wish", then generates a `style`/`lyrics` pair for Suno:
+
+- **Skills** are defined once, in `SKILLS` in `SunoStage.jsx` (`skill_a`
+  "Suno Structure & Style Pro", `skill_b` "Suno Lyrics Adapter"), each with a
+  `template` string. Clicking a skill chip sets both `project.skill_id` and
+  replaces `project.skill_prompt` with that skill's template
+  (`selectSkill` in [`App.jsx`](../frontend/src/App.jsx)) - selection is no
+  longer cosmetic. The prompt textarea remains freely editable afterwards
+  (manual edit, spec 3.2.1).
+- **Refinement** ("AI-wish", spec 3.2.2) goes through
+  `POST /api/projects/{id}/suno/refine` (`refine_suno` in
+  [`app/routers/generation.py`](../backend/app/routers/generation.py)), which
+  calls the `providers.suno.refine` seam - a deterministic stub that folds the
+  comment into the current `skill_prompt` as a plain instruction sentence -
+  and appends the raw comment to `project.refinement_comments` (shown as a
+  small history list under the refinement panel). This replaces the earlier
+  behavior of appending a `// Refined: ...` code-comment to the prompt purely
+  client-side.
+- **Generation** (`POST /api/projects/{id}/suno/generate`) takes
+  `{skill_id, skill_prompt, model}` from the frontend (the active skill, its
+  current - possibly hand-edited - prompt, and the globally configured
+  default text model from Settings) and persists all three onto the project
+  alongside the result, plus `model_used`. The stub's `lyrics` output is
+  always recomputed from the project's *current* `blocks` via
+  `_format_lyrics` in `suno.py` (mirroring `formatLyrics`/`compileLyrics` in
+  [`lyrics.js`](../frontend/src/lib/lyrics.js): English type labels, raw
+  passthrough for `interlude` blocks) rather than ever reusing a previously
+  cached value - so edits made in the Lyrics stage (reordering, Repeat
+  Chorus, inserted tags) are reflected the next time "Generate for Suno" is
+  clicked. `style` still falls back to a single canned string (no real
+  model call), consistent with the rest of this seam.
+
+### Scenes stage: storyboard, images, references
+
+Per [`docs/specs/spec4.md`](specs/spec4.md), the Scenes stage
+([`ScenesStage.jsx`](../frontend/src/components/workflow/ScenesStage.jsx))
+turns the lyrics into a 5-scene storyboard, then generates and rates images
+per scene:
+
+- **Storyboard generation** ("Generate storyboard", spec 4.1/4.2) goes
+  through `POST /api/projects/{id}/scenes/generate`
+  (`generate_scenes` in [`generation.py`](../backend/app/routers/generation.py)),
+  which calls the `providers.scenes.generate` seam with the project's current
+  `blocks`, a free-text `style_description` (a plain field on the project,
+  edited in a textarea above the scene list), and any uploaded
+  `reference_images`. The stub (`providers/scenes.py`) flattens all
+  non-`interlude` block lines (same skip rule as `suno._format_lyrics`),
+  splits them into `scene_count` (default 5) ~even ordered chunks, and
+  derives a canned `static_prompt`/`motion_prompt` per scene from the
+  chunk's first line (`lyric_segment`) and the style description. This
+  **replaces** `project.scenes` wholesale (including resetting every scene's
+  `images` to `[]`) - re-running it is the spec's "regenerate the whole
+  pack", not an images-only refresh. New projects start with `scenes: []`
+  (no storyboard) until this is run at least once, rather than pre-filled
+  blank stubs.
+- **Reference images** (spec 4.1's "uploaded picture references" alternative
+  to a text style description) upload via `POST /api/projects/{id}/reference-images`
+  (multipart `file`) and delete via
+  `DELETE /api/projects/{id}/reference-images/{filename}`. Files are written
+  under `app_data/projects/<slug>/references/` with a random
+  `ref_{uuid}.<ext>` name (the client's filename is never trusted, so there's
+  no path-traversal surface), and the relative path is appended to
+  `project.reference_images`. The stub only uses the *count* of reference
+  images (folded into the generated prompt text as a mention) - no real
+  vision analysis.
+- **Per-scene prompt edits** (`static_prompt`/`motion_prompt` textareas) are
+  plain debounced `PATCH`es like the Suno skill prompt, and voice edit is the
+  same UI-only simulation as elsewhere in the app.
+- **Image generation** (`POST /api/projects/{id}/scenes/{n}/images`, body
+  `{count, model}`) calls `providers.images.generate`, which is a stub but
+  writes **real files**: a deterministic placeholder SVG (colored rect +
+  "Scene N Var M" text) per requested variant, saved to
+  `app_data/projects/<slug>/images/scene_{n}_var_{m}.svg` and returned as
+  `{image_id, file_path, rating: 0, is_selected: false, generated_at}`.
+  `count` is user-controlled (a stepper next to the model chips, 0-4,
+  default 1) - spec 4.3's "0, 1, or several variants" - and previous variants
+  are never deleted, only appended to (`var_num` continues from
+  `len(existing_images)`), so re-generating builds a history rather than
+  replacing it.
+- **Serving images**: [`main.py`](../backend/app/main.py) mounts
+  `StaticFiles` at `/media` over the whole `app_data/` root, so a scene image
+  is reachable at `/media/projects/<slug>/images/scene_1_var_1.svg` and a
+  reference image at `/media/projects/<slug>/references/ref_xxxxxxxx.png`.
+  `mediaUrl(path)` in [`api/client.js`](../frontend/src/api/client.js) builds
+  that URL; [`ImageThumb.jsx`](../frontend/src/components/workflow/ImageThumb.jsx)
+  renders a real `<img>` and falls back to a text placeholder (via
+  `onError`) if the file is missing or fails to load - this also covers the
+  three seeded demo projects, whose sample `images` entries reference
+  `file_path`s that were never actually generated on disk.
+- **Rating & main-frame selection** (spec 4.4): each image gets a 1-5 star
+  `rating`. Rating an image runs the scene's `images` through
+  `pickMainByRating` (pure, unit-tested in
+  [`lib/scenes.js`](../frontend/src/lib/scenes.js)/`scenes.test.js`), which
+  sets `is_selected` on the single highest-rated image (ties keep whichever
+  was already selected if it's among the tied max, otherwise the first tied
+  image) - "the highest-rated variant automatically becomes the scene's main
+  frame". Clicking an image's frame directly still sets `is_selected`
+  manually, overriding the automatic pick (e.g. useful when every image in a
+  scene is still rated 0).
+- **Autosave race**: `style_description`/prompt edits autosave via a 400ms
+  debounce that `PATCH`es the *entire* project object
+  (`updateProject(..., {immediate:false})` in [`App.jsx`](../frontend/src/App.jsx)).
+  Because storyboard/image generation replace `project.scenes` server-side
+  from a fresh disk read, a debounced save scheduled *before* one of those
+  calls could otherwise land *after* it and silently revert the fresh
+  `scenes` to a stale snapshot. `flushPendingSave()` (cancels the pending
+  debounce and synchronously `PATCH`es the current state first) is called at
+  the start of `generateStoryboard()` and `generateSceneImages()` to close
+  this window.
 
 ### Lyrics builder: paste-and-split
 
@@ -171,15 +292,23 @@ falls back to the placeholder-project behavior unchanged.
 ### Not implemented yet
 
 - Real speech-to-text for the voice-input buttons.
-- Real AI provider calls (see above).
+- Real AI provider calls (see above) - including the scene splitter and
+  image generation, both still deterministic stubs (the image stub does
+  write real placeholder SVG files, per "Scenes stage" above, but the
+  pixels themselves aren't AI-generated).
 
 ## Testing
 
 - Frontend: `npm run test --prefix frontend` (Vitest) - covers the lyrics
-  compilation/reordering logic in [`src/lib/lyrics.test.js`](../frontend/src/lib/lyrics.test.js).
+  compilation/reordering logic in [`src/lib/lyrics.test.js`](../frontend/src/lib/lyrics.test.js)
+  and the scenes-stage rating/main-frame logic in
+  [`src/lib/scenes.test.js`](../frontend/src/lib/scenes.test.js).
 - Backend: `pytest backend/tests` - covers slug sanitization, the project
   CRUD round-trip against a temp storage root, the generation routes against
-  mocked provider seams, and the URL parser (`extract()` unit tests against
-  raw HTML, no network; the `url` project-creation path with
-  `url_parser.parse` mocked so it never hits the network either).
+  mocked provider seams (suno, scene-splitter), the URL parser (`extract()`
+  unit tests against raw HTML, no network; the `url` project-creation path
+  with `url_parser.parse` mocked so it never hits the network either), and
+  the scenes stage's real file-writing behavior unmocked - image generation
+  writing an actual SVG under the temp `APP_DATA_DIR`, and reference-image
+  upload/delete round-tripping a real file.
 - `npm test` from the repo root runs both.

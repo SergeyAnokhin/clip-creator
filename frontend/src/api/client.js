@@ -13,7 +13,18 @@ async function request(path, options) {
   return res.json();
 }
 
+async function requestForm(path, options) {
+  const res = await fetch(`${BASE_URL}${path}`, options);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`${options?.method || 'GET'} ${path} failed: ${res.status} ${body}`);
+  }
+  return res.json();
+}
+
 const projectPath = (id) => `/api/projects/${encodeURIComponent(id)}`;
+
+export const mediaUrl = (path) => `${BASE_URL}/media/${path}`;
 
 export const api = {
   listProjects: () => request('/api/projects'),
@@ -25,6 +36,16 @@ export const api = {
   getSettings: () => request('/api/settings'),
   putSettings: (settings) => request('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
 
-  generateSuno: (id) => request(`${projectPath(id)}/suno/generate`, { method: 'POST' }),
-  generateSceneImages: (id, sceneIndex) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST' }),
+  generateSuno: (id, body) => request(`${projectPath(id)}/suno/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  refineSuno: (id, comment) => request(`${projectPath(id)}/suno/refine`, { method: 'POST', body: JSON.stringify({ comment }) }),
+
+  generateSceneStoryboard: (id, body) => request(`${projectPath(id)}/scenes/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
+
+  uploadReferenceImage: (id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return requestForm(`${projectPath(id)}/reference-images`, { method: 'POST', body: form });
+  },
+  deleteReferenceImage: (id, filename) => request(`${projectPath(id)}/reference-images/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
 };

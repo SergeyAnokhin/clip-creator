@@ -77,11 +77,16 @@ async def create_project(body: ProjectCreate):
         'updated_at': now,
         'tags': ['Intro'],
         'blocks': blocks,
+        'skill_id': 'skill_a',
         'skill_prompt': 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags.',
+        'refinement_comments': [],
         'style': '',
         'lyrics': '',
+        'model_used': '',
         'track_url': '',
-        'scenes': [{'static_prompt': '', 'motion_prompt': '', 'images': []} for _ in range(5)],
+        'scenes': [],
+        'style_description': '',
+        'reference_images': [],
         'source_url': body.url,
     }
     storage.save_project(slug, project)
