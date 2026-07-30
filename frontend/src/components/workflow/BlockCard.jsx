@@ -17,6 +17,7 @@ export default function BlockCard({
   const stripe = TYPE_COLORS[block.type];
   const lines = block.content.split('\n');
   const isInterlude = block.type === 'interlude';
+  const anyMenuOpen = typeMenuOpen || cloneMenuOpen || tagMenuOpen;
   const chipLabel = isInterlude ? block.content.replace(/^\[|\]$/g, '') : L[`type_${block.type}`];
 
   function handleKeyDown(e) {
@@ -43,7 +44,7 @@ export default function BlockCard({
   }
 
   return (
-    <div className={`block-card${isInterlude ? ' block-card-tag' : ''}`} style={{ '--stripe': stripe }} tabIndex={0} onKeyDown={handleKeyDown}>
+    <div className={`block-card${isInterlude ? ' block-card-tag' : ''}${anyMenuOpen ? ' block-card-menu-open' : ''}`} style={{ '--stripe': stripe }} tabIndex={0} onKeyDown={handleKeyDown}>
       <div className={`block-move${isInterlude ? ' block-move-compact' : ''}`}>
         {!isInterlude && <button title={L.moveToStart} onClick={onMoveToStart}><ChevronsUp size={13} /></button>}
         <button onClick={onMoveUp}><ChevronUp size={13} /></button>

@@ -628,6 +628,10 @@
   outline-offset: 2px;
 }
 
+.block-card-menu-open {
+  z-index: 10;
+}
+
 .block-body {
   flex: 1;
   min-width: 0;
