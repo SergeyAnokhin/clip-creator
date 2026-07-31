@@ -106,6 +106,14 @@ calendar days — a record at `22:30Z` is "today" for `tz_offset=0` but
 the *same* offset or the header pill and the day-grouped table will disagree
 right at the boundary.
 
+**Testing day-boundary logic:** `usage._utcnow()` is a thin wrapper around
+`datetime.now(timezone.utc)` that exists purely so tests can monkeypatch a
+fixed "now". A test that builds a record near a day boundary and calls
+`today_total`/`summarize` *without* pinning `_utcnow()` is flaky — it only
+fails when the suite happens to run near a real UTC midnight. Follow this
+pattern for any new date-boundary logic instead of asserting against
+`datetime.now()` directly.
+
 ## Pricing: `backend/app/pricing.py`
 
 Pure data + arithmetic, no network/disk access, no dependency on `usage.py`

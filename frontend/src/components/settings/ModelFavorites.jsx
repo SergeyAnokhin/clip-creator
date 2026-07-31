@@ -19,11 +19,16 @@ export default function ModelFavorites({
   const providerLabel = (id) => providers.find((p) => p.id === id)?.name || id;
 
   const q = query.trim().toLowerCase();
+  const terms = q.split(/\s+/).filter(Boolean);
   const matchingModels = providers.flatMap((p) => {
     const entry = catalog[p.id];
     if (!entry) return [];
     return entry.models
-      .filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      .filter((m) => {
+        if (!terms.length) return true;
+        const haystack = `${m.id} ${m.name}`.toLowerCase();
+        return terms.every((t) => haystack.includes(t));
+      })
       .map((m) => ({ provider: p.id, id: m.id, name: m.name }));
   }).slice(0, 20);
   const suggestions = focused ? matchingModels : [];
@@ -98,6 +103,7 @@ export default function ModelFavorites({
               <div
                 key={`${s.provider}:${s.id}`}
                 className="settings-suggestion-item"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => addSuggestion(s)}
               >
                 <span className="settings-suggestion-provider">{providerLabel(s.provider)}</span>

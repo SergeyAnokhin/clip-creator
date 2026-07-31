@@ -14,6 +14,8 @@ export default function ProjectCard({ project, L, lang, onOpen, onDelete }) {
         <button
           className="icon-btn icon-btn-danger"
           style={{ width: 30, height: 30 }}
+          title={L.delete}
+          aria-label={L.delete}
           onClick={(e) => {
             e.stopPropagation();
             onDelete(project.id);
