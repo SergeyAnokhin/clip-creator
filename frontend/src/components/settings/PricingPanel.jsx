@@ -126,13 +126,23 @@ function AddPriceRow({ L, onAdd }) {
  * committed together via `onSave` (PUT /api/usage/pricing), separate from
  * the rest of Settings' single "Save" button - pricing_overrides is not
  * mirrored into useSettings state. */
-export default function PricingPanel({ L, pricing, onSave }) {
+export default function PricingPanel({ L, pricing, providers, onSave }) {
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
+  const [providerFilter, setProviderFilter] = useState('');
+  const [query, setQuery] = useState('');
 
-  const rows = pricing?.models || [];
+  const allRows = pricing?.models || [];
   const overrides = pricing?.overrides || {};
   const dirty = Object.keys(drafts).length > 0;
+
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = allRows.filter((row) => {
+    if (providerFilter && row.provider !== providerFilter) return false;
+    if (!terms.length) return true;
+    const haystack = row.model.toLowerCase();
+    return terms.every((t) => haystack.includes(t));
+  });
 
   function applyPatch(model, patch) {
     setDrafts((prev) => ({ ...prev, [model]: patch }));
@@ -160,8 +170,12 @@ export default function PricingPanel({ L, pricing, onSave }) {
   }
 
   const addedRows = Object.entries(drafts)
-    .filter(([model, patch]) => patch !== null && !rows.some((r) => r.model === model))
-    .map(([model, patch]) => ({ model, provider: model.split(':')[0], ...patch }));
+    .filter(([model, patch]) => patch !== null && !allRows.some((r) => r.model === model))
+    .map(([model, patch]) => ({ model, provider: model.split(':')[0], ...patch }))
+    .filter((row) => {
+      if (providerFilter && row.provider !== providerFilter) return false;
+      return terms.every((t) => row.model.toLowerCase().includes(t));
+    });
 
   return (
     <div className="settings-panel">
@@ -169,6 +183,34 @@ export default function PricingPanel({ L, pricing, onSave }) {
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>
         {L.settings_pricingVerifyWarning} ({pricing?.pricing_version})
       </div>
+
+      {!!providers?.length && (
+        <div className="settings-tabs" style={{ marginBottom: 10 }}>
+          <button
+            className={`chip${!providerFilter ? ' is-active' : ''}`}
+            onClick={() => setProviderFilter('')}
+          >
+            {L.settings_pricingAllProviders}
+          </button>
+          {providers.map((p) => (
+            <button
+              key={p.id}
+              className={`chip${providerFilter === p.id ? ' is-active' : ''}`}
+              onClick={() => setProviderFilter(p.id)}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <input
+        className="field"
+        style={{ marginBottom: 10 }}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={L.settings_pricingSearchPlaceholder}
+      />
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {rows.map((row) => {
           const draft = drafts[row.model];

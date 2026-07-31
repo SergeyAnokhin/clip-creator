@@ -205,6 +205,28 @@ def catalog(overrides: dict | None = None) -> list[dict]:
     return rows
 
 
+def catalog_with_known_models(overrides: dict | None, known_models: dict[str, str]) -> list[dict]:
+    """`catalog()` plus one placeholder row (all prices `None`) for every
+    composite in `known_models` (composite -> 'text'/'image', from the
+    Settings "Models" catalog) that isn't already priced - so the Prices tab
+    can list every model the app knows about, not just the ones someone has
+    already priced. Takes the catalog from the caller rather than reading it
+    itself, keeping this module free of disk access."""
+    rows = catalog(overrides)
+    present = {r['model'] for r in rows}
+    for composite, kind in known_models.items():
+        if composite in present:
+            continue
+        provider, _, model_id = composite.partition(':')
+        rows.append({
+            'model': composite, 'provider': provider, 'model_id': model_id, 'kind': kind,
+            'input': None, 'output': None, 'cached_input': None, 'per_image': None,
+            'source': 'catalog',
+        })
+    rows.sort(key=lambda r: r['model'])
+    return rows
+
+
 def validate_overrides(overrides: dict) -> str | None:
     """Returns an error message for the first bad entry, or None if all rows
     are usable. Used by `PUT /api/usage/pricing` - a typo'd price would

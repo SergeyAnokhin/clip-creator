@@ -82,6 +82,7 @@ export const DICT = {
     settings_pricingOverride: 'переопределено', settings_pricingReset: 'Сбросить к встроенной цене',
     settings_pricingSave: 'Сохранить цены', settings_pricingSaving: 'Сохранение...',
     settings_pricingKindText: 'Текст', settings_pricingKindImage: 'Изображение',
+    settings_pricingAllProviders: 'Все', settings_pricingSearchPlaceholder: 'Поиск по модели...',
     price_per1M: 'за 1M', price_perImage: 'за кадр', price_unknown: 'цена ?',
   },
   en: {
@@ -167,6 +168,7 @@ export const DICT = {
     settings_pricingOverride: 'overridden', settings_pricingReset: 'Reset to built-in price',
     settings_pricingSave: 'Save prices', settings_pricingSaving: 'Saving...',
     settings_pricingKindText: 'Text', settings_pricingKindImage: 'Image',
+    settings_pricingAllProviders: 'All', settings_pricingSearchPlaceholder: 'Search by model...',
     price_per1M: 'per 1M', price_perImage: 'per image', price_unknown: 'price ?',
   },
 };

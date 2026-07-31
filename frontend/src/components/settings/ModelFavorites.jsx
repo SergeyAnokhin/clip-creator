@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Check, Trash2 } from 'lucide-react';
 import { priceLabel } from '../../lib/pricing.js';
 
 /** Favorites list + default picker for a "which model" setting (text models,
@@ -52,15 +52,17 @@ export default function ModelFavorites({
           const composite = `${f.provider}:${f.id}`;
           const isDefault = composite === defaultValue;
           return (
-            <div
-              className="settings-row"
-              key={composite}
-              style={{ cursor: 'pointer' }}
-              onClick={() => onSetDefault(composite)}
-            >
-              <span className={`chip${isDefault ? ' is-active' : ''}`} style={{ flexShrink: 0 }}>
-                {isDefault ? L.settings_default : L.settings_setDefault}
-              </span>
+            <div className="settings-row" key={composite}>
+              <button
+                type="button"
+                className={`model-default-toggle${isDefault ? ' is-active' : ''}`}
+                title={isDefault ? L.settings_default : L.settings_setDefault}
+                aria-label={isDefault ? L.settings_default : L.settings_setDefault}
+                aria-pressed={isDefault}
+                onClick={() => onSetDefault(composite)}
+              >
+                {isDefault && <Check size={12} strokeWidth={3} />}
+              </button>
               <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>
                 {providerLabel(f.provider)} · {f.label}
                 {prices && (

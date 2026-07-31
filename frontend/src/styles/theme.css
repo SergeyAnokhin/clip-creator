@@ -168,6 +168,34 @@
   border: none;
 }
 
+/* Fixed-size default-model indicator (ModelFavorites) - deliberately never
+   changes size between the "is default" and "not default" states, unlike
+   the old text chip whose width changed with its label. */
+.model-default-toggle {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  color: transparent;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.model-default-toggle:hover {
+  border-color: rgba(255, 157, 92, 0.5);
+}
+
+.model-default-toggle.is-active {
+  background: var(--accent-grad);
+  border: none;
+  color: var(--accent-ink);
+}
+
 .field {
   background: var(--bg-input);
   border: 1px solid rgba(255, 255, 255, 0.1);

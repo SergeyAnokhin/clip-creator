@@ -7,6 +7,7 @@ is whatever shape `storage.save_project` last wrote.
 ```text
 app_data/
   settings.json
+  model_catalog.json          # last-known-good model list per provider (see below)
   projects/
     <slug>/                  # slug = "Author - Title", filesystem-sanitized = project id
       config.json            # the whole project
@@ -115,6 +116,20 @@ partial merge server-side, so the frontend can persist e.g. just
   ([`hooks/useSettings.js`](../frontend/src/hooks/useSettings.js)
   `importApiKeys`/`importGeneralSettings`).
 
+## Model catalog (`model_catalog.json`)
+
+`{text: {provider: {source, models, error?}}, image: {provider: {...}}}` —
+the last-known-good response of every `GET /api/settings/models/{provider}`
+and `GET /api/settings/image-models/{provider}` call, keyed by provider,
+managed by `storage.load_model_catalog`/`save_model_catalog`. Written by
+`routers/settings.py::_remember_catalog_entry` on every successful (non-
+`error`) model fetch, so a transient API failure never overwrites a
+previously good list. Read back by `GET /api/settings/models-catalog` (the
+Settings "Models" tab's initial state, before "Refresh models" is pressed in
+the current session) and by `routers/usage.py::_known_models()` (feeds
+`pricing.catalog_with_known_models`, see [usage-tracking.md](usage-tracking.md),
+so the "Prices" tab lists every known model even before it has a price).
+
 ## API
 
 Base `http://localhost:8000`. All request/response bodies are JSON except the
@@ -128,8 +143,9 @@ reference-image upload (multipart).
 | `PATCH /api/projects/{id}` | Partial project (the frontend sends the **whole** object) → full project |
 | `DELETE /api/projects/{id}` | → 204 |
 | `GET /api/settings` / `PUT /api/settings` | Settings dict (merged over defaults) |
-| `GET /api/settings/models/{provider}` | `provider` = `google\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/OpenRouter/DeepSeek query the provider's real API with the stored key; Replicate/FAL always return the curated fallback (see `code-map.md`) |
-| `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)) |
+| `GET /api/settings/models/{provider}` | `provider` = `google\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/OpenRouter/DeepSeek query the provider's real API with the stored key; Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
+| `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)). Also upserted into the persisted model catalog |
+| `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. Generates `wish.title` via `model` if given (a `"{provider}:{model_id}"` composite, applied to a throwaway settings copy so it never overwrites `simple_models.default`), else the configured simple model, else a truncate fallback; appends, persists |
 | `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model}` → `{style, lyrics, skill_id, model_used}`. `model` is the `"{provider}:{model_id}"` composite from `settings.text_models.default`; `provider == 'google'` + a Google key calls the real Gemini API; a failed call returns `502` instead of falling back |
 | `POST /api/projects/{id}/suno/refine` | `{comment}` → `{skill_prompt, refinement_comments}` |
@@ -142,7 +158,7 @@ reference-image upload (multipart).
 | `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |
 | `GET /api/usage/summary` | Same filters + `group_by ∈ project\|task\|model\|provider\|day`, `tz_offset` → `{group_by, currency, groups[], totals}` |
 | `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls}` |
-| `GET /api/usage/pricing` / `PUT /api/usage/pricing` | Merged price catalog `{pricing_version, currency, models[], overrides}` / body `{pricing_overrides}`, `422` on an invalid row |
+| `GET /api/usage/pricing` / `PUT /api/usage/pricing` | Merged price catalog `{pricing_version, currency, models[], overrides}` / body `{pricing_overrides}`, `422` on an invalid row. `models[]` also includes an unpriced row (`input`/`output`/`per_image: null`, `source: 'catalog'`) for every model in the persisted model catalog that isn't priced yet - so the Prices tab lists everything the Models tab has ever seen |
 
 Every generation route persists its result onto the project before returning,
 so the client never has to `PATCH` afterwards — except the scene-images job

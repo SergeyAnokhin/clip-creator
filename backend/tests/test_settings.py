@@ -79,6 +79,41 @@ def test_get_models_krea_is_not_a_text_provider(client):
     assert resp.status_code == 404
 
 
+def test_models_catalog_is_empty_before_any_refresh(client):
+    resp = client.get('/api/settings/models-catalog')
+    assert resp.status_code == 200
+    assert resp.json() == {'text': {}, 'image': {}}
+
+
+def test_get_models_persists_into_catalog(client):
+    client.get('/api/settings/models/replicate')
+
+    catalog = client.get('/api/settings/models-catalog').json()
+    assert catalog['text']['replicate']['source'] == 'curated'
+    assert len(catalog['text']['replicate']['models']) > 0
+    assert catalog['image'] == {}
+
+
+def test_get_image_models_persists_into_catalog(client):
+    client.get('/api/settings/image-models/fal')
+
+    catalog = client.get('/api/settings/models-catalog').json()
+    assert catalog['image']['fal']['source'] == 'curated'
+    assert catalog['text'] == {}
+
+
+def test_failed_model_fetch_does_not_overwrite_a_good_catalog_entry(client):
+    client.get('/api/settings/models/replicate')
+    good = client.get('/api/settings/models-catalog').json()['text']['replicate']
+
+    # deepseek has no key configured -> source == 'error', must not wipe replicate's entry
+    client.get('/api/settings/models/deepseek')
+
+    catalog = client.get('/api/settings/models-catalog').json()
+    assert catalog['text']['replicate'] == good
+    assert 'deepseek' not in catalog['text']
+
+
 def test_add_wish_generates_title_and_persists(client):
     resp = client.post('/api/settings/wish-library', json={'text': 'добавь больше саксофона'})
     assert resp.status_code == 200

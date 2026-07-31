@@ -149,6 +149,15 @@ for model-picker labels — `input_chars` uses a crude ~4-chars-per-token
 heuristic, which is why the UI should treat these as approximate, never as
 the billed amount.
 
+`pricing.catalog_with_known_models(overrides, known_models: dict[str, str])`
+extends `catalog()` with one unpriced placeholder row (`source: 'catalog'`,
+all price fields `None`) for every composite in `known_models` (composite ->
+`'text'`/`'image'`) that isn't already priced. `known_models` is built by
+`routers/usage.py::_known_models()` from the persisted model catalog (see
+below) - `pricing.py` itself stays disk-free. This is what lets the Settings
+"Prices" tab list every model the "Models" tab has ever seen, not just the
+ones someone has already priced.
+
 ## Instrumenting a new AI call site
 
 1. In the router, build a context once: `ctx = usage.context(task, project_id, settings, **extra_meta)`.
@@ -202,8 +211,8 @@ catalog lookups, and the Settings refresh button fires several at once.
 | [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
 | [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared "spend today" pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header |
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |
-| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog with editable input/output/per-image fields, an "overridden" badge + reset button per row, and a form for pricing a model not yet in the catalog |
-| `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50 за 1M`, `· $0.04 за кадр`, or `price ?`) |
+| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (built-in + overrides + unpriced catalog-only rows) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), and a form for pricing a model not yet in the catalog |
+| `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50 за 1M`, `· $0.04 за кадр`, or `price ?`). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
 
 **Navigation note.** The Usage screen is reachable from all three top-level
 screens (home/workflow/settings), including Settings itself. `App.jsx` keeps

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Download, Trash2, Upload } from 'lucide-react';
 import { api } from '../../api/client.js';
 import { modelPriceMap } from '../../lib/pricing.js';
@@ -57,6 +57,16 @@ export default function SettingsScreen({
   const generalFileRef = useRef(null);
   const priceMap = modelPriceMap(pricing?.models);
 
+  // Load the last-known-good model catalog on mount, so the favorites
+  // search and the Prices tab have something to show before anyone presses
+  // "Refresh models" in this session.
+  useEffect(() => {
+    api.getModelsCatalog().then((res) => {
+      setCatalog(res.text || {});
+      setImageCatalog(res.image || {});
+    }).catch(() => {});
+  }, []);
+
   function exportApiKeysFile() {
     downloadJSON('versecraft-api-keys.json', { api_keys: apiKeys });
   }
@@ -91,7 +101,8 @@ export default function SettingsScreen({
       );
       const next = {};
       entries.forEach((entry) => { next[entry.provider] = entry; });
-      setCatalog(next);
+      setCatalog((prev) => ({ ...prev, ...next }));
+      actions.refreshPricing?.();
     } finally {
       setRefreshingModels(false);
     }
@@ -105,7 +116,8 @@ export default function SettingsScreen({
       );
       const next = {};
       entries.forEach((entry) => { next[entry.provider] = entry; });
-      setImageCatalog(next);
+      setImageCatalog((prev) => ({ ...prev, ...next }));
+      actions.refreshPricing?.();
     } finally {
       setRefreshingImageModels(false);
     }
@@ -267,7 +279,7 @@ export default function SettingsScreen({
           )}
 
           {activeTab === 'prices' && (
-            <PricingPanel L={L} pricing={pricing} onSave={actions.savePricingOverrides} />
+            <PricingPanel L={L} pricing={pricing} providers={IMAGE_MODEL_PROVIDERS} onSave={actions.savePricingOverrides} />
           )}
 
           {activeTab === 'prompts' && (

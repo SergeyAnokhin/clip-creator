@@ -57,13 +57,28 @@ def put_settings(body: dict = Body(...)):
     return merged
 
 
+def _remember_catalog_entry(kind: str, provider: str, entry: dict) -> None:
+    """Upserts one provider's fetched model list into the persisted catalog,
+    so the Models/Prices tabs have it on the next app start without anyone
+    pressing "Refresh models" again. A failed fetch (source == 'error') is
+    never written - it would otherwise blank out a previously good list with
+    a transient network/API-key error."""
+    if entry.get('source') == 'error':
+        return
+    catalog = storage.load_model_catalog()
+    catalog[kind][provider] = entry
+    storage.save_model_catalog(catalog)
+
+
 @router.get('/models/{provider}')
 async def get_models(provider: str):
     if provider not in _MODEL_PROVIDERS:
         raise HTTPException(404, f'Unknown provider: {provider}')
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
     api_key = (settings.get('api_keys') or {}).get(provider, '')
-    return await text_models.list_models(provider, api_key)
+    entry = await text_models.list_models(provider, api_key)
+    _remember_catalog_entry('text', provider, entry)
+    return entry
 
 
 @router.get('/image-models/{provider}')
@@ -72,7 +87,17 @@ async def get_image_models(provider: str):
         raise HTTPException(404, f'Unknown provider: {provider}')
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
     api_key = (settings.get('api_keys') or {}).get(provider, '')
-    return await image_models.list_models(provider, api_key)
+    entry = await image_models.list_models(provider, api_key)
+    _remember_catalog_entry('image', provider, entry)
+    return entry
+
+
+@router.get('/models-catalog')
+def get_models_catalog():
+    """The persisted last-known-good model catalog (see `_remember_catalog_entry`),
+    for the Models/Prices tabs to show immediately on mount instead of an
+    empty list until "Refresh models" is pressed."""
+    return storage.load_model_catalog()
 
 
 @router.post('/wish-library')

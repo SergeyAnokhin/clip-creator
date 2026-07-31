@@ -151,7 +151,7 @@ function App() {
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
           pricing={usage.pricing} usageToday={usage.today}
           onClose={closeSettings} onOpenUsage={openUsage}
-          actions={{ ...settings.actions, savePricingOverrides: usage.actions.savePricingOverrides }}
+          actions={{ ...settings.actions, savePricingOverrides: usage.actions.savePricingOverrides, refreshPricing: usage.actions.refreshPricing }}
         />
       )}
 

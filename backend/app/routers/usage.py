@@ -11,6 +11,23 @@ def _overrides() -> dict:
     return settings.get('pricing_overrides') or {}
 
 
+def _known_models() -> dict[str, str]:
+    """Every composite id the Settings "Models" catalog knows about, mapped
+    to 'text'/'image', so the Prices tab can list a model before anyone has
+    priced it."""
+    model_catalog = storage.load_model_catalog()
+    known = {}
+    for provider, entry in model_catalog.get('text', {}).items():
+        for m in entry.get('models', []):
+            if m.get('id'):
+                known[f"{provider}:{m['id']}"] = 'text'
+    for provider, entry in model_catalog.get('image', {}).items():
+        for m in entry.get('models', []):
+            if m.get('id'):
+                known[f"{provider}:{m['id']}"] = 'image'
+    return known
+
+
 @router.get('/records')
 def list_records(
     project_id: str | None = None, task: str | None = None, provider: str | None = None,
@@ -49,7 +66,7 @@ def get_pricing():
     return {
         'pricing_version': pricing.PRICING_VERSION,
         'currency': pricing.CURRENCY,
-        'models': pricing.catalog(overrides),
+        'models': pricing.catalog_with_known_models(overrides, _known_models()),
         'overrides': overrides,
     }
 
@@ -68,6 +85,6 @@ def put_pricing(body: dict = Body(...)):
     return {
         'pricing_version': pricing.PRICING_VERSION,
         'currency': pricing.CURRENCY,
-        'models': pricing.catalog(overrides),
+        'models': pricing.catalog_with_known_models(overrides, _known_models()),
         'overrides': overrides,
     }

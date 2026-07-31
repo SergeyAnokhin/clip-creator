@@ -164,6 +164,25 @@ def test_curated_image_models_are_priced():
     assert missing == []
 
 
+def test_catalog_with_known_models_adds_unpriced_rows():
+    known = {'openrouter:some/brand-new-model': 'text', 'krea:some/new-image-model': 'image'}
+    rows = {r['model']: r for r in pricing.catalog_with_known_models({}, known)}
+    assert rows['openrouter:some/brand-new-model']['source'] == 'catalog'
+    assert rows['openrouter:some/brand-new-model']['input'] is None
+    assert rows['openrouter:some/brand-new-model']['kind'] == 'text'
+    assert rows['krea:some/new-image-model']['kind'] == 'image'
+    # Already-priced builtin isn't duplicated or downgraded
+    assert rows['fal:fal-ai/flux/dev']['source'] == 'builtin'
+
+
+def test_catalog_with_known_models_skips_models_already_priced():
+    known = {'google:gemini-2.5-flash': 'text'}
+    rows = [r for r in pricing.catalog_with_known_models({}, known) if r['model'] == 'google:gemini-2.5-flash']
+    assert len(rows) == 1
+    assert rows[0]['source'] == 'builtin'
+    assert rows[0]['input'] == pytest.approx(0.30)
+
+
 def test_validate_overrides_accepts_valid_rows():
     assert pricing.validate_overrides({
         'google:gemini-2.5-flash': {'kind': 'text', 'input': 0.3, 'output': 2.5},

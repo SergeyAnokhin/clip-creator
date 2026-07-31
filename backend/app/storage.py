@@ -35,6 +35,12 @@ def usage_dir() -> Path:
     return d
 
 
+def model_catalog_file() -> Path:
+    root = get_data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root / 'model_catalog.json'
+
+
 def list_projects() -> list[dict]:
     out = []
     for d in sorted(projects_dir().iterdir()):
@@ -71,3 +77,20 @@ def load_settings() -> dict:
 
 def save_settings(data: dict) -> None:
     settings_file().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def load_model_catalog() -> dict:
+    """Last-known-good model list per provider, kept across restarts so the
+    Settings "Models"/"Prices" tabs have something to show before anyone
+    presses "Refresh models". Shape: {'text': {provider: {source, models,
+    error}}, 'image': {provider: {...}}} - same entry shape `list_models`
+    already returns."""
+    f = model_catalog_file()
+    if not f.is_file():
+        return {'text': {}, 'image': {}}
+    data = json.loads(f.read_text(encoding='utf-8'))
+    return {'text': data.get('text') or {}, 'image': data.get('image') or {}}
+
+
+def save_model_catalog(data: dict) -> None:
+    model_catalog_file().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
