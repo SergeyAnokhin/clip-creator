@@ -66,6 +66,20 @@ def test_generate_suno_calls_provider_seam_and_persists(client, monkeypatch):
     assert saved['model_used'] == 'gpt'
 
 
+def test_generate_suno_passes_usage_ctx_with_project_id_and_task(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    fake_generate = AsyncMock(return_value={'style': 'S', 'lyrics': 'L'})
+    monkeypatch.setattr(generation_router.suno, 'generate', fake_generate)
+
+    client.post(f'/api/projects/{pid}/suno/generate', json={'skill_id': 'skill_b'})
+
+    usage_ctx = fake_generate.call_args.kwargs['usage_ctx']
+    assert usage_ctx is not None
+    assert usage_ctx['task'] == 'suno_generate'
+    assert usage_ctx['project_id'] == pid
+    assert usage_ctx['meta']['skill_id'] == 'skill_b'
+
+
 def test_generate_suno_formats_lyrics_from_current_blocks(client):
     """The stub must reflect whatever blocks the Lyrics stage currently holds
     (order, repeated chorus, interlude tags) rather than any previously

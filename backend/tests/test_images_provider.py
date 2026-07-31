@@ -229,3 +229,90 @@ def test_ext_from_response_falls_back_to_content_type_when_url_has_no_extension(
 
 def test_ext_from_response_defaults_to_png_for_unknown_content_type():
     assert images._ext_from_response('https://cdn.example/deliver/abc123', 'application/octet-stream') == 'png'
+
+
+@pytest.fixture
+def usage_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import usage as usage_module
+    return usage_module
+
+
+def test_start_jobs_records_a_usage_row_on_success(monkeypatch, usage_ledger):
+    payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
+    _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    async def scenario():
+        ctx = usage_ledger.context('scene_image', 'poem-a', {}, scene_index=2, count=1)
+        job_ids = images.start_jobs(
+            'poem-a', 2, 'a scenic prompt', 1, 'google:imagen-4.0-generate-001', {'api_keys': {'google': 'k'}},
+            usage_ctx=ctx,
+        )
+        for _ in range(200):
+            job = images.get_job(job_ids[0])
+            if job['status'] != 'pending':
+                return job
+            await asyncio.sleep(0)
+        raise AssertionError('job did not resolve')
+
+    job = asyncio.run(scenario())
+    assert job['status'] == 'completed'
+
+    records = usage_ledger.query()['records']
+    assert len(records) == 1
+    rec = records[0]
+    assert rec['task'] == 'scene_image'
+    assert rec['project_id'] == 'poem-a'
+    assert rec['model'] == 'google:imagen-4.0-generate-001'
+    assert rec['status'] == 'ok'
+    assert rec['units']['images'] == 1
+    assert rec['meta']['scene_index'] == 2
+
+
+def test_start_jobs_records_replicate_compute_seconds(monkeypatch, usage_ledger):
+    _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'p1', 'status': 'starting', 'urls': {'get': 'https://api.replicate.com/v1/predictions/p1'}}),
+        _FakeResponse(200, {
+            'status': 'succeeded', 'output': ['https://cdn.example/img.jpg'],
+            'urls': {'get': 'https://api.replicate.com/v1/predictions/p1'},
+            'metrics': {'predict_time': 1.87},
+        }),
+        _FakeResponse(200, content=b'JPGDATA', headers={'content-type': 'image/jpeg'}),
+    ])
+
+    async def scenario():
+        ctx = usage_ledger.context('scene_image', 'poem-a', {}, scene_index=0, count=1)
+        job_ids = images.start_jobs(
+            'poem-a', 0, 'p', 1, 'replicate:black-forest-labs/flux-schnell', {'api_keys': {'replicate': 'k'}},
+            usage_ctx=ctx,
+        )
+        for _ in range(200):
+            job = images.get_job(job_ids[0])
+            if job['status'] != 'pending':
+                return job
+            await asyncio.sleep(0)
+        raise AssertionError('job did not resolve')
+
+    asyncio.run(scenario())
+    rec = usage_ledger.query()['records'][0]
+    assert rec['units']['compute_seconds'] == pytest.approx(1.87)
+
+
+def test_start_jobs_records_error_status_on_failure(usage_ledger):
+    async def scenario():
+        ctx = usage_ledger.context('scene_image', 'poem-a', {}, scene_index=0, count=1)
+        job_ids = images.start_jobs(
+            'poem-a', 0, 'prompt', 1, 'unknownprovider:x', {'api_keys': {}}, usage_ctx=ctx,
+        )
+        for _ in range(200):
+            job = images.get_job(job_ids[0])
+            if job['status'] != 'pending':
+                return job
+            await asyncio.sleep(0)
+        raise AssertionError('job did not resolve')
+
+    asyncio.run(scenario())
+    rec = usage_ledger.query()['records'][0]
+    assert rec['status'] == 'error'
+    assert rec['cost']['amount'] is None
+    assert 'unknownprovider' in rec['error']

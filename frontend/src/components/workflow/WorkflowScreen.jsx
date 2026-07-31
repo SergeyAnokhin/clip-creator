@@ -8,6 +8,7 @@ export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
   lyricsState, sunoState, scenesState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
+  usageToday, onOpenUsage,
 }) {
   const isMobile = viewport === 'mobile';
 
@@ -24,6 +25,7 @@ export default function WorkflowScreen({
         onOpenSettings={onOpenSettings}
         onChangeTitle={(title) => updateProject((p) => ({ ...p, title }), { immediate: false })}
         onChangeAuthor={(author) => updateProject((p) => ({ ...p, author }), { immediate: false })}
+        usageToday={usageToday} onOpenUsage={onOpenUsage}
       />
 
       <div className="workflow-body">

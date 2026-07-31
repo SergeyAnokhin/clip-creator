@@ -1,6 +1,7 @@
 import { Feather, Plus, Settings } from 'lucide-react';
+import UsagePill from '../UsagePill.jsx';
 
-export default function Header({ L, langLabel, onToggleLang, onOpenSettings, onNewWorkflow }) {
+export default function Header({ L, langLabel, onToggleLang, onOpenSettings, onNewWorkflow, usageToday, onOpenUsage }) {
   return (
     <div className="home-header">
       <div className="home-logo">
@@ -13,6 +14,7 @@ export default function Header({ L, langLabel, onToggleLang, onOpenSettings, onN
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', boxShadow: '0 0 6px #4ade80' }} />
         {L.apiConnected}
       </div>
+      <UsagePill L={L} today={usageToday} onOpen={onOpenUsage} />
       <div style={{ flex: 1 }} />
       <button className="btn btn-gradient" onClick={onNewWorkflow}>
         <Plus size={15} />

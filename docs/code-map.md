@@ -23,6 +23,9 @@ details live in [architecture.md](architecture.md), data shapes in
 | [`providers/scenes.py`](../backend/app/providers/scenes.py) | **Stub seam.** Splits blocks into N ordered scene chunks with canned prompts |
 | [`providers/images.py`](../backend/app/providers/images.py) | **Real seam.** `start_jobs`/`get_job`: one background `asyncio` task + in-memory job per requested image variant, dispatched by provider (Krea/Replicate/FAL job-polling, Google Imagen single call) to a real API call, writing the result under `app_data/projects/<slug>/images/` and persisting it onto the project on completion |
 | [`providers/url_parser.py`](../backend/app/providers/url_parser.py) | `httpx` + `BeautifulSoup` heuristic → `{author, title, raw_text}` |
+| [`usage.py`](../backend/app/usage.py) | AI usage ledger — `record`/`query`/`summarize`/`today_total`, append-only `app_data/usage/YYYY-MM.jsonl`. See [usage-tracking.md](usage-tracking.md) |
+| [`pricing.py`](../backend/app/pricing.py) | Price catalog + cost math (`BUILTIN_PRICING`, `get_price`, `compute_cost`, `estimate`, `catalog`) — pure, no I/O. Prices are unverified placeholders, see [usage-tracking.md](usage-tracking.md) |
+| [`routers/usage.py`](../backend/app/routers/usage.py) | `GET /api/usage/records\|summary\|today`, `GET/PUT /api/usage/pricing` |
 
 Tests: [`backend/tests/`](../backend/tests/) — `test_projects.py`, `test_generation.py`,
 `test_suno_provider.py` (Gemini prompt assembly/call/parsing, with `httpx` mocked),
@@ -32,6 +35,8 @@ Tests: [`backend/tests/`](../backend/tests/) — `test_projects.py`, `test_gener
 image generation and the `start_jobs`/`get_job` job store, all with `httpx` mocked and
 `asyncio.sleep` faked to skip real poll delays),
 `test_settings.py` (settings routes, wish-library endpoint),
+`test_pricing.py`, `test_usage_ledger.py`, `test_usage_routes.py` (usage ledger and pricing,
+see [usage-tracking.md](usage-tracking.md)),
 `test_url_parser.py`, `test_slug.py`. `conftest.py` points `APP_DATA_DIR` at a tmp dir.
 
 ## Frontend — [`frontend/src/`](../frontend/src/)
@@ -46,18 +51,22 @@ image generation and the `start_jobs`/`get_job` job store, all with `httpx` mock
 | [`lib/scenes.js`](../frontend/src/lib/scenes.js) | `pickMainByRating` — top-rated image becomes the scene's main frame |
 | [`lib/debounce.js`](../frontend/src/lib/debounce.js) | `debounce(fn, ms)` with `.cancel()` |
 | [`lib/format.js`](../frontend/src/lib/format.js) | Date/label formatting helpers |
+| [`lib/pricing.js`](../frontend/src/lib/pricing.js) | Pure cost formatting/estimation helpers (`formatCost`, `estimateCost`, `priceLabel`, `modelPriceMap`) — see [usage-tracking.md](usage-tracking.md) |
 | [`styles/theme.css`](../frontend/src/styles/theme.css) | The whole visual system — palette vars + per-component classes. Grep the class name from the JSX |
 | `components/home/` | `HomeScreen` + `Header`, `FilterChips`, `ProjectGrid`, `ProjectCard`, `EmptyState`, `NewProjectModal` |
 | `components/workflow/` | `WorkflowScreen` → `WorkflowHeader`, `Sidebar`, and the three stages |
+| [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared "spend today" header pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, `settings/SettingsScreen.jsx` |
+| `components/usage/` | `UsageScreen` + `UsageFilters`, `UsageSummary`, `UsageTable` — the AI cost ledger screen, see [usage-tracking.md](usage-tracking.md) |
 | [`components/workflow/LyricsStage.jsx`](../frontend/src/components/workflow/LyricsStage.jsx) | Block list; per-block UI is in `BlockCard.jsx` (+ `TypeMenu`, `TagMenu` popovers) |
 | [`components/workflow/SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx) | Skill picker, prompt editor, refinement, style/lyrics output, and a `ModelPicker` over `simple_models.favorites` next to "Save to library". **`SKILLS` (the skill templates) is defined here** |
 | [`components/workflow/ScenesStage.jsx`](../frontend/src/components/workflow/ScenesStage.jsx) | Style description, references, scene list, `ModelPicker`s for the scene-text model (`text_models.favorites`) and the scene-image model (`image_models.favorites`); per-scene UI in `SceneCard.jsx`, images in `ImageThumb.jsx` |
 | [`components/workflow/ModelPicker.jsx`](../frontend/src/components/workflow/ModelPicker.jsx) | Plain `<select>` over a favorites list (`{provider, id, label}[]`) → `"{provider}:{id}"` composite; shared by `SunoStage` and `ScenesStage` so each generation call can override the settings default, not just silently use it |
 | [`components/settings/SettingsScreen.jsx`](../frontend/src/components/settings/SettingsScreen.jsx) | Tabbed (General/Providers/Models/Suno prompts/Wishes): language, backup export/import (API keys separately from everything else), API keys (Replicate/Google/FAL/OpenRouter/DeepSeek/Krea), text/simple model favorites (5 providers) + image model favorites (same 5 + Krea, image/video-only), special tags, Suno base prompt, reference examples, wish library |
-| [`components/settings/ModelFavorites.jsx`](../frontend/src/components/settings/ModelFavorites.jsx) | Favorites list + default picker + provider-catalog search/add, shared by the text-model, simple-model and image-model panels (each with its own catalog fetch) |
+| [`components/settings/ModelFavorites.jsx`](../frontend/src/components/settings/ModelFavorites.jsx) | Favorites list + default picker + provider-catalog search/add, shared by the text-model, simple-model and image-model panels (each with its own catalog fetch); optional `prices` prop adds a price hint per model |
+| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: editable price catalog + overrides, see [usage-tracking.md](usage-tracking.md) |
 
-Tests: `lib/lyrics.test.js`, `lib/scenes.test.js` (Vitest). Only the pure `lib/`
-code is covered — components and hooks have no tests.
+Tests: `lib/lyrics.test.js`, `lib/scenes.test.js`, `lib/pricing.test.js` (Vitest).
+Only the pure `lib/` code is covered — components and hooks have no tests.
 
 ### `hooks/` — where the state lives
 
@@ -68,6 +77,7 @@ so the wiring is explicit and there is no context/provider indirection.
 | --- | --- |
 | [`useToast`](../frontend/src/hooks/useToast.js) | The single transient message. Every other hook depends on `showToast` |
 | [`useViewport`](../frontend/src/hooks/useViewport.js) | Breakpoint + workflow sidebar |
+| [`useUsage`](../frontend/src/hooks/useUsage.js) | AI usage ledger and price catalog — created **before** `useSettings` (doesn't depend on it); see [usage-tracking.md](usage-tracking.md) |
 | [`useSettings`](../frontend/src/hooks/useSettings.js) | Language (and therefore `L`), API keys, text/simple/image model favorites+default, special tags, wish library, backup import (API keys / everything else, from an uploaded JSON file) |
 | [`useProjects`](../frontend/src/hooks/useProjects.js) | Project list, New-Workflow modal, open project, **and persistence** (`updateProject`, `flushPendingSave`) |
 | [`useLyricsStage`](../frontend/src/hooks/useLyricsStage.js) | Block/line editing state and every block mutation |

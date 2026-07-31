@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 
-from .. import storage
+from .. import storage, usage
 from ..providers import images, scenes, suno
 from .settings import DEFAULT_SETTINGS
 
@@ -26,9 +26,10 @@ async def generate_suno(project_id: str, body: dict = Body(default={})):
     skill_prompt = body.get('skill_prompt', project.get('skill_prompt', ''))
     model = body.get('model', '')
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('suno_generate', project_id, settings, skill_id=skill_id)
 
     try:
-        result = await suno.generate(project, skill_prompt=skill_prompt, model=model, settings=settings)
+        result = await suno.generate(project, skill_prompt=skill_prompt, model=model, settings=settings, usage_ctx=usage_ctx)
     except Exception as exc:
         raise HTTPException(502, f'Не удалось сгенерировать через {model or "провайдер"}: {exc}') from exc
     project['style'] = result['style']
@@ -70,6 +71,8 @@ async def generate_scenes(project_id: str, body: dict = Body(default={})):
     style_description = body.get('style_description', project.get('style_description', ''))
     scene_count = body.get('scene_count', scenes.DEFAULT_SCENE_COUNT)
     model = body.get('model', '')
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('scene_storyboard', project_id, settings)
 
     result = await scenes.generate(
         project,
@@ -77,6 +80,7 @@ async def generate_scenes(project_id: str, body: dict = Body(default={})):
         reference_images=project.get('reference_images', []),
         scene_count=scene_count,
         model=model,
+        usage_ctx=usage_ctx,
     )
     project['scenes'] = result
     project['style_description'] = style_description
@@ -98,7 +102,8 @@ async def generate_scene_images(project_id: str, scene_index: int, body: dict = 
     count = body.get('count', 1)
     model = body.get('model', '')
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
-    job_ids = images.start_jobs(project_id, scene_index, scene.get('static_prompt', ''), count, model, settings)
+    usage_ctx = usage.context('scene_image', project_id, settings, scene_index=scene_index, count=count)
+    job_ids = images.start_jobs(project_id, scene_index, scene.get('static_prompt', ''), count, model, settings, usage_ctx=usage_ctx)
     return {'job_ids': job_ids}
 
 

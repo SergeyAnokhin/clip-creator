@@ -1,11 +1,14 @@
 import { useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
+import { priceLabel } from '../../lib/pricing.js';
 
 /** Favorites list + default picker for a "which model" setting (text models,
  * simple models). `catalog` is `{provider: {source, models, error}}` fetched
- * once at the SettingsScreen level and shared between both instances. */
+ * once at the SettingsScreen level and shared between both instances.
+ * `prices` (composite -> pricing row), when given, adds a price hint next to
+ * each favorite and each search suggestion. */
 export default function ModelFavorites({
-  L, providers, favorites, defaultValue, catalog, refreshing,
+  L, providers, favorites, defaultValue, catalog, refreshing, prices,
   onRefresh, onAddFavorite, onRemoveFavorite, onSetDefault,
 }) {
   const [query, setQuery] = useState('');
@@ -55,6 +58,11 @@ export default function ModelFavorites({
               </span>
               <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>
                 {providerLabel(f.provider)} · {f.label}
+                {prices && (
+                  <span style={{ color: 'var(--text-faint)', marginLeft: 6 }}>
+                    ({priceLabel(prices[`${f.provider}:${f.id}`], L)})
+                  </span>
+                )}
               </span>
               <button
                 className="icon-btn icon-btn-danger"
@@ -94,6 +102,11 @@ export default function ModelFavorites({
               >
                 <span className="settings-suggestion-provider">{providerLabel(s.provider)}</span>
                 {s.name}
+                {prices && (
+                  <span style={{ color: 'var(--text-faint)', marginLeft: 'auto', fontSize: 11 }}>
+                    {priceLabel(prices[`${s.provider}:${s.id}`], L)}
+                  </span>
+                )}
               </div>
             ))}
           </div>

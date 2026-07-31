@@ -5,7 +5,7 @@ import { api } from '../api/client.js';
  * and the generated style/lyrics pair. The skill *templates* themselves live
  * in `SKILLS` in components/workflow/SunoStage.jsx. */
 export function useSunoStage({
-  activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, simpleModelDefault,
+  activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, simpleModelDefault, onAiCall,
 }) {
   const [skillId, setSkillId] = useState('skill_a');
   const [refinementText, setRefinementText] = useState('');
@@ -56,6 +56,7 @@ export function useSunoStage({
       showToast('Не удалось сгенерировать');
     } finally {
       setSunoLoading(false);
+      onAiCall?.();
     }
   }
   function copyStyle() {

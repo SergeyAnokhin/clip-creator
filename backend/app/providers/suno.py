@@ -1,6 +1,9 @@
 import asyncio
+import time
 
 import httpx
+
+from .. import usage
 
 # Real seam: `model` is a composite "{provider}:{model_id}" string (see
 # settings.text_models). When provider == 'google' and settings.api_keys.google
@@ -61,37 +64,64 @@ def _parse_gemini_response(text: str, fallback_lyrics: str) -> dict:
     return {'style': '', 'lyrics': text.strip() or fallback_lyrics}
 
 
-async def _generate_via_gemini(raw_lyrics: str, skill_prompt: str, settings: dict, api_key: str, model_id: str) -> dict:
+async def _generate_via_gemini(
+    raw_lyrics: str, skill_prompt: str, settings: dict, api_key: str, model_id: str,
+    usage_ctx: dict | None = None,
+) -> dict:
     prompt = _build_gemini_prompt(raw_lyrics, skill_prompt, settings)
     url = _GEMINI_URL.format(model=model_id)
+    model = f'google:{model_id}'
 
+    started = time.monotonic()
     async with httpx.AsyncClient(timeout=60) as http_client:
         resp = await http_client.post(
             url,
             params={'key': api_key},
             json={'contents': [{'parts': [{'text': prompt}]}]},
         )
+    duration_ms = int((time.monotonic() - started) * 1000)
+
     if resp.status_code != 200:
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}')
         raise RuntimeError(f'Gemini API вернул {resp.status_code}: {resp.text[:300]}')
 
     data = resp.json()
     try:
         text = data['candidates'][0]['content']['parts'][0]['text']
     except (KeyError, IndexError) as exc:
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                      prompt=raw_lyrics, error=f'Неожиданный ответ Gemini: {data}')
         raise RuntimeError(f'Неожиданный ответ Gemini: {data}') from exc
 
-    return _parse_gemini_response(text, raw_lyrics)
+    result = _parse_gemini_response(text, raw_lyrics)
+    usage_metadata = data.get('usageMetadata') or {}
+    units = {
+        'input_tokens': usage_metadata.get('promptTokenCount'),
+        'output_tokens': usage_metadata.get('candidatesTokenCount'),
+        'total_tokens': usage_metadata.get('totalTokenCount'),
+        'cached_input_tokens': usage_metadata.get('cachedContentTokenCount'),
+        'reasoning_tokens': usage_metadata.get('thoughtsTokenCount'),
+    }
+    usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
+                 units=units, prompt=raw_lyrics, response=text)
+    return result
 
 
-async def generate(project: dict, skill_prompt: str = '', model: str = '', settings: dict | None = None) -> dict:
+async def generate(
+    project: dict, skill_prompt: str = '', model: str = '', settings: dict | None = None,
+    usage_ctx: dict | None = None,
+) -> dict:
     settings = settings or {}
     raw_lyrics = _format_lyrics(project.get('blocks', []))
 
     provider, _, model_id = model.partition(':')
     api_key = (settings.get('api_keys') or {}).get('google', '')
     if provider == 'google' and model_id and api_key:
-        return await _generate_via_gemini(raw_lyrics, skill_prompt, settings, api_key, model_id)
+        return await _generate_via_gemini(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx)
 
+    # No network call here (deterministic stub), so nothing to bill - the
+    # ledger must not record a call that never happened.
     await asyncio.sleep(0.05)
     style = project.get('style') or 'Cinematic Orchestral Folk, Warm Vocal, 90 BPM, Nostalgic'
     return {'style': style, 'lyrics': raw_lyrics}

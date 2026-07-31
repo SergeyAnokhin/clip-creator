@@ -12,6 +12,7 @@ export default function HomeScreen({
   onToggleLang, onOpenSettings, onOpenNewProjectModal, onCloseNewProjectModal,
   onModalUrlChange, onModalRawTextChange, onSubmitNewProject,
   onFilterChange, onSearchChange, onOpenProject, onDeleteProject,
+  usageToday, onOpenUsage,
 }) {
   const isMobile = viewport === 'mobile';
   const isTablet = viewport === 'tablet';
@@ -27,7 +28,10 @@ export default function HomeScreen({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      <Header L={L} langLabel={langLabel} onToggleLang={onToggleLang} onOpenSettings={onOpenSettings} onNewWorkflow={onOpenNewProjectModal} />
+      <Header
+        L={L} langLabel={langLabel} onToggleLang={onToggleLang} onOpenSettings={onOpenSettings}
+        onNewWorkflow={onOpenNewProjectModal} usageToday={usageToday} onOpenUsage={onOpenUsage}
+      />
 
       <div className="home-main" style={{ padding: isMobile ? '20px 16px' : '36px 32px' }}>
         <div className="home-hero-glow" />

@@ -12,6 +12,8 @@ app_data/
       config.json            # the whole project
       images/scene_{n}_{shorthex}.{png|jpg|webp}
       references/ref_{uuid}.{ext}
+  usage/
+    YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
 ```
 
 ## Project (`config.json`)
@@ -46,11 +48,23 @@ backward compatibility, never read or edited.
 extension depends on the provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly
 one `is_selected` per scene once anything is rated.
 
+## Usage ledger (`app_data/usage/YYYY-MM.jsonl`)
+
+One JSON object per line, append-only, one file per calendar month. Full
+field-by-field detail, cost-resolution rules, and how to instrument a new
+call site are in [usage-tracking.md](usage-tracking.md); summary:
+
+`{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
+
+`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image`.
+`cost.amount` is `null` (never `0`) when the price or usage units needed to
+compute it are unknown; `cost.source` is `provider|catalog|unknown`.
+
 ## Settings (`settings.json`)
 
 `{lang, api_keys{replicate,google,fal,openrouter,deepseek,krea}, text_models{favorites[],default},
 simple_models{favorites[],default}, image_models{favorites[],default}, special_tags[],
-suno_base_prompt, suno_reference_examples[], suno_wish_library[]}`. Reads and
+suno_base_prompt, suno_reference_examples[], suno_wish_library[], pricing_overrides{}}`. Reads and
 writes merge over `DEFAULT_SETTINGS` in
 [`routers/settings.py`](../backend/app/routers/settings.py) (seed text for
 `suno_base_prompt`/`suno_reference_examples` comes from
@@ -86,6 +100,12 @@ partial merge server-side, so the frontend can persist e.g. just
   Google/OpenRouter/DeepSeek with a key configured, otherwise a local
   truncate of `text`). Legacy plain-string entries are normalized to this shape on
   `GET /api/settings` (not rewritten to disk until the next save).
+- `pricing_overrides` — user-supplied AI price corrections, keyed by
+  `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
+  wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
+  [usage-tracking.md](usage-tracking.md)). Saved via its own
+  `PUT /api/usage/pricing`, not the general settings `PUT` — **not** included
+  in the Settings screen's backup export/import.
 - The Settings screen's "Backup" controls (`SettingsScreen.jsx`, general and
   providers tabs) export/import `api_keys` separately from every other
   settings field as downloadable JSON files. This is pure client-side file
@@ -119,6 +139,10 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |
+| `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |
+| `GET /api/usage/summary` | Same filters + `group_by ∈ project\|task\|model\|provider\|day`, `tz_offset` → `{group_by, currency, groups[], totals}` |
+| `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls}` |
+| `GET /api/usage/pricing` / `PUT /api/usage/pricing` | Merged price catalog `{pricing_version, currency, models[], overrides}` / body `{pricing_overrides}`, `422` on an invalid row |
 
 Every generation route persists its result onto the project before returning,
 so the client never has to `PATCH` afterwards — except the scene-images job

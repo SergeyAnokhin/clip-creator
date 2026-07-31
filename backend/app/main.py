@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import storage
-from .routers import generation, projects, settings
+from .routers import generation, projects, settings, usage
 from .seed import seed_if_empty
 
 
@@ -31,6 +31,7 @@ app.add_middleware(
 app.include_router(projects.router)
 app.include_router(settings.router)
 app.include_router(generation.router)
+app.include_router(usage.router)
 
 # Serves generated scene images and uploaded reference images
 # (app_data/projects/<slug>/images|references/...) at /media/projects/<slug>/....

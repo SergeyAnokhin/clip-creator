@@ -9,6 +9,10 @@ specification (reference only, not kept in sync with the code — see
 - **Backend**: FastAPI (Python) — [`backend/`](backend/)
 - **Storage**: local JSON files under `app_data/` (git-ignored), one folder per
   project — see [docs/architecture.md](docs/architecture.md)
+- **AI usage & cost tracking**: every paid AI call is logged with tokens/cost,
+  visible in the app's "Расходы"/Usage screen and a spend-today pill in every
+  header — see [docs/usage-tracking.md](docs/usage-tracking.md). Built-in
+  model prices are placeholders; verify them before trusting a total.
 
 ## Running locally
 
@@ -53,5 +57,6 @@ instead of inventing sample poems.
 | [docs/architecture.md](docs/architecture.md) | How it fits together, the 3-stage workflow, provider seams, gotchas |
 | [docs/code-map.md](docs/code-map.md) | Which file does what — start here to find where to change something |
 | [docs/data-model.md](docs/data-model.md) | JSON shapes on disk + the full API route table |
+| [docs/usage-tracking.md](docs/usage-tracking.md) | AI usage ledger and cost tracking — record schema, pricing catalog (built-in prices are **unverified placeholders**, see the doc), how to instrument a new call site |
 | [CLAUDE.md](CLAUDE.md) | Working conventions for AI-assisted changes in this repo |
 | [docs/specs/](docs/specs/) | Frozen V1 product specification (reference only) |

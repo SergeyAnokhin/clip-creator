@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ArrowLeft, Menu, Settings } from 'lucide-react';
+import UsagePill from '../UsagePill.jsx';
 
 /** Click-to-edit span: shows plain text, swaps to an input on click, commits
  * on blur/Enter (Escape reverts). Used for the project title and author in
@@ -44,7 +45,7 @@ function EditableField({ value, placeholder, onCommit }) {
 
 export default function WorkflowHeader({
   L, langLabel, title, author, onGoHome, onToggleSidebar, onToggleLang, onOpenSettings,
-  onChangeTitle, onChangeAuthor,
+  onChangeTitle, onChangeAuthor, usageToday, onOpenUsage,
 }) {
   return (
     <div className="workflow-header">
@@ -62,6 +63,7 @@ export default function WorkflowHeader({
         </span>
       </div>
       <div style={{ flex: 1 }} />
+      <UsagePill L={L} today={usageToday} onOpen={onOpenUsage} />
       <button
         className="btn-ghost"
         style={{ borderRadius: 20, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }}

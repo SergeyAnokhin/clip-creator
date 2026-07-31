@@ -29,6 +29,12 @@ def settings_file() -> Path:
     return root / 'settings.json'
 
 
+def usage_dir() -> Path:
+    d = get_data_root() / 'usage'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def list_projects() -> list[dict]:
     out = []
     for d in sorted(projects_dir().iterdir()):

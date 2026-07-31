@@ -9,7 +9,7 @@ import { pickMainByRating } from '../lib/scenes.js';
  * call `flushPendingSave()` first - see the autosave race in
  * docs/architecture.md. */
 export function useScenesStage({
-  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, textModels,
+  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, textModels, onAiCall,
 }) {
   const [imageModel, setImageModel] = useState(imageModels.default || '');
   const [sceneTextModel, setSceneTextModel] = useState(textModels.default || '');
@@ -55,6 +55,7 @@ export function useScenesStage({
       showToast('Не удалось сгенерировать раскадровку');
     } finally {
       setStoryboardLoading(false);
+      onAiCall?.();
     }
   }
   async function uploadReference(file) {
@@ -110,6 +111,7 @@ export function useScenesStage({
       showToast('Не удалось сгенерировать изображения');
     } finally {
       setSceneLoadingIdx(null);
+      onAiCall?.();
     }
   }
   function rateImage(sceneIdx, imgIdx, rating) {

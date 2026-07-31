@@ -5,7 +5,7 @@ import SceneCard from './SceneCard.jsx';
 import ModelPicker from './ModelPicker.jsx';
 
 export default function ScenesStage({
-  L, project, isMobile, imageModel, sceneTextModel, imageModelFavorites, textModelFavorites,
+  L, project, isMobile, imageModel, sceneTextModel, imageModelFavorites, textModelFavorites, modelPrices,
   variantCount, styleDescription, storyboardLoading, referenceUploading,
   sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, voiceSupported, actions,
 }) {
@@ -24,6 +24,8 @@ export default function ScenesStage({
             value={sceneTextModel}
             onChange={actions.selectSceneTextModel}
             emptyLabel={L.modelPickerEmpty}
+            prices={modelPrices}
+            L={L}
           />
           <button className="btn btn-accent-soft" onClick={actions.generateStoryboard} disabled={storyboardLoading}>
             <RefreshCw size={12} />
@@ -89,6 +91,8 @@ export default function ScenesStage({
           value={imageModel}
           onChange={actions.selectImageModel}
           emptyLabel={L.modelPickerEmpty}
+          prices={modelPrices}
+          L={L}
         />
 
         <span style={{ fontSize: 12, color: 'var(--text-faint)', marginLeft: 10, marginRight: 2 }}>{L.variantCountLabel}:</span>

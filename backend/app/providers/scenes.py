@@ -43,13 +43,16 @@ async def generate(
     reference_images: list[str] | None = None,
     scene_count: int = DEFAULT_SCENE_COUNT,
     model: str = '',
+    usage_ctx: dict | None = None,
 ) -> list[dict]:
     # `model` (a "{provider}:{model_id}" composite, see text_models.py) is
     # accepted but not yet used - there's no real LLM call here to route it
     # to. It's threaded through router -> provider now so the frontend's
     # per-screen model picker has something to bind to, and so wiring in the
     # real call later needs no router/frontend changes (same seam pattern as
-    # images.py).
+    # images.py). `usage_ctx` (see app/usage.py) is threaded the same way for
+    # the future real call to record into the usage ledger - unused while
+    # this stub makes no network call, so nothing is billed yet.
     await asyncio.sleep(0.05)
     reference_images = reference_images or []
     style = style_description.strip() or DEFAULT_STYLE

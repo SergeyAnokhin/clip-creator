@@ -19,7 +19,7 @@ export const SKILLS = [
 
 export default function SunoStage({
   L, project, skillId, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported,
-  sunoLoading, trackUrl, wishLibrary, wishModel, simpleModelFavorites, actions,
+  sunoLoading, trackUrl, wishLibrary, wishModel, simpleModelFavorites, modelPrices, actions,
 }) {
   return (
     <>
@@ -78,6 +78,8 @@ export default function SunoStage({
             value={wishModel}
             onChange={actions.selectWishModel}
             emptyLabel={L.modelPickerEmpty}
+            prices={modelPrices}
+            L={L}
           />
           <button
             className="icon-btn"

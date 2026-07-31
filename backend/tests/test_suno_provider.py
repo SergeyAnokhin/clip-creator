@@ -103,3 +103,68 @@ def test_generate_raises_on_non_200_gemini_response(monkeypatch):
     import asyncio
     with pytest.raises(RuntimeError, match='429'):
         asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings=settings))
+
+
+@pytest.fixture
+def usage_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import usage as usage_module
+    return usage_module
+
+
+def test_generate_records_usage_with_token_counts(monkeypatch, usage_ledger):
+    payload = {
+        'candidates': [{'content': {'parts': [{'text': (
+            f'{suno._STYLE_MARKER}\nSynthpop\n{suno._LYRICS_MARKER}\n[Verse]\nAdapted'
+        )}]}}],
+        'usageMetadata': {'promptTokenCount': 500, 'candidatesTokenCount': 120, 'totalTokenCount': 620},
+    }
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'google': 'test-key'}, 'suno_base_prompt': 'BASE', 'suno_reference_examples': []}
+    ctx = usage_ledger.context('suno_generate', 'my-poem', settings, skill_id='skill_a')
+
+    import asyncio
+    asyncio.run(suno.generate(project, skill_prompt='Adapt it', model='google:gemini-2.5-flash',
+                               settings=settings, usage_ctx=ctx))
+
+    records = usage_ledger.query()['records']
+    assert len(records) == 1
+    rec = records[0]
+    assert rec['task'] == 'suno_generate'
+    assert rec['project_id'] == 'my-poem'
+    assert rec['model'] == 'google:gemini-2.5-flash'
+    assert rec['status'] == 'ok'
+    assert rec['units']['input_tokens'] == 500
+    assert rec['units']['output_tokens'] == 120
+    assert rec['meta']['skill_id'] == 'skill_a'
+
+
+def test_generate_records_error_on_non_200_and_still_raises(monkeypatch, usage_ledger):
+    fake_client = _FakeAsyncClient(_FakeResponse(429, text='rate limited'))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': []}
+    settings = {'api_keys': {'google': 'test-key'}}
+    ctx = usage_ledger.context('suno_generate', 'my-poem', settings)
+
+    import asyncio
+    with pytest.raises(RuntimeError, match='429'):
+        asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings=settings, usage_ctx=ctx))
+
+    rec = usage_ledger.query()['records'][0]
+    assert rec['status'] == 'error'
+    assert rec['cost']['amount'] is None
+
+
+def test_stub_fallback_records_nothing_because_no_call_was_made(usage_ledger):
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Line one'}]}
+    settings = {'api_keys': {'google': ''}}
+    ctx = usage_ledger.context('suno_generate', 'my-poem', settings)
+
+    import asyncio
+    asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings=settings, usage_ctx=ctx))
+
+    assert usage_ledger.query()['total'] == 0

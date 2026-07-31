@@ -10,7 +10,11 @@ listing), so those two fall back to a small curated constant - the user can
 still add any model id manually in the UI.
 """
 
+import time
+
 import httpx
+
+from .. import usage
 
 _GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 _GEMINI_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
@@ -112,7 +116,7 @@ def truncate_title(text: str) -> str:
     return short or text.strip()
 
 
-async def generate_wish_title(text: str, settings: dict) -> str:
+async def generate_wish_title(text: str, settings: dict, usage_ctx: dict | None = None) -> str:
     text = (text or '').strip()
     if not text:
         return text
@@ -123,53 +127,112 @@ async def generate_wish_title(text: str, settings: dict) -> str:
 
     try:
         if provider == 'google' and model_id and api_key:
-            title = await _complete_google(model_id, api_key, text)
+            title = await _complete_google(model_id, api_key, text, usage_ctx)
         elif provider == 'openrouter' and model_id and api_key:
-            title = await _complete_openrouter(model_id, api_key, text)
+            title = await _complete_openrouter(model_id, api_key, text, usage_ctx)
         elif provider == 'deepseek' and model_id and api_key:
-            title = await _complete_deepseek(model_id, api_key, text)
+            title = await _complete_deepseek(model_id, api_key, text, usage_ctx)
         else:
             return truncate_title(text)
         return title.strip().strip('"').strip() or truncate_title(text)
     except Exception:
+        # generate_wish_title() always degrades to a truncated title rather
+        # than failing the request - but the _complete_* functions below
+        # still record the failed call themselves before raising, so the
+        # ledger reflects it even though the caller never sees the error.
         return truncate_title(text)
 
 
-async def _complete_google(model_id: str, api_key: str, text: str) -> str:
+async def _complete_google(model_id: str, api_key: str, text: str, usage_ctx: dict | None = None) -> str:
+    model = f'google:{model_id}'
+    prompt = _TITLE_PROMPT.format(text=text)
+    started = time.monotonic()
     url = _GEMINI_GENERATE_URL.format(model=model_id)
     async with httpx.AsyncClient(timeout=20) as http_client:
         resp = await http_client.post(
             url,
             params={'key': api_key},
-            json={'contents': [{'parts': [{'text': _TITLE_PROMPT.format(text=text)}]}]},
+            json={'contents': [{'parts': [{'text': prompt}]}]},
         )
+    duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
         raise RuntimeError(f'Gemini API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
-    return data['candidates'][0]['content']['parts'][0]['text']
+    result = data['candidates'][0]['content']['parts'][0]['text']
+    um = data.get('usageMetadata') or {}
+    units = {
+        'input_tokens': um.get('promptTokenCount'),
+        'output_tokens': um.get('candidatesTokenCount'),
+        'total_tokens': um.get('totalTokenCount'),
+        'cached_input_tokens': um.get('cachedContentTokenCount'),
+        'reasoning_tokens': um.get('thoughtsTokenCount'),
+    }
+    usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
+                 units=units, prompt=text, response=result)
+    return result
 
 
-async def _complete_openrouter(model_id: str, api_key: str, text: str) -> str:
+async def _complete_openrouter(model_id: str, api_key: str, text: str, usage_ctx: dict | None = None) -> str:
+    model = f'openrouter:{model_id}'
+    started = time.monotonic()
     async with httpx.AsyncClient(timeout=20) as http_client:
         resp = await http_client.post(
             _OPENROUTER_CHAT_URL,
             headers={'Authorization': f'Bearer {api_key}'},
-            json={'model': model_id, 'messages': [{'role': 'user', 'content': _TITLE_PROMPT.format(text=text)}]},
+            json={
+                'model': model_id,
+                'messages': [{'role': 'user', 'content': _TITLE_PROMPT.format(text=text)}],
+                'usage': {'include': True},
+            },
         )
+    duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
         raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
-    return data['choices'][0]['message']['content']
+    result = data['choices'][0]['message']['content']
+    u = data.get('usage') or {}
+    units = {
+        'input_tokens': u.get('prompt_tokens'),
+        'output_tokens': u.get('completion_tokens'),
+        'total_tokens': u.get('total_tokens'),
+        'cached_input_tokens': (u.get('prompt_tokens_details') or {}).get('cached_tokens'),
+        'reasoning_tokens': (u.get('completion_tokens_details') or {}).get('reasoning_tokens'),
+    }
+    # OpenRouter reports the exact USD cost when `usage: {include: true}` is
+    # set on the request - it wins over the catalog estimate (see
+    # usage.record's provider_cost handling).
+    usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
+                 units=units, prompt=text, response=result, provider_cost=u.get('cost'))
+    return result
 
 
-async def _complete_deepseek(model_id: str, api_key: str, text: str) -> str:
+async def _complete_deepseek(model_id: str, api_key: str, text: str, usage_ctx: dict | None = None) -> str:
+    model = f'deepseek:{model_id}'
+    started = time.monotonic()
     async with httpx.AsyncClient(timeout=20) as http_client:
         resp = await http_client.post(
             _DEEPSEEK_CHAT_URL,
             headers={'Authorization': f'Bearer {api_key}'},
             json={'model': model_id, 'messages': [{'role': 'user', 'content': _TITLE_PROMPT.format(text=text)}]},
         )
+    duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
         raise RuntimeError(f'DeepSeek API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
-    return data['choices'][0]['message']['content']
+    result = data['choices'][0]['message']['content']
+    u = data.get('usage') or {}
+    units = {
+        'input_tokens': u.get('prompt_tokens'),
+        'output_tokens': u.get('completion_tokens'),
+        'total_tokens': u.get('total_tokens'),
+        'cached_input_tokens': u.get('prompt_cache_hit_tokens'),
+    }
+    usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
+                 units=units, prompt=text, response=result)
+    return result

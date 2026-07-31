@@ -14,7 +14,8 @@ scene *image* generation both make **real** provider calls (see below).
 ```
 
 Companion docs: [code-map.md](code-map.md) (which file does what),
-[data-model.md](data-model.md) (JSON shapes and API routes).
+[data-model.md](data-model.md) (JSON shapes and API routes),
+[usage-tracking.md](usage-tracking.md) (AI usage ledger and pricing).
 
 ## Running
 
@@ -203,6 +204,23 @@ without knowing whether the result is canned or real. Keys come from
 
 Not implemented at all: image-to-image conditioning from `reference_images`.
 
+## AI usage & cost tracking
+
+Every provider call above (Suno generation, wish-title completion, scene
+image generation) is recorded to an append-only ledger at
+`app_data/usage/YYYY-MM.jsonl`, with token/image counts and a computed cost
+(from a price catalog, or the provider's own reported cost when it has one).
+A "Расходы"/Usage screen and a spend-today pill in every header read it back
+through `GET /api/usage/*`; model pickers show a price hint per model from
+`GET /api/usage/pricing`. Full detail — record schema, the cost-resolution
+rules (**unknown cost is `null`, never `0`**), how to instrument a new call
+site, and per-provider field locations — is in
+[usage-tracking.md](usage-tracking.md). Two rules worth knowing up front
+since they shape the provider seams above: **errors are recorded too** (a
+failed call may still have been billed), and a **catalog-priced record's cost
+is recomputed on every read**, so correcting a placeholder price retroactively
+fixes history.
+
 ## Voice input (speech-to-text)
 
 Dictation into text fields uses the browser's native **Web Speech API**
@@ -301,6 +319,15 @@ wishes already applied. Saving to the library persists immediately (a partial
   stage". A failed fetch falls back to an empty placeholder project.
 - **`importance` on blocks is dead weight** — written for backward
   compatibility, never read.
+- **Usage-ledger previews are just previews.** `prompt_preview`/
+  `response_preview` in `app_data/usage/*.jsonl` are truncated to 300 chars
+  and, for `suno_generate`, deliberately show the raw lyrics rather than the
+  full assembled prompt (which is mostly boilerplate) — see
+  [usage-tracking.md](usage-tracking.md). Don't treat the ledger as a full
+  audit log of exact request/response bodies.
+- **Built-in AI prices are unverified placeholders** (`pricing.py`,
+  `# VERIFY` comments) — check them against each provider's pricing page
+  before trusting a cost total, or override them in Settings → Prices.
 
 ## Testing
 

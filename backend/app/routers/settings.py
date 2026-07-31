@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, HTTPException
 
-from .. import storage
+from .. import storage, usage
 from ..providers import image_models, text_models
 from ..providers.suno_prompt_defaults import DEFAULT_REFERENCE_EXAMPLES, DEFAULT_SUNO_BASE_PROMPT
 
@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     'suno_base_prompt': DEFAULT_SUNO_BASE_PROMPT,
     'suno_reference_examples': DEFAULT_REFERENCE_EXAMPLES,
     'suno_wish_library': [],
+    'pricing_overrides': {},
 }
 
 
@@ -92,7 +93,8 @@ async def add_wish(body: dict = Body(...)):
     title_settings = settings if not model else {
         **settings, 'simple_models': {**settings.get('simple_models', {}), 'default': model},
     }
-    title = await text_models.generate_wish_title(text, title_settings)
+    usage_ctx = usage.context('wish_title', None, title_settings)
+    title = await text_models.generate_wish_title(text, title_settings, usage_ctx=usage_ctx)
     wish = {
         'id': uuid4().hex[:8], 'title': title, 'text': text,
         'created_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),

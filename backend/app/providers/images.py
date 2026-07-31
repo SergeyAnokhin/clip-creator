@@ -37,7 +37,7 @@ from uuid import uuid4
 
 import httpx
 
-from .. import storage
+from .. import storage, usage
 
 _KREA_BASE = 'https://api.krea.ai'
 _REPLICATE_BASE = 'https://api.replicate.com/v1'
@@ -71,7 +71,7 @@ async def _download(url: str) -> tuple[bytes, str]:
     return resp.content, _ext_from_response(url, resp.headers.get('content-type', ''))
 
 
-async def _generate_krea(model_id: str, prompt: str, api_key: str) -> tuple[bytes, str]:
+async def _generate_krea(model_id: str, prompt: str, api_key: str, usage_out: dict | None = None) -> tuple[bytes, str]:
     if not api_key:
         raise RuntimeError('Нет API-ключа Krea')
     headers = {'Authorization': f'Bearer {api_key}'}
@@ -104,7 +104,7 @@ async def _generate_krea(model_id: str, prompt: str, api_key: str) -> tuple[byte
             raise RuntimeError('Krea: превышено время ожидания генерации')
 
 
-async def _generate_replicate(model_id: str, prompt: str, api_key: str) -> tuple[bytes, str]:
+async def _generate_replicate(model_id: str, prompt: str, api_key: str, usage_out: dict | None = None) -> tuple[bytes, str]:
     if not api_key:
         raise RuntimeError('Нет API-ключа Replicate')
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
@@ -135,10 +135,12 @@ async def _generate_replicate(model_id: str, prompt: str, api_key: str) -> tuple
     url = output[0] if isinstance(output, list) else output
     if not url:
         raise RuntimeError('Replicate: задание завершено, но результат пуст')
+    if usage_out is not None:
+        usage_out['compute_seconds'] = (data.get('metrics') or {}).get('predict_time')
     return await _download(url)
 
 
-async def _generate_fal(model_id: str, prompt: str, api_key: str) -> tuple[bytes, str]:
+async def _generate_fal(model_id: str, prompt: str, api_key: str, usage_out: dict | None = None) -> tuple[bytes, str]:
     if not api_key:
         raise RuntimeError('Нет API-ключа FAL')
     headers = {'Authorization': f'Key {api_key}', 'Content-Type': 'application/json'}
@@ -169,13 +171,16 @@ async def _generate_fal(model_id: str, prompt: str, api_key: str) -> tuple[bytes
         result = await http_client.get(response_url, headers=headers)
     if result.status_code != 200:
         raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
-    images = result.json().get('images') or []
+    payload = result.json()
+    images = payload.get('images') or []
     if not images:
         raise RuntimeError('FAL: результат не содержит изображений')
+    if usage_out is not None:
+        usage_out['compute_seconds'] = (payload.get('timings') or {}).get('inference')
     return await _download(images[0]['url'])
 
 
-async def _generate_google(model_id: str, prompt: str, api_key: str) -> tuple[bytes, str]:
+async def _generate_google(model_id: str, prompt: str, api_key: str, usage_out: dict | None = None) -> tuple[bytes, str]:
     if not api_key:
         raise RuntimeError('Нет API-ключа Google')
 
@@ -204,13 +209,21 @@ _GENERATORS = {
 }
 
 
-async def _run_job(job_id: str, slug: str, scene_index: int, prompt: str, provider: str, model_id: str, api_key: str) -> None:
+async def _run_job(
+    job_id: str, slug: str, scene_index: int, prompt: str, provider: str, model_id: str, api_key: str,
+    usage_ctx: dict | None = None,
+) -> None:
+    model = f'{provider}:{model_id}'
+    started = time.monotonic()
     generator = _GENERATORS.get(provider)
+    provider_usage: dict = {}
     try:
         if generator is None:
             raise RuntimeError(f'Неизвестный провайдер изображений: {provider or "(не выбран)"}')
-        content, ext = await generator(model_id, prompt, api_key)
+        content, ext = await generator(model_id, prompt, api_key, usage_out=provider_usage)
     except Exception as exc:
+        usage.record(usage_ctx, model=model, kind='image', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=prompt, error=str(exc))
         _jobs[job_id] = {'status': 'failed', 'image': None, 'error': str(exc)}
         return
 
@@ -233,10 +246,16 @@ async def _run_job(job_id: str, slug: str, scene_index: int, prompt: str, provid
             project['updated_at'] = _now()
             storage.save_project(slug, project)
 
+    usage.record(usage_ctx, model=model, kind='image', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000),
+                 units={'images': 1, **provider_usage}, prompt=prompt, response=image['file_path'])
     _jobs[job_id] = {'status': 'completed', 'image': image, 'error': None}
 
 
-def start_jobs(slug: str, scene_index: int, prompt: str, count: int, model: str, settings: dict) -> list[str]:
+def start_jobs(
+    slug: str, scene_index: int, prompt: str, count: int, model: str, settings: dict,
+    usage_ctx: dict | None = None,
+) -> list[str]:
     if count <= 0:
         return []
     provider, _, model_id = (model or '').partition(':')
@@ -246,7 +265,7 @@ def start_jobs(slug: str, scene_index: int, prompt: str, count: int, model: str,
     for _ in range(count):
         job_id = uuid4().hex
         _jobs[job_id] = {'status': 'pending', 'image': None, 'error': None}
-        asyncio.create_task(_run_job(job_id, slug, scene_index, prompt, provider, model_id, api_key))
+        asyncio.create_task(_run_job(job_id, slug, scene_index, prompt, provider, model_id, api_key, usage_ctx))
         job_ids.append(job_id)
     return job_ids
 

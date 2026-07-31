@@ -177,3 +177,86 @@ def test_generate_wish_title_falls_back_on_api_error(monkeypatch):
     title = asyncio.run(text_models.generate_wish_title('добавь больше саксофона', settings))
 
     assert title == text_models.truncate_title('добавь больше саксофона')
+
+
+@pytest.fixture
+def usage_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import usage as usage_module
+    return usage_module
+
+
+def test_openrouter_completion_sends_usage_include_flag(monkeypatch):
+    payload = {'choices': [{'message': {'content': 'Больше саксофона'}}],
+               'usage': {'prompt_tokens': 40, 'completion_tokens': 6, 'total_tokens': 46, 'cost': 0.00042}}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    asyncio.run(text_models._complete_openrouter('openai/gpt-4o-mini', 'key', 'text'))
+
+    assert fake_client.last_call['json']['usage'] == {'include': True}
+
+
+def test_openrouter_completion_records_provider_reported_cost(monkeypatch, usage_ledger):
+    payload = {'choices': [{'message': {'content': 'Больше саксофона'}}],
+               'usage': {'prompt_tokens': 40, 'completion_tokens': 6, 'total_tokens': 46, 'cost': 0.00042}}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    ctx = usage_ledger.context('wish_title', None, {})
+    asyncio.run(text_models._complete_openrouter('openai/gpt-4o-mini', 'key', 'text', ctx))
+
+    rec = usage_ledger.query()['records'][0]
+    assert rec['cost']['source'] == 'provider'
+    assert rec['cost']['amount'] == pytest.approx(0.00042)
+    assert rec['units']['input_tokens'] == 40
+    assert rec['units']['output_tokens'] == 6
+
+
+def test_deepseek_completion_records_cache_hit_tokens(monkeypatch, usage_ledger):
+    payload = {'choices': [{'message': {'content': 'Больше саксофона'}}],
+               'usage': {'prompt_tokens': 100, 'completion_tokens': 20, 'total_tokens': 120,
+                         'prompt_cache_hit_tokens': 60}}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    ctx = usage_ledger.context('wish_title', None, {})
+    asyncio.run(text_models._complete_deepseek('deepseek-chat', 'key', 'text', ctx))
+
+    rec = usage_ledger.query()['records'][0]
+    assert rec['units']['cached_input_tokens'] == 60
+    assert rec['cost']['source'] == 'catalog'
+    assert rec['cost']['amount'] is not None
+
+
+def test_google_completion_records_tokens_from_usage_metadata(monkeypatch, usage_ledger):
+    payload = {'candidates': [{'content': {'parts': [{'text': 'Больше саксофона'}]}}],
+               'usageMetadata': {'promptTokenCount': 30, 'candidatesTokenCount': 5, 'totalTokenCount': 35}}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    ctx = usage_ledger.context('wish_title', None, {})
+    asyncio.run(text_models._complete_google('gemini-2.0-flash-lite', 'key', 'text', ctx))
+
+    rec = usage_ledger.query()['records'][0]
+    assert rec['units']['input_tokens'] == 30
+    assert rec['units']['output_tokens'] == 5
+
+
+def test_generate_wish_title_records_failed_call_even_though_it_falls_back(monkeypatch, usage_ledger):
+    fake_client = _FakeAsyncClient(_FakeResponse(500, text='boom'))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    settings = {'simple_models': {'default': 'google:gemini-2.0-flash-lite'}, 'api_keys': {'google': 'test-key'}}
+    ctx = usage_ledger.context('wish_title', None, settings)
+    title = asyncio.run(text_models.generate_wish_title('добавь больше саксофона', settings, usage_ctx=ctx))
+
+    assert title == text_models.truncate_title('добавь больше саксофона')
+    rec = usage_ledger.query()['records'][0]
+    assert rec['status'] == 'error'
+    assert rec['cost']['amount'] is None

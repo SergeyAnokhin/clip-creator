@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useToast } from './hooks/useToast.js';
 import { useViewport } from './hooks/useViewport.js';
+import { useUsage } from './hooks/useUsage.js';
 import { useSettings } from './hooks/useSettings.js';
 import { useProjects } from './hooks/useProjects.js';
 import { useLyricsStage } from './hooks/useLyricsStage.js';
@@ -10,6 +11,7 @@ import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
 import SettingsScreen from './components/settings/SettingsScreen.jsx';
+import UsageScreen from './components/usage/UsageScreen.jsx';
 import Toast from './components/Toast.jsx';
 import './styles/theme.css';
 
@@ -21,11 +23,13 @@ import './styles/theme.css';
 function App() {
   const [screen, setScreen] = useState('home');
   const [prevScreen, setPrevScreen] = useState('home');
+  const [usageReturnScreen, setUsageReturnScreen] = useState('home');
   const [activeStage, setActiveStage] = useState('lyrics');
 
   const { toast, showToast } = useToast();
   const view = useViewport();
-  const settings = useSettings({ showToast });
+  const usage = useUsage();
+  const settings = useSettings({ showToast, onAiCall: usage.actions.refreshToday });
   const L = settings.L;
 
   const projects = useProjects({ showToast, L });
@@ -36,10 +40,12 @@ function App() {
     activeProject, setActiveProject, updateProject, showToast, L,
     textModelDefault: settings.textModels.default,
     simpleModelDefault: settings.simpleModels.default,
+    onAiCall: usage.actions.refreshToday,
   });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
     imageModels: settings.imageModels, textModels: settings.textModels,
+    onAiCall: usage.actions.refreshToday,
   });
   // Depends on suno's refinement box, so it must be created after it.
   const voice = useVoice({ updateProject, showToast, L, lang: settings.lang, setRefinementText: suno.actions.setRefinementText });
@@ -63,6 +69,11 @@ function App() {
 
   function openSettings() { setPrevScreen(screen); setScreen('settings'); }
   function closeSettings() { setScreen(prevScreen); }
+  // Separate from prevScreen: the pill lives in the Settings header too, so
+  // settings -> usage -> back must return to settings, not overwrite the
+  // screen Settings itself uses to get home.
+  function openUsage() { setUsageReturnScreen(screen); setScreen('usage'); }
+  function closeUsage() { setScreen(usageReturnScreen); }
 
   // ---------- per-stage prop bundles ----------
   const lyricsState = {
@@ -81,6 +92,7 @@ function App() {
     voiceSupported: voice.isSupported,
     wishLibrary: settings.wishLibrary,
     simpleModelFavorites: settings.simpleModels.favorites,
+    modelPrices: usage.priceMap,
     actions: {
       ...suno.actions, startVoice: voice.startVoice,
       saveWishToLibrary: (text) => settings.actions.saveWishToLibrary(text, suno.state.wishModel),
@@ -94,6 +106,7 @@ function App() {
     voiceSupported: voice.isSupported,
     imageModelFavorites: settings.imageModels.favorites,
     textModelFavorites: settings.textModels.favorites,
+    modelPrices: usage.priceMap,
     actions: { ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx) },
   };
 
@@ -113,6 +126,7 @@ function App() {
           onSubmitNewProject={projects.homeActions.submitNewProject}
           onFilterChange={projects.homeActions.setHomeFilter} onSearchChange={projects.homeActions.setHomeSearch}
           onOpenProject={openProject} onDeleteProject={projects.homeActions.deleteProject}
+          usageToday={usage.today} onOpenUsage={openUsage}
         />
       )}
 
@@ -123,6 +137,7 @@ function App() {
           lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
+          usageToday={usage.today} onOpenUsage={openUsage}
         />
       )}
 
@@ -134,9 +149,14 @@ function App() {
           specialTags={settings.specialTags}
           sunoBasePrompt={settings.sunoBasePrompt}
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
-          onClose={closeSettings}
-          actions={settings.actions}
+          pricing={usage.pricing} usageToday={usage.today}
+          onClose={closeSettings} onOpenUsage={openUsage}
+          actions={{ ...settings.actions, savePricingOverrides: usage.actions.savePricingOverrides }}
         />
+      )}
+
+      {screen === 'usage' && (
+        <UsageScreen L={L} usage={usage} onClose={closeUsage} />
       )}
 
       <Toast message={toast} />

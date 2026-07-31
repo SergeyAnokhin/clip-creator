@@ -24,6 +24,14 @@ async function requestForm(path, options) {
 
 const projectPath = (id) => `/api/projects/${encodeURIComponent(id)}`;
 
+/** Builds a query string from a params object, dropping empty/undefined
+ * values so callers can pass optional filters unconditionally. */
+function qs(params) {
+  const entries = Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  if (!entries.length) return '';
+  return `?${entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')}`;
+}
+
 export const mediaUrl = (path) => `${BASE_URL}/media/${path}`;
 
 export const api = {
@@ -45,6 +53,12 @@ export const api = {
   generateSceneStoryboard: (id, body) => request(`${projectPath(id)}/scenes/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getSceneImageJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/jobs/${encodeURIComponent(jobId)}`),
+
+  listUsage: (params) => request(`/api/usage/records${qs(params)}`),
+  usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),
+  usageToday: (tzOffset) => request(`/api/usage/today${qs({ tz_offset: tzOffset })}`),
+  getPricing: () => request('/api/usage/pricing'),
+  putPricingOverrides: (overrides) => request('/api/usage/pricing', { method: 'PUT', body: JSON.stringify({ pricing_overrides: overrides }) }),
 
   uploadReferenceImage: (id, file) => {
     const form = new FormData();

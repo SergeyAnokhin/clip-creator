@@ -10,7 +10,7 @@ const DEFAULT_IMAGE_MODELS = { favorites: [], default: '' };
 /** App settings (language, API keys, default models, Suno meta-tags), loaded
  * from the backend on mount. Owns `lang`, and therefore the `L` dictionary
  * every other hook uses for toast copy. */
-export function useSettings({ showToast }) {
+export function useSettings({ showToast, onAiCall }) {
   const [lang, setLang] = useState('ru');
   const [apiKeys, setApiKeys] = useState({ replicate: '', google: '', fal: '', openrouter: '', deepseek: '', krea: '' });
   const [textModels, setTextModels] = useState(DEFAULT_TEXT_MODELS);
@@ -111,12 +111,13 @@ export function useSettings({ showToast }) {
     setWishLibrary(next);
     api.putSettings({ suno_wish_library: next }).catch(() => {});
   }
-  function saveWishToLibrary(text) {
+  function saveWishToLibrary(text, model) {
     const trimmed = (text || '').trim();
     if (!trimmed) return;
-    api.saveWishToLibrary(trimmed)
+    api.saveWishToLibrary(trimmed, model)
       .then((res) => { setWishLibrary(res.suno_wish_library); showToast(L.toast_saved); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => onAiCall?.());
   }
   function readJSONFile(file) {
     return new Promise((resolve, reject) => {

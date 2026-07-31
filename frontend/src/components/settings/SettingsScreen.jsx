@@ -1,7 +1,10 @@
 import { useRef, useState } from 'react';
 import { ArrowLeft, Download, Trash2, Upload } from 'lucide-react';
 import { api } from '../../api/client.js';
+import { modelPriceMap } from '../../lib/pricing.js';
 import ModelFavorites from './ModelFavorites.jsx';
+import PricingPanel from './PricingPanel.jsx';
+import UsagePill from '../UsagePill.jsx';
 
 function downloadJSON(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -34,12 +37,13 @@ const MODEL_PROVIDERS = [
 // only offered for the image-model favorites panel, not text/simple ones.
 const IMAGE_MODEL_PROVIDERS = [...MODEL_PROVIDERS, { id: 'krea', name: 'Krea AI' }];
 
-const TABS = ['general', 'providers', 'models', 'prompts', 'wishes'];
+const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes'];
 
 export default function SettingsScreen({
   L, lang, apiKeys, textModels, simpleModels, imageModels, specialTags,
   sunoBasePrompt, referenceExamples, wishLibrary,
-  onClose, actions,
+  pricing, usageToday,
+  onClose, onOpenUsage, actions,
 }) {
   const [activeTab, setActiveTab] = useState('general');
   const [newTagDraft, setNewTagDraft] = useState('');
@@ -51,6 +55,7 @@ export default function SettingsScreen({
   const [refreshingImageModels, setRefreshingImageModels] = useState(false);
   const apiKeysFileRef = useRef(null);
   const generalFileRef = useRef(null);
+  const priceMap = modelPriceMap(pricing?.models);
 
   function exportApiKeysFile() {
     downloadJSON('versecraft-api-keys.json', { api_keys: apiKeys });
@@ -75,7 +80,7 @@ export default function SettingsScreen({
 
   const tabLabels = {
     general: L.settings_tab_general, providers: L.settings_tab_providers, models: L.settings_tab_models,
-    prompts: L.settings_tab_prompts, wishes: L.settings_tab_wishes,
+    prices: L.settings_tab_prices, prompts: L.settings_tab_prompts, wishes: L.settings_tab_wishes,
   };
 
   async function refreshModels() {
@@ -113,6 +118,8 @@ export default function SettingsScreen({
           <ArrowLeft size={16} />
         </button>
         <div className="workflow-title">{L.settingsTitle}</div>
+        <div style={{ flex: 1 }} />
+        <UsagePill L={L} today={usageToday} onOpen={onOpenUsage} />
       </div>
 
       <div style={{ flex: 1, padding: '32px 24px' }}>
@@ -223,6 +230,7 @@ export default function SettingsScreen({
                   L={L} providers={MODEL_PROVIDERS}
                   favorites={textModels.favorites} defaultValue={textModels.default}
                   catalog={catalog} refreshing={refreshingModels} onRefresh={refreshModels}
+                  prices={priceMap}
                   onAddFavorite={actions.addTextModelFavorite}
                   onRemoveFavorite={actions.removeTextModelFavorite}
                   onSetDefault={actions.setTextModelDefault}
@@ -236,6 +244,7 @@ export default function SettingsScreen({
                   L={L} providers={MODEL_PROVIDERS}
                   favorites={simpleModels.favorites} defaultValue={simpleModels.default}
                   catalog={catalog} refreshing={refreshingModels} onRefresh={refreshModels}
+                  prices={priceMap}
                   onAddFavorite={actions.addSimpleModelFavorite}
                   onRemoveFavorite={actions.removeSimpleModelFavorite}
                   onSetDefault={actions.setSimpleModelDefault}
@@ -248,12 +257,17 @@ export default function SettingsScreen({
                   L={L} providers={IMAGE_MODEL_PROVIDERS}
                   favorites={imageModels.favorites} defaultValue={imageModels.default}
                   catalog={imageCatalog} refreshing={refreshingImageModels} onRefresh={refreshImageModels}
+                  prices={priceMap}
                   onAddFavorite={actions.addImageModelFavorite}
                   onRemoveFavorite={actions.removeImageModelFavorite}
                   onSetDefault={actions.setImageModelDefault}
                 />
               </div>
             </>
+          )}
+
+          {activeTab === 'prices' && (
+            <PricingPanel L={L} pricing={pricing} onSave={actions.savePricingOverrides} />
           )}
 
           {activeTab === 'prompts' && (
