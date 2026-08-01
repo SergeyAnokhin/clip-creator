@@ -147,7 +147,7 @@ function App() {
           textModels={settings.textModels} simpleModels={settings.simpleModels}
           imageModels={settings.imageModels}
           specialTags={settings.specialTags}
-          sunoBasePrompt={settings.sunoBasePrompt}
+          sunoBasePrompt={settings.sunoBasePrompt} sunoPromptPresets={settings.sunoPromptPresets}
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
           pricing={usage.pricing} usageToday={usage.today}
           onClose={closeSettings} onOpenUsage={openUsage}

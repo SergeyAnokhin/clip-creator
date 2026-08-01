@@ -91,7 +91,12 @@ partial merge server-side, so the frontend can persist e.g. just
   is what `providers/images.py` actually dispatches to a real provider call
   (see `architecture.md`).
 - `suno_base_prompt` — the general "how to adapt for Suno" instructions, sent
-  on every `suno/generate` call that uses Gemini.
+  on every `suno/generate` call that uses Gemini. `GET /api/settings/suno-prompt-presets`
+  (not part of `settings.json` — a read-only, hardcoded list from
+  `suno_prompt_defaults.SUNO_BASE_PROMPT_PRESETS`) offers alternate full-text
+  variants of this prompt to load into the field from Settings, for A/B
+  testing Style-block phrasing (currently: vocal-first vs. canonical
+  genre-first field ordering).
 - `suno_reference_examples` — curated example style+lyrics blocks, sent
   alongside the base prompt as "reference, don't copy verbatim" material.
 - `suno_wish_library` — saved wish snippets for reuse across projects

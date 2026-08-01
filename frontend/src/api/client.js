@@ -46,6 +46,7 @@ export const api = {
   listModels: (provider) => request(`/api/settings/models/${encodeURIComponent(provider)}`),
   listImageModels: (provider) => request(`/api/settings/image-models/${encodeURIComponent(provider)}`),
   getModelsCatalog: () => request('/api/settings/models-catalog'),
+  getSunoPromptPresets: () => request('/api/settings/suno-prompt-presets'),
   saveWishToLibrary: (text, model) => request('/api/settings/wish-library', { method: 'POST', body: JSON.stringify({ text, model }) }),
   updateWishSnippet: (id, patch) => request(`/api/settings/wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 

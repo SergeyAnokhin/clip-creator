@@ -33,7 +33,7 @@ const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes'];
 
 export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, specialTags,
-  sunoBasePrompt, referenceExamples, wishLibrary,
+  sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary,
   pricing, usageToday,
   onClose, onOpenUsage, actions,
 }) {
@@ -323,6 +323,30 @@ export default function SettingsScreen({
                   </button>
                 </div>
               </div>
+
+              {sunoPromptPresets.length > 0 && (
+                <div className="settings-panel">
+                  <div className="settings-panel-label">{L.settings_sunoPromptPresets}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>{L.settings_sunoPromptPresetsHint}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {sunoPromptPresets.map((preset) => (
+                      <div className="settings-row" key={preset.id} style={{ alignItems: 'flex-start' }}>
+                        <div>
+                          <div className="settings-row-name">{preset.name}</div>
+                          <div style={{ fontSize: 12, opacity: 0.7 }}>{preset.description}</div>
+                        </div>
+                        <button
+                          className="btn btn-accent-soft"
+                          style={{ flexShrink: 0 }}
+                          onClick={() => actions.setSunoBasePrompt(preset.prompt)}
+                        >
+                          {L.settings_loadPreset}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="settings-panel">
                 <div className="settings-panel-label">{L.settings_sunoBasePrompt}</div>

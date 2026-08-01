@@ -290,7 +290,14 @@ to least reusable:
    Suno" instructions, editable in Settings. Seeded from
    [`providers/suno_prompt_defaults.py`](../backend/app/providers/suno_prompt_defaults.py)
    (`DEFAULT_SUNO_BASE_PROMPT`), adapted from a prompt the user already used
-   manually with an LLM before this feature existed.
+   manually with an LLM before this feature existed, and rewritten for Suno
+   v5.5 prompting conventions (Style-field ordering/limits, bracket
+   semantics, vocal-tag reliability, Russian stress-mark techniques). The
+   Settings → Suno-промпты tab also offers built-in alternate variants
+   (`SUNO_BASE_PROMPT_PRESETS`, served read-only via
+   `GET /api/settings/suno-prompt-presets`, not part of `settings.json`) that
+   only differ in Style-block field order — a "load preset, edit, save" flow
+   for A/B testing that one open question the source guides disagree on.
 2. `settings.suno_reference_examples` — a handful of curated finished
    style+lyrics examples (also seeded from `suno_prompt_defaults.py`,
    `DEFAULT_REFERENCE_EXAMPLES`), sent as "use as a reference, don't copy

@@ -21,6 +21,7 @@ export function useSettings({ showToast, onAiCall }) {
   const [sunoBasePrompt, setSunoBasePrompt] = useState('');
   const [referenceExamples, setReferenceExamples] = useState([]);
   const [wishLibrary, setWishLibrary] = useState([]);
+  const [sunoPromptPresets, setSunoPromptPresets] = useState([]);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -34,6 +35,7 @@ export function useSettings({ showToast, onAiCall }) {
       setReferenceExamples(s.suno_reference_examples || []);
       setWishLibrary(s.suno_wish_library || []);
     }).catch(() => {});
+    api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
   }, []);
 
   const L = DICT[lang];
@@ -181,7 +183,7 @@ export function useSettings({ showToast, onAiCall }) {
   return {
     lang, L, langLabel: lang === 'ru' ? 'EN' : 'RU',
     apiKeys, textModels, simpleModels, imageModels, specialTags,
-    sunoBasePrompt, referenceExamples, wishLibrary,
+    sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),

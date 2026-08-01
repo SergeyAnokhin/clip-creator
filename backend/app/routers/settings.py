@@ -5,7 +5,9 @@ from fastapi import APIRouter, Body, HTTPException
 
 from .. import storage, usage
 from ..providers import image_models, text_models
-from ..providers.suno_prompt_defaults import DEFAULT_REFERENCE_EXAMPLES, DEFAULT_SUNO_BASE_PROMPT
+from ..providers.suno_prompt_defaults import (
+    DEFAULT_REFERENCE_EXAMPLES, DEFAULT_SUNO_BASE_PROMPT, SUNO_BASE_PROMPT_PRESETS,
+)
 
 router = APIRouter(prefix='/api/settings', tags=['settings'])
 
@@ -98,6 +100,15 @@ def get_models_catalog():
     for the Models/Prices tabs to show immediately on mount instead of an
     empty list until "Refresh models" is pressed."""
     return storage.load_model_catalog()
+
+
+@router.get('/suno-prompt-presets')
+def get_suno_prompt_presets():
+    """Built-in alternate base-prompt variants (see suno_prompt_defaults.py) the
+    Settings -> Suno-промпты tab offers to load into the editable
+    settings.suno_base_prompt, so users can A/B test them - read-only, not
+    stored per-user."""
+    return SUNO_BASE_PROMPT_PRESETS
 
 
 @router.post('/wish-library')
