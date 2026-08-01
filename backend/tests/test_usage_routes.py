@@ -3,6 +3,10 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from app import pricing
+
 
 def _write_shard(rec: dict, ym: str | None = None):
     """Directly appends a ledger record, bypassing usage.record(), so tests
@@ -128,12 +132,15 @@ def test_today_timezone_boundary(client, monkeypatch):
     assert resp_summary_plus3.json()['groups'][0]['key'] == tomorrow
 
 
-def test_get_pricing_includes_known_builtin(client):
+def test_get_pricing_is_empty_with_no_builtins_overrides_or_known_models(client, monkeypatch):
+    # With BUILTIN_PRICING cleared, nothing overridden, and no model catalog
+    # persisted yet, there is nothing to list - this isolates the "empty
+    # catalog" behavior from whatever real prices happen to be builtin.
+    monkeypatch.setattr(pricing, 'BUILTIN_PRICING', {})
     resp = client.get('/api/usage/pricing')
     assert resp.status_code == 200
     body = resp.json()
-    models = {m['model'] for m in body['models']}
-    assert 'google:gemini-2.5-flash' in models
+    assert body['models'] == []
     assert body['overrides'] == {}
 
 
@@ -164,18 +171,29 @@ def test_put_pricing_requires_body_field(client):
 
 
 def test_cost_recomputes_from_current_override_on_read(client):
+    # 'test:unpriced-model' has no builtin price - the record starts
+    # 'unknown', an override afterwards must retroactively price it on the
+    # next read, and changing the override again must update it again,
+    # without touching the stored record.
     _write_shard(_base_record(
+        provider='test', model_id='unpriced-model', model='test:unpriced-model',
         units={'input_tokens': 1_000_000, 'output_tokens': 0},
-        cost={'amount': 0.30, 'currency': 'USD', 'source': 'catalog', 'pricing_version': '2026-07-31'},
     ))
 
     before = client.get('/api/usage/records').json()['records'][0]
-    assert before['cost']['amount'] == 0.30
+    assert before['cost']['amount'] is None
+    assert before['cost']['source'] == 'unknown'
 
     client.put('/api/usage/pricing', json={
-        'pricing_overrides': {'google:gemini-2.5-flash': {'kind': 'text', 'input': 5.0, 'output': 5.0}},
+        'pricing_overrides': {'test:unpriced-model': {'kind': 'text', 'input': 0.30, 'output': 2.50}},
     })
+    first = client.get('/api/usage/records').json()['records'][0]
+    assert first['cost']['amount'] == pytest.approx(0.30)
+    assert first['cost']['source'] == 'catalog'
 
+    client.put('/api/usage/pricing', json={
+        'pricing_overrides': {'test:unpriced-model': {'kind': 'text', 'input': 5.0, 'output': 5.0}},
+    })
     after = client.get('/api/usage/records').json()['records'][0]
-    assert after['cost']['amount'] == 5.0
+    assert after['cost']['amount'] == pytest.approx(5.0)
     assert after['cost']['source'] == 'catalog'

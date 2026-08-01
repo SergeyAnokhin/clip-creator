@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import { DICT } from '../i18n/dict.js';
+import { readJSONFile } from '../lib/download.js';
 
 const DEFAULT_SPECIAL_TAGS = ['[Vocal Interlude]', '[Female vocal interlude]'];
 const DEFAULT_TEXT_MODELS = { favorites: [], default: 'google:gemini-2.5-flash' };
@@ -119,17 +120,11 @@ export function useSettings({ showToast, onAiCall }) {
       .catch(() => {})
       .finally(() => onAiCall?.());
   }
-  function readJSONFile(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try { resolve(JSON.parse(reader.result)); } catch (e) { reject(e); }
-      };
-      reader.onerror = () => reject(reader.error);
-      reader.readAsText(file);
-    });
+  function updateWishSnippet(id, patch) {
+    api.updateWishSnippet(id, patch)
+      .then((res) => { setWishLibrary(res.suno_wish_library); showToast(L.toast_saved); })
+      .catch(() => showToast(L.toast_saveFailed));
   }
-
   async function importApiKeys(file) {
     try {
       const data = await readJSONFile(file);
@@ -192,7 +187,7 @@ export function useSettings({ showToast, onAiCall }) {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings,
       addSpecialTag, removeSpecialTag, setSunoBasePrompt,
-      addReferenceExample, removeReferenceExample, saveWishToLibrary, removeWishSnippet,
+      addReferenceExample, removeReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet,
       addTextModelFavorite, removeTextModelFavorite, setTextModelDefault,
       addSimpleModelFavorite, removeSimpleModelFavorite, setSimpleModelDefault,
       addImageModelFavorite, removeImageModelFavorite, setImageModelDefault,

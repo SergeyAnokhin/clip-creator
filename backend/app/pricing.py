@@ -6,13 +6,31 @@ dependency runs `providers/* -> app.usage -> app.pricing`, never back).
 Models are keyed by the same composite `"{provider}:{model_id}"` string used
 everywhere else in the app (see `settings.text_models` / `image_models`).
 
-!!! THE PRICES IN `BUILTIN_PRICING` ARE UNVERIFIED PLACEHOLDERS !!!
-They were seeded from memory, not from the providers' pricing pages, and
-tariffs change. Every entry is marked `# VERIFY`. A wrong number here silently
-produces a wrong cost column - it does not fail loudly. Check the provider's
-pricing page, fix the number, and bump `PRICING_VERSION`. Because catalog
-costs are recomputed on read (see `usage.query`), correcting a price also
-fixes the historical rows.
+`BUILTIN_PRICING` used to ship pre-filled with prices "seeded from memory" -
+guesses, not looked up - and there was no way to tell those apart from a
+number the user had actually verified; both looked like an equally confident
+price in the UI. It was emptied out for that reason, then repopulated (2026-07-31)
+with the rows below - each one looked up against the provider's current
+pricing page or its own listing on openrouter.ai, with a source URL on the
+row (Google's and OpenRouter's full pricing/model pages were pasted in by
+the user, hence their disproportionate coverage). Every other model still
+comes from
+`settings.pricing_overrides` (entered by hand in Settings -> Prices, or
+imported from a JSON file - see `PricingPanel.jsx`'s Export/Import), so
+`catalog()`'s `source` field is `'builtin'` only for a row that was actually
+checked, `'override'` for a user-entered one, and a model with neither just
+shows as unpriced ("price ?") rather than a plausible-looking wrong number.
+
+If a price is ever added or corrected here, it must be an actually verified
+number with its source cited in a comment, not a recalled one - and
+`PRICING_VERSION` should be bumped, since catalog costs are recomputed on
+every read (see `usage.query`) and a version bump is the only signal the UI
+has that the catalog changed. Prices drift and models get deprecated or
+shut down (`deepseek-chat` / `deepseek-reasoner`, model ids this app used to
+hardcode, are gone entirely as of this pass, replaced by newer generations
+below; several `gemini-2.0-*` and `imagen-4.0-*` ids are still priced but
+flagged deprecated-with-a-shutdown-date on their row) - re-verify rather
+than trust an old comment date.
 
 Price row shapes:
     text : {'kind': 'text',  'input': USD per 1M input tokens,
@@ -32,48 +50,128 @@ CHARS_PER_TOKEN = 4
 _TEXT_KEYS = ('input', 'output')
 _IMAGE_KEYS = ('per_image',)
 
+# Every row below was looked up on 2026-07-31, not recalled - see the source
+# comment on each one. Anything not listed here is genuinely unpriced; add a
+# row only after checking the provider's current page, never from memory.
 BUILTIN_PRICING: dict[str, dict] = {
-    # ---- text: USD per 1M tokens ----
-    'google:gemini-2.5-flash': {'kind': 'text', 'input': 0.30, 'output': 2.50},  # VERIFY
-    'google:gemini-2.5-flash-lite': {'kind': 'text', 'input': 0.10, 'output': 0.40},  # VERIFY
-    'google:gemini-2.5-pro': {'kind': 'text', 'input': 1.25, 'output': 10.00},  # VERIFY (tiered above 200k ctx, flat here)
-    'google:gemini-2.0-flash': {'kind': 'text', 'input': 0.10, 'output': 0.40},  # VERIFY
-    'google:gemini-2.0-flash-lite': {'kind': 'text', 'input': 0.075, 'output': 0.30},  # VERIFY
-    'deepseek:deepseek-chat': {'kind': 'text', 'input': 0.27, 'output': 1.10, 'cached_input': 0.07},  # VERIFY
-    'deepseek:deepseek-reasoner': {'kind': 'text', 'input': 0.55, 'output': 2.19},  # VERIFY
-    'openrouter:openai/gpt-4o-mini': {'kind': 'text', 'input': 0.15, 'output': 0.60},  # VERIFY
-    'openrouter:openai/gpt-4.1-mini': {'kind': 'text', 'input': 0.40, 'output': 1.60},  # VERIFY
-    'openrouter:anthropic/claude-3.5-haiku': {'kind': 'text', 'input': 0.80, 'output': 4.00},  # VERIFY
-    'openrouter:google/gemini-2.5-flash': {'kind': 'text', 'input': 0.30, 'output': 2.50},  # VERIFY
-    'openrouter:deepseek/deepseek-chat': {'kind': 'text', 'input': 0.27, 'output': 1.10},  # VERIFY
-    'openrouter:meta-llama/llama-3.3-70b-instruct': {'kind': 'text', 'input': 0.12, 'output': 0.30},  # VERIFY
-    'replicate:meta/meta-llama-3-70b-instruct': {'kind': 'text', 'input': 0.65, 'output': 2.75},  # VERIFY
-    'replicate:meta/meta-llama-3-8b-instruct': {'kind': 'text', 'input': 0.05, 'output': 0.25},  # VERIFY
-    'replicate:mistralai/mixtral-8x7b-instruct-v0.1': {'kind': 'text', 'input': 0.30, 'output': 1.00},  # VERIFY
-    'replicate:deepseek-ai/deepseek-v3': {'kind': 'text', 'input': 0.38, 'output': 1.53},  # VERIFY
+    # ---- Google Gemini: https://ai.google.dev/gemini-api/docs/pricing
+    # (full page pasted by the user, dated 2026-07-30 UTC on the page itself) ----
+    # Standard-tier rate; where a model lists a separate audio/video rate,
+    # this is the text/image/video number, matching the app's own units
+    # (which never carry an audio modality). Tiered-by-context models use
+    # the <=200k-token rate.
+    'google:gemini-3.6-flash': {'kind': 'text', 'input': 1.50, 'output': 7.50},
+    'google:gemini-3.5-flash': {'kind': 'text', 'input': 1.50, 'output': 9.00},
+    'google:gemini-3.5-flash-lite': {'kind': 'text', 'input': 0.30, 'output': 2.50},
+    'google:gemini-3.1-flash-lite': {'kind': 'text', 'input': 0.25, 'output': 1.50},
+    # Text-output rate; video output is billed separately (17.50/1M) and has
+    # no field in this app's price row shape.
+    'google:gemini-omni-flash-preview': {'kind': 'text', 'input': 1.50, 'output': 9.00},
+    'google:gemini-3.1-pro-preview': {'kind': 'text', 'input': 2.00, 'output': 12.00},
+    # Same rate as gemini-3.1-pro-preview per Google's own pricing page.
+    'google:gemini-3.1-pro-preview-customtools': {'kind': 'text', 'input': 2.00, 'output': 12.00},
+    'google:gemini-3-flash-preview': {'kind': 'text', 'input': 0.50, 'output': 3.00},
+    'google:gemini-2.5-pro': {'kind': 'text', 'input': 1.25, 'output': 10.00},
+    'google:gemini-2.5-flash': {'kind': 'text', 'input': 0.30, 'output': 2.50},
+    'google:gemini-2.5-flash-lite': {'kind': 'text', 'input': 0.10, 'output': 0.40},
+    'google:gemini-2.5-flash-lite-preview-09-2025': {'kind': 'text', 'input': 0.10, 'output': 0.40},
+    # Deprecated, shut down 2026-06-01 per Google's page - still priced in
+    # case older usage-ledger rows reference it.
+    'google:gemini-2.0-flash': {'kind': 'text', 'input': 0.10, 'output': 0.40},
+    'google:gemini-2.0-flash-lite': {'kind': 'text', 'input': 0.075, 'output': 0.30},
+    'google:gemini-robotics-er-2-preview': {'kind': 'text', 'input': 2.00, 'output': 10.00},
+    'google:gemini-robotics-er-2-streaming-preview': {'kind': 'text', 'input': 2.00, 'output': 10.00},
+    'google:gemini-robotics-er-1.6-preview': {'kind': 'text', 'input': 1.00, 'output': 5.00},
+    'google:gemini-2.5-computer-use-preview-10-2025': {'kind': 'text', 'input': 1.25, 'output': 10.00},
 
-    # ---- images: USD per generated image ----
-    # Ids must stay in sync with providers/image_models.CURATED_IMAGE_MODELS;
-    # test_pricing.py::test_curated_image_models_are_priced enforces it.
-    'google:imagen-4.0-generate-001': {'kind': 'image', 'per_image': 0.04},  # VERIFY
-    'google:imagen-4.0-fast-generate-001': {'kind': 'image', 'per_image': 0.02},  # VERIFY
-    'google:imagen-4.0-ultra-generate-001': {'kind': 'image', 'per_image': 0.06},  # VERIFY
-    'replicate:black-forest-labs/flux-schnell': {'kind': 'image', 'per_image': 0.003},  # VERIFY
-    'replicate:black-forest-labs/flux-dev': {'kind': 'image', 'per_image': 0.025},  # VERIFY
-    'replicate:stability-ai/stable-diffusion-3.5-large': {'kind': 'image', 'per_image': 0.065},  # VERIFY
-    'replicate:stability-ai/sdxl': {'kind': 'image', 'per_image': 0.002},  # VERIFY
-    'fal:fal-ai/flux/schnell': {'kind': 'image', 'per_image': 0.003},  # VERIFY
-    'fal:fal-ai/flux/dev': {'kind': 'image', 'per_image': 0.025},  # VERIFY
-    'fal:fal-ai/flux-pro/v1.1': {'kind': 'image', 'per_image': 0.04},  # VERIFY
-    'fal:fal-ai/fast-sdxl': {'kind': 'image', 'per_image': 0.003},  # VERIFY
-    'fal:fal-ai/aura-flow': {'kind': 'image', 'per_image': 0.01},  # VERIFY
-    'krea:krea/krea-2/medium': {'kind': 'image', 'per_image': 0.04},  # VERIFY
-    'krea:krea/krea-2/large': {'kind': 'image', 'per_image': 0.08},  # VERIFY
-    'krea:bfl/flux-1-dev': {'kind': 'image', 'per_image': 0.025},  # VERIFY
-    'krea:google/imagen-4': {'kind': 'image', 'per_image': 0.04},  # VERIFY
-    'krea:google/nano-banana-pro': {'kind': 'image', 'per_image': 0.14},  # VERIFY
-    'krea:ideogram/ideogram-3': {'kind': 'image', 'per_image': 0.08},  # VERIFY
-    'krea:openai/gpt-image-2': {'kind': 'image', 'per_image': 0.19},  # VERIFY
+    # Image-output models: Google bills these per output token, tiered by
+    # resolution: per_image here is the 1024x1024 ("1K") rate, matching how
+    # the app already treats every other image model as a single flat price.
+    'google:gemini-3.1-flash-image': {'kind': 'image', 'per_image': 0.067},
+    'google:gemini-3.1-flash-lite-image': {'kind': 'image', 'per_image': 0.0336},
+    'google:gemini-3-pro-image': {'kind': 'image', 'per_image': 0.134},
+    'google:gemini-2.5-flash-image': {'kind': 'image', 'per_image': 0.039},
+    # Imagen 4.0 - Google's page marks this family deprecated, shutting down
+    # 2026-08-17; still billed at these rates until then.
+    'google:imagen-4.0-generate-001': {'kind': 'image', 'per_image': 0.04},
+    'google:imagen-4.0-fast-generate-001': {'kind': 'image', 'per_image': 0.02},
+    'google:imagen-4.0-ultra-generate-001': {'kind': 'image', 'per_image': 0.06},
+
+    # ---- DeepSeek direct API: https://api-docs.deepseek.com/quick_start/pricing
+    # (confirmed against the page's own "Models & Pricing" table, pasted in
+    # by the user) - deepseek-chat / deepseek-reasoner are gone;
+    # deepseek-v4-flash / deepseek-v4-pro are the current generation. ----
+    # `input` is the cache-miss rate, `cached_input` the cache-hit rate - see
+    # usage._resolved_cost / pricing.compute_cost's cached-token handling.
+    # DeepSeek's page also warns of an upcoming peak/off-peak policy (2x
+    # these rates 9-12 & 14-18 Beijing time, UTC+8) with no effective date
+    # yet - this app has no time-of-day pricing, so costs during peak hours
+    # will read low once that policy goes live; re-check this row then.
+    'deepseek:deepseek-v4-flash': {'kind': 'text', 'input': 0.14, 'output': 0.28, 'cached_input': 0.0028},
+    'deepseek:deepseek-v4-pro': {'kind': 'text', 'input': 0.435, 'output': 0.87, 'cached_input': 0.003625},
+
+    # ---- OpenRouter: openrouter.ai/models (marketplace price, not the same
+    # as the underlying provider's own direct-API price). Rerank/embedding
+    # models (single price, no output column) and audio/video/TTS models
+    # aren't priceable in this app's text/image row shapes, so they're
+    # skipped even where OpenRouter lists a number for them. ----
+    'openrouter:google/gemini-3.6-flash': {'kind': 'text', 'input': 1.50, 'output': 7.50},
+    'openrouter:google/gemini-3.5-flash-lite': {'kind': 'text', 'input': 0.30, 'output': 2.50},
+    'openrouter:deepseek/deepseek-v4-flash': {'kind': 'text', 'input': 0.0896, 'output': 0.1792},
+    'openrouter:deepseek/deepseek-v4-flash-0731': {'kind': 'text', 'input': 0.09, 'output': 0.18},
+    'openrouter:thinkingmachines/inkling-small': {'kind': 'text', 'input': 0.50, 'output': 1.20},
+    'openrouter:qwen/qwen3.7-flash': {'kind': 'text', 'input': 0.03, 'output': 0.13},
+    'openrouter:anthropic/claude-opus-5': {'kind': 'text', 'input': 5.00, 'output': 25.00},
+    'openrouter:anthropic/claude-opus-5-fast': {'kind': 'text', 'input': 10.00, 'output': 50.00},
+    'openrouter:inclusionai/ling-3.0-flash:free': {'kind': 'text', 'input': 0, 'output': 0},
+    'openrouter:poolside/laguna-s-2.1:free': {'kind': 'text', 'input': 0, 'output': 0},
+    # Listed with a "10% off" promo tag on the page - a temporary discount,
+    # not a stable list price; re-check before trusting this long-term.
+    'openrouter:poolside/laguna-s-2.1': {'kind': 'text', 'input': 0.09, 'output': 0.18},
+
+    # ---- Replicate: https://replicate.com/pricing (pasted in by the user -
+    # this is only the page's "billed by input/output" example list, not the
+    # full catalog; most models there are billed by hardware-time instead
+    # and aren't priceable in this app's flat per-token/per-image shape,
+    # so e.g. the meta-llama-3/mixtral/deepseek-v3 text models and the
+    # stability-ai image models in CURATED_MODELS/CURATED_IMAGE_MODELS still
+    # aren't covered here) ----
+    'replicate:black-forest-labs/flux-schnell': {'kind': 'image', 'per_image': 0.003},
+    'replicate:black-forest-labs/flux-dev': {'kind': 'image', 'per_image': 0.025},
+    'replicate:black-forest-labs/flux-1.1-pro': {'kind': 'image', 'per_image': 0.04},
+    'replicate:ideogram-ai/ideogram-v3-quality': {'kind': 'image', 'per_image': 0.09},
+    'replicate:recraft-ai/recraft-v3': {'kind': 'image', 'per_image': 0.04},
+    'replicate:anthropic/claude-3.7-sonnet': {'kind': 'text', 'input': 3.00, 'output': 15.00},
+    'replicate:deepseek-ai/deepseek-r1': {'kind': 'text', 'input': 3.75, 'output': 10.00},
+
+    # ---- FAL: fal.ai's model-comparison pricing page (pasted by the user) +
+    # each model's own page for the exact `fal-ai/...` id (the comparison
+    # page only shows display names) - billed per megapixel, treated as
+    # per-image at FAL's default ~1 output megapixel. That page's video
+    # models (Wan 2.5, Kling 2.5 Turbo Pro, Veo 3, Ovi - billed per second
+    # or per video) aren't priceable in this app's text/image row shapes. ----
+    'fal:fal-ai/flux/dev': {'kind': 'image', 'per_image': 0.025},
+    'fal:fal-ai/bytedance/seedream/v4/text-to-image': {'kind': 'image', 'per_image': 0.03},
+    'fal:fal-ai/flux-pro/kontext': {'kind': 'image', 'per_image': 0.04},
+    'fal:fal-ai/nano-banana': {'kind': 'image', 'per_image': 0.0398},
+    'fal:fal-ai/qwen-image': {'kind': 'image', 'per_image': 0.02},
+
+    # ---- Krea: krea.ai's model list (pasted by the user, "from $X" floor
+    # price used where tiered). Krea has no discovery API - every model is
+    # its own fixed REST path (see image_models.py's module docstring) - so
+    # only rows matching an id already confirmed in
+    # image_models.CURATED_IMAGE_MODELS are added here; the display names on
+    # the pasted page don't reveal the exact path for anything else, and
+    # guessing one risks silently mispricing a different model that happens
+    # to share the guess. 'bfl/flux-1-dev' and 'openai/gpt-image-2' (the
+    # other two curated Krea models) couldn't be matched to a row with
+    # confidence - several "Flux ..." / "ChatGPT ..." rows are plausible
+    # candidates but none is an unambiguous match. ----
+    'krea:krea/krea-2/medium': {'kind': 'image', 'per_image': 0.03},
+    'krea:krea/krea-2/large': {'kind': 'image', 'per_image': 0.06},
+    'krea:google/imagen-4': {'kind': 'image', 'per_image': 0.042},
+    'krea:google/nano-banana-pro': {'kind': 'image', 'per_image': 0.15},
+    'krea:ideogram/ideogram-3': {'kind': 'image', 'per_image': 0.063},
 }
 
 

@@ -37,13 +37,15 @@ export function estimateCost(price, { inputTokens = 0, outputTokens = 0, images 
 }
 
 /** Short label for a model picker option / favorites row, e.g.
- * "$0.30 / $2.50 за 1M" or "$0.025 / изобр." Falls back to `L.price_unknown`
+ * "$0.30/$2.50" or "$0.025 за кадр" - text prices are always per 1M tokens,
+ * which is obvious enough not to spell out; the image unit isn't, so it
+ * keeps its `L.price_perImage` suffix. Falls back to `L.price_unknown`
  * (e.g. "цена ?") when the model has no price entry. */
 export function priceLabel(price, L) {
   if (!price) return L.price_unknown;
   if (price.kind === 'text') {
     if (price.input == null || price.output == null) return L.price_unknown;
-    return `$${trimZeros(price.input)}/$${trimZeros(price.output)} ${L.price_per1M}`;
+    return `$${trimZeros(price.input)}/$${trimZeros(price.output)}`;
   }
   if (price.kind === 'image') {
     if (price.per_image == null) return L.price_unknown;

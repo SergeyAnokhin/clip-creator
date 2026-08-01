@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Plus, RotateCcw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Download, Plus, RotateCcw, Upload } from 'lucide-react';
+import { downloadJSON, readJSONFile } from '../../lib/download.js';
 
 function toNum(v) {
   const n = parseFloat(v);
@@ -131,6 +132,8 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
   const [saving, setSaving] = useState(false);
   const [providerFilter, setProviderFilter] = useState('');
   const [query, setQuery] = useState('');
+  const [importStatus, setImportStatus] = useState('');
+  const importFileRef = useRef(null);
 
   const allRows = pricing?.models || [];
   const overrides = pricing?.overrides || {};
@@ -152,6 +155,65 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
   }
   function addRow(model, patch) {
     setDrafts((prev) => ({ ...prev, [model]: patch }));
+  }
+
+  /** Exports the full saved catalog (every model the app has ever seen, priced
+   * or not) so it can be handed to external research and re-imported once
+   * the gaps are filled. Unsaved edits in `drafts` are not included - save
+   * first if they should be part of the export. */
+  function exportPrices() {
+    const models = {};
+    for (const row of allRows) {
+      models[row.model] = row.kind === 'text'
+        ? { kind: 'text', input: row.input, output: row.output, ...(row.cached_input != null ? { cached_input: row.cached_input } : {}) }
+        : { kind: 'image', per_image: row.per_image };
+    }
+    downloadJSON('versecraft-model-prices.json', {
+      pricing_version: pricing?.pricing_version,
+      currency: pricing?.currency,
+      exported_at: new Date().toISOString(),
+      models,
+    });
+  }
+
+  /** Imports a `{models: {composite: {kind, input, output, per_image}}}` file
+   * (the shape `exportPrices` produces) as pending overrides - staged into
+   * `drafts` like any manual edit, so they still need "Save" to persist.
+   * Rows with a missing/invalid price (e.g. still-unresearched placeholders)
+   * are counted but left unset rather than guessed. */
+  async function handleImportFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const data = await readJSONFile(file);
+      const models = (data && typeof data === 'object' && data.models) || data || {};
+      const patches = {};
+      let applied = 0;
+      let skipped = 0;
+      for (const [model, row] of Object.entries(models)) {
+        if (!model.includes(':') || !row || typeof row !== 'object') { skipped++; continue; }
+        if (row.kind === 'text') {
+          const input = toNum(row.input);
+          const output = toNum(row.output);
+          if (input === undefined || output === undefined) { skipped++; continue; }
+          const cached = toNum(row.cached_input);
+          patches[model] = { kind: 'text', input, output, ...(cached !== undefined ? { cached_input: cached } : {}) };
+          applied++;
+        } else if (row.kind === 'image') {
+          const perImage = toNum(row.per_image);
+          if (perImage === undefined) { skipped++; continue; }
+          patches[model] = { kind: 'image', per_image: perImage };
+          applied++;
+        } else {
+          skipped++;
+        }
+      }
+      setDrafts((prev) => ({ ...prev, ...patches }));
+      setImportStatus(`${L.settings_pricingImportApplied}: ${applied}, ${L.settings_pricingImportSkipped}: ${skipped}`);
+    } catch {
+      setImportStatus(L.toast_importFailed);
+    }
   }
 
   async function save() {
@@ -182,6 +244,23 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
       <div className="settings-panel-label">{L.settings_pricing}</div>
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>
         {L.settings_pricingVerifyWarning} ({pricing?.pricing_version})
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className="btn btn-accent-soft" onClick={exportPrices}>
+          <Download size={13} /> {L.settings_exportBtn}
+        </button>
+        <button className="btn btn-accent-soft" onClick={() => importFileRef.current?.click()}>
+          <Upload size={13} /> {L.settings_importBtn}
+        </button>
+        <input
+          ref={importFileRef}
+          type="file"
+          accept="application/json"
+          style={{ display: 'none' }}
+          onChange={handleImportFile}
+        />
+        {importStatus && <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{importStatus}</span>}
       </div>
 
       {!!providers?.length && (

@@ -82,3 +82,49 @@ export function useVoice({ updateProject, showToast, L, lang, setRefinementText 
 
   return { recordingKind, recordingTarget, recordingSeconds, startVoice, isSupported: isVoiceInputSupported };
 }
+
+/** Lighter-weight dictation for a single standalone text field (no
+ * `project`/`refinement` scope needed) - e.g. the Settings wish-library
+ * add/edit inputs. `fieldId` just identifies which field is "recording" for
+ * UI purposes; the caller decides how to merge the transcript into its own
+ * state via `onTranscript`. */
+export function useFieldVoice({ showToast, L, lang }) {
+  const [recordingField, setRecordingField] = useState(null);
+  const recognitionRef = useRef(null);
+
+  useEffect(() => () => recognitionRef.current?.stop(), []);
+
+  function startFieldVoice(fieldId, onTranscript) {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor) return;
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = BCP47_BY_LANG[lang] || 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setRecordingField(fieldId);
+    recognition.onresult = (event) => {
+      onTranscript(event.results[0][0].transcript);
+      showToast(L.toast_voice);
+    };
+    recognition.onerror = (event) => {
+      if (event.error === 'not-allowed') showToast(L.toast_voice_denied);
+      else if (event.error === 'no-speech') showToast(L.toast_voice_no_speech);
+      else showToast(L.toast_voice_error);
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setRecordingField(null);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  }
+
+  return { recordingField, startFieldVoice, isSupported: isVoiceInputSupported };
+}

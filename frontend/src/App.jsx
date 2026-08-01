@@ -143,7 +143,7 @@ function App() {
 
       {screen === 'settings' && (
         <SettingsScreen
-          L={L} lang={settings.lang} apiKeys={settings.apiKeys}
+          L={L} lang={settings.lang} showToast={showToast} apiKeys={settings.apiKeys}
           textModels={settings.textModels} simpleModels={settings.simpleModels}
           imageModels={settings.imageModels}
           specialTags={settings.specialTags}

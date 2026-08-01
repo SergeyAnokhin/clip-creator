@@ -128,3 +128,30 @@ async def add_wish(body: dict = Body(...)):
     settings['suno_wish_library'] = wish_library
     storage.save_settings(settings)
     return {'suno_wish_library': wish_library, 'wish': wish}
+
+
+@router.patch('/wish-library/{wish_id}')
+def update_wish(wish_id: str, body: dict = Body(...)):
+    """Manual edit of a saved wish's title and/or text (e.g. after the
+    auto-generated title from `add_wish` needs a correction) - no LLM call,
+    so no usage tracking here unlike `add_wish`."""
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    wish_library = _normalize_wish_library(settings.get('suno_wish_library', []))
+    wish = next((w for w in wish_library if w['id'] == wish_id), None)
+    if wish is None:
+        raise HTTPException(404, 'Wish not found')
+
+    if 'title' in body:
+        title = (body.get('title') or '').strip()
+        if not title:
+            raise HTTPException(422, 'title is required')
+        wish['title'] = title
+    if 'text' in body:
+        text = (body.get('text') or '').strip()
+        if not text:
+            raise HTTPException(422, 'text is required')
+        wish['text'] = text
+
+    settings['suno_wish_library'] = wish_library
+    storage.save_settings(settings)
+    return {'suno_wish_library': wish_library, 'wish': wish}

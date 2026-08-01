@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { estimateCost, formatCost, formatTokens, modelPriceMap, priceLabel } from './pricing.js';
 
-const L = { price_per1M: 'за 1M', price_perImage: 'изобр.', price_unknown: 'цена ?' };
+const L = { price_perImage: 'изобр.', price_unknown: 'цена ?' };
 
 describe('formatCost', () => {
   it('renders the unknown label for null/undefined', () => {
@@ -61,7 +61,7 @@ describe('estimateCost', () => {
 
 describe('priceLabel', () => {
   it('formats a text price', () => {
-    expect(priceLabel({ kind: 'text', input: 0.3, output: 2.5 }, L)).toBe('$0.3/$2.5 за 1M');
+    expect(priceLabel({ kind: 'text', input: 0.3, output: 2.5 }, L)).toBe('$0.3/$2.5');
   });
 
   it('formats an image price', () => {

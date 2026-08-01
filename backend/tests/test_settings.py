@@ -172,3 +172,39 @@ def test_add_wish_deduplicates_identical_text(client):
 
     assert first['wish']['id'] == second['wish']['id']
     assert len(second['suno_wish_library']) == 1
+
+
+def test_update_wish_edits_title_and_text(client):
+    wish = client.post('/api/settings/wish-library', json={'text': 'добавь больше саксофона'}).json()['wish']
+
+    resp = client.patch(f'/api/settings/wish-library/{wish["id"]}', json={'title': 'Саксофон', 'text': 'ещё больше саксофона'})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['wish']['id'] == wish['id']
+    assert body['wish']['title'] == 'Саксофон'
+    assert body['wish']['text'] == 'ещё больше саксофона'
+
+    saved = client.get('/api/settings').json()['suno_wish_library']
+    assert saved == [body['wish']]
+
+
+def test_update_wish_partial_body_only_changes_given_field(client):
+    wish = client.post('/api/settings/wish-library', json={'text': 'добавь больше саксофона'}).json()['wish']
+
+    resp = client.patch(f'/api/settings/wish-library/{wish["id"]}', json={'title': 'Новый заголовок'})
+    assert resp.status_code == 200
+    body = resp.json()['wish']
+    assert body['title'] == 'Новый заголовок'
+    assert body['text'] == 'добавь больше саксофона'
+
+
+def test_update_wish_rejects_blank_text(client):
+    wish = client.post('/api/settings/wish-library', json={'text': 'добавь больше саксофона'}).json()['wish']
+
+    resp = client.patch(f'/api/settings/wish-library/{wish["id"]}', json={'text': '  '})
+    assert resp.status_code == 422
+
+
+def test_update_wish_unknown_id_returns_404(client):
+    resp = client.patch('/api/settings/wish-library/does-not-exist', json={'title': 'x'})
+    assert resp.status_code == 404

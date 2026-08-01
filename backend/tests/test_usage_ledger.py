@@ -16,6 +16,8 @@ def test_record_writes_one_jsonl_line(usage):
     usage.record(ctx, model='google:gemini-2.5-flash', kind='text', status='ok', duration_ms=120,
                  units={'input_tokens': 100, 'output_tokens': 50}, prompt='hello', response='world')
 
+    # google:gemini-2.5-flash has a real builtin price (see pricing.py), so
+    # this also checks the record's cost gets computed, not just stored.
     result = usage.query()
     assert result['total'] == 1
     rec = result['records'][0]
@@ -169,6 +171,8 @@ def test_unknown_cost_calls_do_not_contribute_to_sum(usage):
     usage.record(ctx, model='google:gemini-2.5-flash', kind='text', status='ok', duration_ms=1,
                  units={'input_tokens': 1_000_000, 'output_tokens': 0})
 
+    # google:gemini-2.5-flash has a real builtin price (see pricing.py), so
+    # only the truly unpriced model counts as unknown.
     totals = usage.query()['totals']
     assert totals['unknown_cost_calls'] == 1
     assert totals['cost'] == pytest.approx(0.30)
@@ -179,6 +183,7 @@ def test_recompute_on_read_reflects_new_override(usage):
     usage.record(ctx, model='google:gemini-2.5-flash', kind='text', status='ok', duration_ms=1,
                  units={'input_tokens': 1_000_000, 'output_tokens': 0})
 
+    # google:gemini-2.5-flash has a real builtin price of 0.30/2.50 (see pricing.py).
     stock = usage.query()['records'][0]
     assert stock['cost']['amount'] == pytest.approx(0.30)
 

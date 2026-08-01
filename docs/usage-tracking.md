@@ -124,11 +124,24 @@ everywhere else, text rows as `{kind: 'text', input, output, cached_input?}`
 (USD per 1M tokens), image rows as `{kind: 'image', per_image}` (USD per
 generated image).
 
-**These built-in prices are placeholders, seeded from memory, not verified
-against each provider's current pricing page.** Every entry is marked
-`# VERIFY` in the source. Verify and correct them, then bump
-`pricing.PRICING_VERSION` — because catalog costs are recomputed on read,
-correcting a price fixes history too, not just future calls.
+**`BUILTIN_PRICING` only holds prices that were actually looked up, cited by
+source.** It used to come pre-filled with prices "seeded from memory" rather
+than looked up, and there was no way to tell a guess apart from a number the
+user had actually verified in the UI — both showed up as an equally
+confident price. It was emptied out for that reason, then repopulated
+(2026-07-31) with a small set of rows — the app's own default models plus a
+few common ones per provider — each checked against the provider's current
+pricing page or its openrouter.ai listing, with the source URL in a comment
+on the row; see the module docstring in `pricing.py` for the full list and
+caveats (e.g. `google:gemini-3.5-flash-lite`'s price was sourced via its
+OpenRouter listing rather than Google's own page). Everything else still
+comes from `settings.pricing_overrides`, entered by hand in Settings → Prices
+or imported from a JSON file (see "Pricing export/import" below); `source` in
+the catalog is `'builtin'` for a verified hardcoded row, `'override'` for a
+user-entered one, and a model with neither just shows as unpriced. If a price
+is ever added or corrected in `BUILTIN_PRICING`, bump `pricing.PRICING_VERSION`
+— because catalog costs are recomputed on read, that also fixes history, not
+just future calls.
 
 Resolution order in `pricing.get_price(model, overrides)`:
 
@@ -173,8 +186,11 @@ ones someone has already priced.
 4. Pull `units` from wherever the provider's response puts its token/image
    counts (see the table below); leave fields the response doesn't have as
    `None`/absent rather than guessing.
-5. Add a row to `pricing.BUILTIN_PRICING` for any new model id, or accept
-   that it shows "price unknown" until someone does.
+5. Leave the model unpriced ("price unknown" in the UI) until a real price is
+   added — via a `settings.pricing_overrides` entry (manual or imported) for
+   day-to-day use, or a cited, verified row in `pricing.BUILTIN_PRICING` if
+   it's worth hardcoding app-wide (see that module's docstring). Never a
+   number typed in from memory, in either place.
 
 ### Where each provider's usage fields live (as of 2026-07)
 
@@ -211,8 +227,8 @@ catalog lookups, and the Settings refresh button fires several at once.
 | [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
 | [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared "spend today" pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header |
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |
-| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (built-in + overrides + unpriced catalog-only rows) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), and a form for pricing a model not yet in the catalog |
-| `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50 за 1M`, `· $0.04 за кадр`, or `price ?`). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
+| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog, and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
+| `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50`, `· $0.04 за кадр`, or `price ?` — the token price needs no unit suffix since "per 1M" is the only unit used app-wide, but the image price keeps `L.price_perImage` since that unit isn't obvious). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
 
 **Navigation note.** The Usage screen is reachable from all three top-level
 screens (home/workflow/settings), including Settings itself. `App.jsx` keeps
@@ -226,6 +242,25 @@ passed as `onAiCall` into `useSunoStage`, `useScenesStage`, and `useSettings`,
 and called in the `finally` of `generateSuno`, `generateStoryboard`,
 `generateSceneImages`, and `saveWishToLibrary`.
 
+**Pricing export/import.** The Prices tab's Export button downloads the
+*saved* catalog (`pricing.models`, i.e. `GET /api/usage/pricing`'s merged
+view — overrides + unpriced catalog-only placeholders, ignoring any unsaved
+local edits) as `versecraft-model-prices.json`:
+`{pricing_version, currency, exported_at, models: {"provider:model_id":
+{kind, input, output, cached_input?} | {kind, per_image}}}`. Unpriced rows
+are exported with `null` price fields, which is the point — the file is
+meant to be handed to an external research pass (a model that can look up
+current provider pricing) that fills in the missing numbers, then
+re-imported. Import reads the same shape (or a bare `{composite: row}` map
+without the wrapper) and stages every row with a valid `kind` + numeric
+price as a pending override in the panel's local `drafts` — same as a
+manual edit, so it still needs "Save" to persist via `PUT
+/api/usage/pricing`. Rows that are missing, malformed, or still carry `null`
+prices are skipped and counted in the status line rather than guessed.
+Shared file-IO helpers (`downloadJSON`/`readJSONFile`) live in
+[`lib/download.js`](../frontend/src/lib/download.js), also used by the
+Settings "Backup" panel's API-keys/general-settings export/import.
+
 ## Known gaps / not implemented
 
 - `providers/scenes.py` is still a non-AI stub; it accepts `usage_ctx` (so
@@ -233,11 +268,13 @@ and called in the `finally` of `generateSuno`, `generateStoryboard`,
   the "no network call, nothing to bill" rule.
 - OpenRouter's `/models` `pricing` field is not yet auto-imported into the
   catalog — it's fetched by `text_models._list_openrouter` for the model list
-  but the price isn't picked up from there. Doing so would remove the need
-  for a handful of the placeholder `openrouter:*` rows in `BUILTIN_PRICING`.
+  but the price isn't picked up from there. Doing so would save having to
+  price OpenRouter models by hand or via the Export/Import round-trip.
 - No automatic ledger pruning. Growth is small (~450 bytes/record; a few
   hundred KB per month of typical use), and month-sharded files can be
   deleted by hand if ever needed — there is no `DELETE` route for this.
 - `settings.pricing_overrides` is not included in the Settings screen's
-  "Backup" export/import — it's saved through its own `PUT
-  /api/usage/pricing`, not the general `PUT /api/settings`.
+  general "Backup" export/import (General/API-keys tabs) — it's saved
+  through its own `PUT /api/usage/pricing`, not the general `PUT
+  /api/settings`. It has its own Export/Import pair on the Prices tab
+  instead (see "Pricing export/import" above).

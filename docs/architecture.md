@@ -261,6 +261,15 @@ last (it writes into the Suno refinement box, so it depends on `suno`).
   `L.toast_voice_no_speech` / `L.toast_voice_error`).
 - **Cleanup:** the hook's `useEffect` calls `.stop()` on unmount so a
   navigation away never leaves a live mic connection behind.
+- **`useFieldVoice`** (same file) is a `project`-independent sibling for
+  standalone fields that aren't part of the lyrics/Suno/scenes state -
+  currently the Settings → Wishes tab's new-wish input and the title/text
+  fields of an in-place wish edit. Same recognition setup and error toasts,
+  but keyed by a caller-chosen `fieldId` string (`recordingField`) instead of
+  `kind`/`target`, and the transcript is handed back to the caller via an
+  `onTranscript(transcript)` callback rather than a fixed set of built-in
+  targets - `SettingsScreen.jsx` decides itself whether to replace (title) or
+  append (text/draft) the field's current value.
 
 **Adding voice input to a new field** follows the same shape every time:
 gate the mic button on a `voiceSupported` prop threaded down from
@@ -295,8 +304,14 @@ to least reusable:
 `settings.suno_wish_library` is a separate, flat list of saved wish snippets
 (free text) the user can re-apply to *any* project's refinement box — distinct
 from `project.refinement_comments`, which is just the per-project history of
-wishes already applied. Saving to the library persists immediately (a partial
-`PUT /api/settings`); it does not require visiting the Settings screen.
+wishes already applied. Saving to the library persists immediately (its own
+`POST /api/settings/wish-library`, not a `PUT /api/settings`); it does not
+require visiting the Settings screen. Each entry also has an auto-generated
+`title` (see `generate_wish_title` below) so the Settings → Wishes tab can
+show a scannable list instead of raw text; both `title` and `text` can be
+corrected later from that tab (`PATCH /api/settings/wish-library/{id}`,
+`SettingsScreen.jsx`'s inline edit mode), by typing or by voice
+(`useFieldVoice`, see "Voice input" above).
 
 ## Conventions and gotchas
 
@@ -325,9 +340,14 @@ wishes already applied. Saving to the library persists immediately (a partial
   full assembled prompt (which is mostly boilerplate) — see
   [usage-tracking.md](usage-tracking.md). Don't treat the ledger as a full
   audit log of exact request/response bodies.
-- **Built-in AI prices are unverified placeholders** (`pricing.py`,
-  `# VERIFY` comments) — check them against each provider's pricing page
-  before trusting a cost total, or override them in Settings → Prices.
+- **Most AI prices are not set by default.** `pricing.BUILTIN_PRICING`
+  (`pricing.py`) only holds source-cited rows that were actually looked up
+  (Google and OpenRouter are well covered since their full pricing/model
+  pages were pasted in for verification; other providers only have a handful)
+  — anything else has a cost total of `null`/"unknown" until a price is
+  entered in Settings → Prices (by hand, or via the Prices tab's
+  Export/Import round trip through an external pricing lookup); see
+  [usage-tracking.md](usage-tracking.md).
 
 ## Testing
 

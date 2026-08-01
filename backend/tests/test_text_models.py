@@ -1,5 +1,6 @@
 import pytest
 
+from app import pricing
 from app.providers import text_models
 
 
@@ -216,6 +217,13 @@ def test_openrouter_completion_records_provider_reported_cost(monkeypatch, usage
 
 
 def test_deepseek_completion_records_cache_hit_tokens(monkeypatch, usage_ledger):
+    # 'deepseek-chat' isn't a real priced model (see pricing.BUILTIN_PRICING) -
+    # a temp entry here is what makes this a test of "cached tokens get
+    # costed", not "unknown", independent of what's actually priced.
+    monkeypatch.setitem(
+        pricing.BUILTIN_PRICING, 'deepseek:deepseek-chat',
+        {'kind': 'text', 'input': 0.27, 'output': 1.10, 'cached_input': 0.07},
+    )
     payload = {'choices': [{'message': {'content': 'Больше саксофона'}}],
                'usage': {'prompt_tokens': 100, 'completion_tokens': 20, 'total_tokens': 120,
                          'prompt_cache_hit_tokens': 60}}

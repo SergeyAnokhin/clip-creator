@@ -1,20 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2, Upload } from 'lucide-react';
 import { api } from '../../api/client.js';
 import { modelPriceMap } from '../../lib/pricing.js';
+import { downloadJSON } from '../../lib/download.js';
+import { useFieldVoice } from '../../hooks/useVoice.js';
 import ModelFavorites from './ModelFavorites.jsx';
 import PricingPanel from './PricingPanel.jsx';
 import UsagePill from '../UsagePill.jsx';
-
-function downloadJSON(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 const API_KEY_ROWS = [
   { key: 'replicate', name: 'Replicate' },
@@ -40,7 +32,7 @@ const IMAGE_MODEL_PROVIDERS = [...MODEL_PROVIDERS, { id: 'krea', name: 'Krea AI'
 const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes'];
 
 export default function SettingsScreen({
-  L, lang, apiKeys, textModels, simpleModels, imageModels, specialTags,
+  L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, specialTags,
   sunoBasePrompt, referenceExamples, wishLibrary,
   pricing, usageToday,
   onClose, onOpenUsage, actions,
@@ -49,6 +41,10 @@ export default function SettingsScreen({
   const [newTagDraft, setNewTagDraft] = useState('');
   const [newExampleDraft, setNewExampleDraft] = useState('');
   const [newWishDraft, setNewWishDraft] = useState('');
+  const [editingWishId, setEditingWishId] = useState(null);
+  const [editWishTitle, setEditWishTitle] = useState('');
+  const [editWishText, setEditWishText] = useState('');
+  const wishVoice = useFieldVoice({ showToast, L, lang });
   const [catalog, setCatalog] = useState({});
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [imageCatalog, setImageCatalog] = useState({});
@@ -86,6 +82,22 @@ export default function SettingsScreen({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (file) actions.importGeneralSettings(file);
+  }
+
+  function startEditWish(wish) {
+    setEditingWishId(wish.id);
+    setEditWishTitle(wish.title);
+    setEditWishText(wish.text);
+  }
+  function cancelEditWish() {
+    setEditingWishId(null);
+  }
+  function saveEditWish() {
+    const title = editWishTitle.trim();
+    const text = editWishText.trim();
+    if (!title || !text) return;
+    actions.updateWishSnippet(editingWishId, { title, text });
+    setEditingWishId(null);
   }
 
   const tabLabels = {
@@ -361,14 +373,64 @@ export default function SettingsScreen({
               <div className="settings-panel-label">{L.settings_wishLibrary}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {wishLibrary.map((wish) => (
-                  <div className="settings-row" key={wish.id} title={wish.text}>
-                    <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {wish.title}
-                    </span>
-                    <button className="icon-btn icon-btn-danger" onClick={() => actions.removeWishSnippet(wish.id)}>
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
+                  editingWishId === wish.id ? (
+                    <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                        <input
+                          className="field"
+                          value={editWishTitle}
+                          onChange={(e) => setEditWishTitle(e.target.value)}
+                          placeholder={L.settings_wishLibraryTitleLabel}
+                          autoFocus
+                        />
+                        {wishVoice.isSupported && (
+                          <button
+                            className={`icon-btn${wishVoice.recordingField === `wish-title-${wish.id}` ? ' icon-btn-recording' : ''}`}
+                            style={{ width: 38, height: 38, flexShrink: 0 }}
+                            title={L.voiceEdit}
+                            onClick={() => wishVoice.startFieldVoice(`wish-title-${wish.id}`, (t) => setEditWishTitle(t))}
+                          >
+                            {wishVoice.recordingField === `wish-title-${wish.id}` ? <MicOff size={15} /> : <Mic size={15} />}
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                        <textarea
+                          className="suno-textarea"
+                          style={{ minHeight: 70, flex: 1 }}
+                          value={editWishText}
+                          onChange={(e) => setEditWishText(e.target.value)}
+                          placeholder={L.settings_wishLibraryTextLabel}
+                        />
+                        {wishVoice.isSupported && (
+                          <button
+                            className={`icon-btn${wishVoice.recordingField === `wish-text-${wish.id}` ? ' icon-btn-recording' : ''}`}
+                            style={{ width: 38, height: 38, flexShrink: 0 }}
+                            title={L.voiceEdit}
+                            onClick={() => wishVoice.startFieldVoice(`wish-text-${wish.id}`, (t) => setEditWishText((prev) => (prev ? `${prev}\n${t}` : t)))}
+                          >
+                            {wishVoice.recordingField === `wish-text-${wish.id}` ? <MicOff size={15} /> : <Mic size={15} />}
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={saveEditWish}>{L.save}</button>
+                        <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditWish}>{L.cancel}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="settings-row" key={wish.id} title={wish.text}>
+                      <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {wish.title}
+                      </span>
+                      <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.settings_wishLibraryEdit} onClick={() => startEditWish(wish)}>
+                        <Pencil size={13} />
+                      </button>
+                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeWishSnippet(wish.id)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )
                 ))}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
@@ -376,8 +438,18 @@ export default function SettingsScreen({
                   className="field"
                   value={newWishDraft}
                   onChange={(e) => setNewWishDraft(e.target.value)}
-                  placeholder={L.settings_wishLibraryPlaceholder}
+                  placeholder={wishVoice.recordingField === 'wish-draft' ? L.listening : L.settings_wishLibraryPlaceholder}
                 />
+                {wishVoice.isSupported && (
+                  <button
+                    className={`icon-btn${wishVoice.recordingField === 'wish-draft' ? ' icon-btn-recording' : ''}`}
+                    style={{ width: 38, height: 38, flexShrink: 0 }}
+                    title={L.voiceEdit}
+                    onClick={() => wishVoice.startFieldVoice('wish-draft', (t) => setNewWishDraft((prev) => (prev ? `${prev} ${t}` : t)))}
+                  >
+                    {wishVoice.recordingField === 'wish-draft' ? <MicOff size={15} /> : <Mic size={15} />}
+                  </button>
+                )}
                 <button
                   className="btn btn-accent-soft"
                   onClick={() => { actions.saveWishToLibrary(newWishDraft); setNewWishDraft(''); }}
