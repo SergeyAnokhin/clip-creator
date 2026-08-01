@@ -32,7 +32,7 @@ from uuid import uuid4
 
 from . import pricing, storage
 
-TASKS = ('suno_generate', 'wish_title', 'scene_storyboard', 'scene_image')
+TASKS = ('suno_generate', 'wish_refine', 'wish_title', 'scene_storyboard', 'scene_image')
 GROUP_KEYS = ('project', 'task', 'model', 'provider', 'day')
 PREVIEW_LIMIT = 300
 

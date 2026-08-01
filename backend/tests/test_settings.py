@@ -135,7 +135,9 @@ def test_add_wish_model_override_is_used_but_not_persisted(client, monkeypatch):
     class _FakeResponse:
         status_code = 200
         def json(self):
-            return {'candidates': [{'content': {'parts': [{'text': 'Заголовок из override'}]}}]}
+            return {'candidates': [{'content': {'parts': [{
+                'text': '===WISH===\nсделай медленнее\n===TITLE===\nЗаголовок из override',
+            }]}}]}
 
     class _FakeAsyncClient:
         async def __aenter__(self):

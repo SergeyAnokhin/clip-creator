@@ -130,9 +130,9 @@ async def add_wish(body: dict = Body(...)):
         **settings, 'simple_models': {**settings.get('simple_models', {}), 'default': model},
     }
     usage_ctx = usage.context('wish_title', None, title_settings)
-    title = await text_models.generate_wish_title(text, title_settings, usage_ctx=usage_ctx)
+    result = await text_models.clean_wish_and_title(text, title_settings, usage_ctx=usage_ctx)
     wish = {
-        'id': uuid4().hex[:8], 'title': title, 'text': text,
+        'id': uuid4().hex[:8], 'title': result['title'], 'text': result['clean_text'],
         'created_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
     }
     wish_library = [*wish_library, wish]

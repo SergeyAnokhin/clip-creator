@@ -89,9 +89,13 @@ without knowing whether the result is canned or real. Keys come from
     string. This keeps tests and no-key setups working unchanged, and is also
     the current (documented) limitation for Replicate/FAL/OpenRouter as Suno
     text-generation providers — only Google is really wired.
-  - `refine` stays a **local, no-network** string concatenation — the user's
-    "wish" is folded into `skill_prompt` there, and only actually reaches an
-    LLM the next time `generate` runs.
+  - `refine` first runs the user's free-text "wish" through
+    `text_models.clean_wish` (tidies up voice-dictated rambling/repetition via
+    `settings.simple_models.default` — falls back to the wish verbatim if no
+    simple model/key is configured), then folds the cleaned result into
+    `skill_prompt` as a plain "Additionally, …" sentence. The cleaned text
+    (not the raw input) is what's returned and what gets appended to
+    `project.refinement_comments`.
   - a generation failure (bad key, non-200, unparsable Gemini reply) is
     surfaced by the router as `HTTPException(502, ...)`, not a silent stub
     fallback — see [`routers/generation.py`](../backend/app/routers/generation.py).
@@ -107,18 +111,25 @@ without knowing whether the result is canned or real. Keys come from
     FAL has no public model-listing API), so those two always return a small
     hardcoded `CURATED_MODELS` list — the user can still add any model id
     manually via the same UI.
-- `text_models.generate_wish_title(text, settings)` backs the wish-library
-  auto-title (`POST /api/settings/wish-library`): if `settings.simple_models
-  .default` (or the request's own `model`, if the "Save to library" model
-  picker in `SunoStage.jsx` was used to override it for that one save - see
-  `routers/settings.py::add_wish`, which applies the override to a throwaway
-  settings copy so it never overwrites the real default) points at Google,
-  OpenRouter or DeepSeek with a key configured, it asks that model for a
-  short title (DeepSeek and OpenRouter both use the same OpenAI-compatible
-  `/chat/completions` shape); otherwise (no default set, unsupported
-  provider, missing key, or any API failure) it falls back to a local
-  truncate of the wish text. Never raises — title generation must not block
-  saving a wish.
+- `text_models.clean_wish`/`clean_wish_and_title` back, respectively,
+  `suno.refine` (see above) and the wish-library save
+  (`POST /api/settings/wish-library`): both read `settings.simple_models
+  .default` (the wish-library route also accepts a request-level `model`
+  override for that one save - see `routers/settings.py::add_wish`, which
+  applies it to a throwaway settings copy so it never overwrites the real
+  default); if it points at Google, OpenRouter or DeepSeek with a key
+  configured, one call both tidies the wish text and (for the library-save
+  path only) produces a short title, parsed from a `===WISH===`/`===TITLE===`
+  -delimited reply the same way `suno.generate` parses `===STYLE===`/
+  `===LYRICS===`. Otherwise (no default set, unsupported provider, missing
+  key, malformed reply, or any API failure) it falls back to the wish text
+  unchanged plus a local truncate for the title. There is deliberately no
+  per-screen model picker for this on `SunoStage.jsx` — it's a single global
+  setting, unlike `text_models.default`/`genModel` which the Suno stage lets
+  you override per call. Both helpers, and the older single-purpose
+  `generate_wish_title`, share the same `_complete_google`/`_complete_openrouter`/
+  `_complete_deepseek` request plumbing via a `prompt_template` parameter.
+  Never raises — cleanup/titling must not block applying or saving a wish.
 - `image_models.list_models(provider, api_key)` backs the Settings image-model
   "refresh models" button (`GET /api/settings/image-models/{provider}`),
   mirroring `text_models.list_models`'s shape and split:
@@ -313,18 +324,40 @@ to least reusable:
 from `project.refinement_comments`, which is just the per-project history of
 wishes already applied. Saving to the library persists immediately (its own
 `POST /api/settings/wish-library`, not a `PUT /api/settings`); it does not
-require visiting the Settings screen. Each entry also has an auto-generated
-`title` (see `generate_wish_title` below) so the Settings → Wishes tab can
-show a scannable list instead of raw text; both `title` and `text` can be
-corrected later from that tab (`PATCH /api/settings/wish-library/{id}`,
-`SettingsScreen.jsx`'s inline edit mode), by typing or by voice
-(`useFieldVoice`, see "Voice input" above).
+require visiting the Settings screen. Each entry's `text` is tidied up and its
+`title` auto-generated in one `clean_wish_and_title` call (see above) so the
+Settings → Wishes tab can show a scannable list instead of raw text; both
+`title` and `text` can be corrected later from that tab
+(`PATCH /api/settings/wish-library/{id}`, `SettingsScreen.jsx`'s inline edit
+mode), by typing or by voice (`useFieldVoice`, see "Voice input" above).
+
+All three layers, plus the raw lyrics and the response-format footer
+`suno.generate` appends, are visible **on the Suno stage itself** before you
+generate anything: a collapsed-by-default "Базовый промпт" panel edits layer 1
+directly (autosaves via its own debounced `PUT /api/settings`, separate from
+the Settings screen's field, which only persists via its own "Сохранить"
+button — see `useSettings.updateSunoBasePrompt`), and a collapsed-by-default
+"Что уйдёт в модель" panel shows the full assembled text plus a rough
+input-token/cost estimate (`lib/sunoPrompt.js`'s `buildSunoPromptPreview`
+mirrors `_build_gemini_prompt` client-side; `lib/pricing.js`'s
+`estimateTokensFromChars` mirrors the backend's chars/4 heuristic — both are
+ex-ante UI estimates only, never the source of truth for what a call actually
+cost). The model that preview prices against, and that "Generate for Suno"
+actually uses, is a `ModelPicker` over `text_models.favorites` next to the
+button — session-only, seeded from `text_models.default`, same pattern the
+wish-model picker used before it was replaced by the always-global
+`simple_models.default` (see above).
 
 ## Conventions and gotchas
 
 - **Two implementations of lyrics formatting must stay in sync.**
   `_format_lyrics` in `suno.py` mirrors `formatLyrics` in `lyrics.js` (English
   type labels, `interlude` passed through raw). Change one, change the other.
+  The same applies one level up: `_build_gemini_prompt` in `suno.py` mirrors
+  `buildSunoPromptPreview` in `lib/sunoPrompt.js` (the Suno stage's "What will
+  be sent" preview) — a change to how the base prompt/examples/skill prompt
+  get joined, or to the `===STYLE===`/`===LYRICS===` footer, needs both sides
+  updated or the preview silently stops matching what's actually sent.
 - **Autosave race.** Storyboard and image generation replace `scenes`
   server-side from a fresh disk read, so a debounced `PATCH` scheduled earlier
   could land afterwards and revert them. `flushPendingSave()` in `useProjects`

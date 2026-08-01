@@ -47,7 +47,7 @@ export const api = {
   listImageModels: (provider) => request(`/api/settings/image-models/${encodeURIComponent(provider)}`),
   getModelsCatalog: () => request('/api/settings/models-catalog'),
   getSunoPromptPresets: () => request('/api/settings/suno-prompt-presets'),
-  saveWishToLibrary: (text, model) => request('/api/settings/wish-library', { method: 'POST', body: JSON.stringify({ text, model }) }),
+  saveWishToLibrary: (text) => request('/api/settings/wish-library', { method: 'POST', body: JSON.stringify({ text }) }),
   updateWishSnippet: (id, patch) => request(`/api/settings/wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   generateSuno: (id, body) => request(`${projectPath(id)}/suno/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),

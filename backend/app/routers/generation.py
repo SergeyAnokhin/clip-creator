@@ -52,8 +52,11 @@ async def refine_suno(project_id: str, body: dict = Body(...)):
     if not comment:
         raise HTTPException(422, 'comment is required')
 
-    skill_prompt = await suno.refine(project, comment)
-    refinement_comments = [*project.get('refinement_comments', []), comment]
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('wish_refine', project_id, settings)
+    result = await suno.refine(project, comment, settings=settings, usage_ctx=usage_ctx)
+    skill_prompt = result['skill_prompt']
+    refinement_comments = [*project.get('refinement_comments', []), result['clean_comment']]
 
     project['skill_prompt'] = skill_prompt
     project['refinement_comments'] = refinement_comments

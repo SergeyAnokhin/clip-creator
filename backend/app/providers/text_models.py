@@ -41,6 +41,37 @@ _TITLE_PROMPT = (
     'пожелания к песне. Ответь только заголовком, без кавычек и пояснений.\n\n{text}'
 )
 
+_WISH_CLEAN_PROMPT = (
+    'Ниже — свободный текст пожелания к песне, возможно надиктованный голосом: в нём могут быть '
+    'слова-паразиты, повторы или несвязные фрагменты. Перепиши его одним связным предложением на том же '
+    'языке, сохранив авторский смысл и все конкретные детали (инструменты, темп, жанр, настроение и т.п.), '
+    'ничего не добавляя от себя. Ответь только переписанным текстом, без кавычек и пояснений.\n\n{text}'
+)
+
+_WISH_MARKER = '===WISH==='
+_TITLE_MARKER = '===TITLE==='
+
+_WISH_CLEAN_AND_TITLE_PROMPT = (
+    'Ниже — свободный текст пожелания к песне, возможно надиктованный голосом: в нём могут быть '
+    'слова-паразиты, повторы или несвязные фрагменты.\n'
+    '1) Перепиши его одним связным предложением на том же языке, сохранив авторский смысл и все '
+    'конкретные детали, ничего не добавляя от себя.\n'
+    '2) Придумай короткий заголовок для него (3-6 слов, без точки в конце).\n'
+    'Ответь СТРОГО в этом формате, без какого-либо текста до или после:\n'
+    + _WISH_MARKER + '\n<переписанный текст здесь>\n' + _TITLE_MARKER + '\n<заголовок здесь>'
+    + '\n\nИсходный текст:\n{text}'
+)
+
+
+def _parse_wish_response(raw: str, fallback_text: str) -> dict:
+    if _TITLE_MARKER in raw:
+        before, title = raw.split(_TITLE_MARKER, 1)
+        clean_text = before.split(_WISH_MARKER, 1)[-1].strip()
+        return {'clean_text': clean_text or fallback_text, 'title': title.strip() or truncate_title(fallback_text)}
+    # Model didn't follow the marker format - fall back rather than sending a
+    # malformed clean_text/title downstream.
+    return {'clean_text': fallback_text, 'title': truncate_title(fallback_text)}
+
 
 async def list_models(provider: str, api_key: str) -> dict:
     try:
@@ -143,9 +174,66 @@ async def generate_wish_title(text: str, settings: dict, usage_ctx: dict | None 
         return truncate_title(text)
 
 
-async def _complete_google(model_id: str, api_key: str, text: str, usage_ctx: dict | None = None) -> str:
+async def clean_wish(text: str, settings: dict, usage_ctx: dict | None = None) -> str:
+    """Runs the user's free-text wish (often voice-dictated, so possibly
+    rambling/repetitive) through the configured `simple_models` model to tidy
+    it into one clean sentence before it gets folded into the skill prompt.
+    Falls back to the original text verbatim - same degrade-gracefully
+    philosophy as generate_wish_title() - whenever no simple model/key is
+    configured or the call fails."""
+    text = (text or '').strip()
+    if not text:
+        return text
+
+    default = ((settings.get('simple_models') or {}).get('default') or '').strip()
+    provider, _, model_id = default.partition(':')
+    api_key = (settings.get('api_keys') or {}).get(provider, '')
+
+    try:
+        if provider == 'google' and model_id and api_key:
+            result = await _complete_google(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_PROMPT)
+        elif provider == 'openrouter' and model_id and api_key:
+            result = await _complete_openrouter(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_PROMPT)
+        elif provider == 'deepseek' and model_id and api_key:
+            result = await _complete_deepseek(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_PROMPT)
+        else:
+            return text
+        return result.strip().strip('"').strip() or text
+    except Exception:
+        return text
+
+
+async def clean_wish_and_title(text: str, settings: dict, usage_ctx: dict | None = None) -> dict:
+    """Same tidy-up as clean_wish(), but in one model call also produces a
+    short title - used when saving a wish to the library, so a save costs one
+    LLM call instead of two."""
+    text = (text or '').strip()
+    if not text:
+        return {'clean_text': text, 'title': text}
+
+    default = ((settings.get('simple_models') or {}).get('default') or '').strip()
+    provider, _, model_id = default.partition(':')
+    api_key = (settings.get('api_keys') or {}).get(provider, '')
+
+    try:
+        if provider == 'google' and model_id and api_key:
+            raw = await _complete_google(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT)
+        elif provider == 'openrouter' and model_id and api_key:
+            raw = await _complete_openrouter(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT)
+        elif provider == 'deepseek' and model_id and api_key:
+            raw = await _complete_deepseek(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT)
+        else:
+            return {'clean_text': text, 'title': truncate_title(text)}
+        return _parse_wish_response(raw, text)
+    except Exception:
+        return {'clean_text': text, 'title': truncate_title(text)}
+
+
+async def _complete_google(
+    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *, prompt_template: str = _TITLE_PROMPT,
+) -> str:
     model = f'google:{model_id}'
-    prompt = _TITLE_PROMPT.format(text=text)
+    prompt = prompt_template.format(text=text)
     started = time.monotonic()
     url = _GEMINI_GENERATE_URL.format(model=model_id)
     async with httpx.AsyncClient(timeout=20) as http_client:
@@ -174,7 +262,9 @@ async def _complete_google(model_id: str, api_key: str, text: str, usage_ctx: di
     return result
 
 
-async def _complete_openrouter(model_id: str, api_key: str, text: str, usage_ctx: dict | None = None) -> str:
+async def _complete_openrouter(
+    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *, prompt_template: str = _TITLE_PROMPT,
+) -> str:
     model = f'openrouter:{model_id}'
     started = time.monotonic()
     async with httpx.AsyncClient(timeout=20) as http_client:
@@ -183,7 +273,7 @@ async def _complete_openrouter(model_id: str, api_key: str, text: str, usage_ctx
             headers={'Authorization': f'Bearer {api_key}'},
             json={
                 'model': model_id,
-                'messages': [{'role': 'user', 'content': _TITLE_PROMPT.format(text=text)}],
+                'messages': [{'role': 'user', 'content': prompt_template.format(text=text)}],
                 'usage': {'include': True},
             },
         )
@@ -210,14 +300,16 @@ async def _complete_openrouter(model_id: str, api_key: str, text: str, usage_ctx
     return result
 
 
-async def _complete_deepseek(model_id: str, api_key: str, text: str, usage_ctx: dict | None = None) -> str:
+async def _complete_deepseek(
+    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *, prompt_template: str = _TITLE_PROMPT,
+) -> str:
     model = f'deepseek:{model_id}'
     started = time.monotonic()
     async with httpx.AsyncClient(timeout=20) as http_client:
         resp = await http_client.post(
             _DEEPSEEK_CHAT_URL,
             headers={'Authorization': f'Bearer {api_key}'},
-            json={'model': model_id, 'messages': [{'role': 'user', 'content': _TITLE_PROMPT.format(text=text)}]},
+            json={'model': model_id, 'messages': [{'role': 'user', 'content': prompt_template.format(text=text)}]},
         )
     duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:

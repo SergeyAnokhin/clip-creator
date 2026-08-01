@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
 import { DICT } from '../i18n/dict.js';
 import { readJSONFile } from '../lib/download.js';
+import { debounce } from '../lib/debounce.js';
 
 const DEFAULT_SPECIAL_TAGS = ['[Vocal Interlude]', '[Female vocal interlude]'];
 const DEFAULT_TEXT_MODELS = { favorites: [], default: 'google:gemini-2.5-flash' };
@@ -109,15 +110,28 @@ export function useSettings({ showToast, onAiCall }) {
     setImageModels((prev) => ({ ...prev, default: composite }));
   }
 
+  // Separate from setSunoBasePrompt (used by the Settings screen field, which
+  // only persists via the big "Сохранить" button at the bottom) - this one
+  // backs the compact base-prompt panel on the Suno stage, which has no such
+  // button, so it autosaves on its own, debounced like project text fields.
+  const debouncedSaveBasePrompt = useMemo(
+    () => debounce((value) => { api.putSettings({ suno_base_prompt: value }).catch(() => {}); }, 400),
+    [],
+  );
+  function updateSunoBasePrompt(value) {
+    setSunoBasePrompt(value);
+    debouncedSaveBasePrompt(value);
+  }
+
   function removeWishSnippet(id) {
     const next = wishLibrary.filter((w) => w.id !== id);
     setWishLibrary(next);
     api.putSettings({ suno_wish_library: next }).catch(() => {});
   }
-  function saveWishToLibrary(text, model) {
+  function saveWishToLibrary(text) {
     const trimmed = (text || '').trim();
     if (!trimmed) return;
-    api.saveWishToLibrary(trimmed, model)
+    api.saveWishToLibrary(trimmed)
       .then((res) => { setWishLibrary(res.suno_wish_library); showToast(L.toast_saved); })
       .catch(() => {})
       .finally(() => onAiCall?.());
@@ -188,7 +202,7 @@ export function useSettings({ showToast, onAiCall }) {
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings,
-      addSpecialTag, removeSpecialTag, setSunoBasePrompt,
+      addSpecialTag, removeSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
       addReferenceExample, removeReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet,
       addTextModelFavorite, removeTextModelFavorite, setTextModelDefault,
       addSimpleModelFavorite, removeSimpleModelFavorite, setSimpleModelDefault,

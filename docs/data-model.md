@@ -27,7 +27,7 @@ app_data/
 | `tags` | str[] | Home-screen chips only |
 | `blocks` | Block[] | Source of truth for the lyrics builder |
 | `skill_id`, `skill_prompt` | str | Active Suno skill and its (editable) prompt |
-| `refinement_comments` | str[] | Raw "AI-wish" history |
+| `refinement_comments` | str[] | "AI-wish" history — the *cleaned* text `suno.refine` folded into `skill_prompt`, not the user's raw input (see below) |
 | `style`, `lyrics` | str | Suno output; `style` non-empty ⇒ `suno_done` in the list view |
 | `model_used` | str | Text model used for the last generation |
 | `track_url` | str | User-pasted Suno track link |
@@ -57,7 +57,7 @@ call site are in [usage-tracking.md](usage-tracking.md); summary:
 
 `{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
 
-`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image`.
+`task` is one of `suno_generate|wish_refine|wish_title|scene_storyboard|scene_image`.
 `cost.amount` is `null` (never `0`) when the price or usage units needed to
 compute it are unknown; `cost.source` is `provider|catalog|unknown`.
 
@@ -83,9 +83,13 @@ partial merge server-side, so the frontend can persist e.g. just
   `_MODEL_PROVIDERS` in `routers/settings.py`). `text_models.default` is
   what `suno.generate` parses to decide whether to call the real Gemini API
   (see below); `simple_models.default` is used for lightweight tasks —
-  currently only wish-library title generation
+  cleaning up the user's free-text "AI-wish" before it's folded into
+  `skill_prompt` (`suno/refine`) and, combined with title generation in the
+  same call, wish-library saves
   ([`providers/text_models.py`](../backend/app/providers/text_models.py)
-  `generate_wish_title`); `image_models.default`/`.favorites` populate the
+  `clean_wish`/`clean_wish_and_title`) — there is deliberately **no** per-call
+  model picker for this on the Suno stage, only the one global default in
+  Settings; `image_models.default`/`.favorites` populate the
   image-model picker in Settings ([`providers/image_models.py`](../backend/app/providers/image_models.py))
   and the per-generation `ModelPicker` in `ScenesStage.jsx`, whose composite
   is what `providers/images.py` actually dispatches to a real provider call
@@ -101,11 +105,14 @@ partial merge server-side, so the frontend can persist e.g. just
   alongside the base prompt as "reference, don't copy verbatim" material.
 - `suno_wish_library` — saved wish snippets for reuse across projects
   (distinct from a project's own `refinement_comments` history), each
-  `{id, title, text, created_at}`. `title` is generated once, on save, by
-  `generate_wish_title` (real LLM call if `simple_models.default` points at
-  Google/OpenRouter/DeepSeek with a key configured, otherwise a local
-  truncate of `text`). Legacy plain-string entries are normalized to this shape on
-  `GET /api/settings` (not rewritten to disk until the next save).
+  `{id, title, text, created_at}`. `text` and `title` are both produced in a
+  single call to `clean_wish_and_title` on save — `text` is the tidied-up
+  wish (not the user's raw input verbatim), `title` a short auto-generated
+  label — real LLM call if `simple_models.default` points at
+  Google/OpenRouter/DeepSeek with a key configured, otherwise `text` is kept
+  as-is and `title` falls back to a local truncate. Legacy plain-string
+  entries are normalized to this shape on `GET /api/settings` (not rewritten
+  to disk until the next save).
 - `pricing_overrides` — user-supplied AI price corrections, keyed by
   `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
   wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
@@ -151,10 +158,10 @@ reference-image upload (multipart).
 | `GET /api/settings/models/{provider}` | `provider` = `google\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/OpenRouter/DeepSeek query the provider's real API with the stored key; Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
 | `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)). Also upserted into the persisted model catalog |
 | `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
-| `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. Generates `wish.title` via `model` if given (a `"{provider}:{model_id}"` composite, applied to a throwaway settings copy so it never overwrites `simple_models.default`), else the configured simple model, else a truncate fallback; appends, persists |
+| `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
 | `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit of an existing wish's title and/or text (either field, or both); no LLM call, so no usage tracking; `404` if `id` is unknown, `422` if a given field is blank |
-| `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model}` → `{style, lyrics, skill_id, model_used}`. `model` is the `"{provider}:{model_id}"` composite from `settings.text_models.default`; `provider == 'google'` + a Google key calls the real Gemini API; a failed call returns `502` instead of falling back |
-| `POST /api/projects/{id}/suno/refine` | `{comment}` → `{skill_prompt, refinement_comments}` |
+| `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model}` → `{style, lyrics, skill_id, model_used}`. `model` is the `"{provider}:{model_id}"` composite — the Suno stage seeds it from `settings.text_models.default` but lets the user override it per-call via the `ModelPicker` next to "Generate for Suno"; `provider == 'google'` + a Google key calls the real Gemini API; a failed call returns `502` instead of falling back |
+| `POST /api/projects/{id}/suno/refine` | `{comment}` → `{skill_prompt, refinement_comments}`. `comment` is first cleaned up via `suno.refine` → `text_models.clean_wish` (`settings.simple_models.default`, no per-call override); both the returned `skill_prompt` and the appended `refinement_comments` entry reflect the *cleaned* text, not the raw `comment` |
 | `POST /api/projects/{id}/scenes/generate` | `{style_description, model?}` → `{scenes, style_description}` — **replaces all scenes**, clearing their images. `model` (from `settings.text_models`) is accepted and forwarded to the provider seam but not yet used - `scenes.py` is still a non-AI stub (see `architecture.md`) |
 | `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background generation job per requested variant (`model` = `"{provider}:{model_id}"` from `settings.image_models`, provider ∈ `krea\|replicate\|fal\|google`) and returns immediately; poll each job below. A finished job appends its image to `scenes[n].images` on its own, independent of polling |
 | `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useScenesStage.js`); job state is in-memory only (see `architecture.md`) |

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateCost, formatCost, formatTokens, modelPriceMap, priceLabel } from './pricing.js';
+import { estimateCost, estimateTokensFromChars, formatCost, formatTokens, modelPriceMap, priceLabel } from './pricing.js';
 
 const L = { price_perImage: 'изобр.', price_unknown: 'цена ?' };
 
@@ -71,6 +71,18 @@ describe('priceLabel', () => {
   it('falls back to the unknown label when price is missing', () => {
     expect(priceLabel(null, L)).toBe('цена ?');
     expect(priceLabel({ kind: 'text', input: 0.3 }, L)).toBe('цена ?');
+  });
+});
+
+describe('estimateTokensFromChars', () => {
+  it('divides length by 4, rounding up', () => {
+    expect(estimateTokensFromChars('12345678')).toBe(2);
+    expect(estimateTokensFromChars('123456789')).toBe(3);
+  });
+
+  it('returns 0 for empty/missing text', () => {
+    expect(estimateTokensFromChars('')).toBe(0);
+    expect(estimateTokensFromChars(undefined)).toBe(0);
   });
 });
 

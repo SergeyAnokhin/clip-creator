@@ -4,6 +4,14 @@
  * always the source of truth for what a call actually cost. */
 
 const TOKENS_PER_UNIT = 1_000_000;
+const CHARS_PER_TOKEN = 4; // mirrors backend/app/pricing.py CHARS_PER_TOKEN - UI-only estimate, never for billing.
+
+/** Rough ex-ante input-token estimate for a prompt string, before it's ever
+ * sent anywhere - same 4-chars-per-token heuristic the backend documents as
+ * "UI-only, never for billing" (see pricing.estimate() there). */
+export function estimateTokensFromChars(text) {
+  return Math.ceil((text || '').length / CHARS_PER_TOKEN);
+}
 
 /** `null`/`undefined` means "unknown cost" - never treated as free. */
 export function formatCost(amount, { unknownLabel = '—' } = {}) {

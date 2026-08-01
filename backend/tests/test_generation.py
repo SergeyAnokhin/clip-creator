@@ -119,6 +119,37 @@ def test_refine_suno_rewrites_prompt_and_appends_comment_history(client):
     assert resp2.json()['refinement_comments'] == ['Add more jazz', 'Saxophone solo']
 
 
+def test_refine_suno_cleans_comment_via_configured_simple_model(client, monkeypatch):
+    from app.providers import text_models
+
+    class _FakeResponse:
+        status_code = 200
+        def json(self):
+            return {'candidates': [{'content': {'parts': [{'text': 'Добавь больше саксофона'}]}}]}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def post(self, url, params=None, json=None):
+            return _FakeResponse()
+
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: _FakeAsyncClient())
+    client.put('/api/settings', json={
+        'api_keys': {'google': 'test-key'},
+        'simple_models': {'favorites': [], 'default': 'google:gemini-2.0-flash-lite'},
+    })
+
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(f'/api/projects/{pid}/suno/refine', json={'comment': 'саксофона саксофона побольше эм'})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 'Добавь больше саксофона' in body['skill_prompt']
+    assert body['refinement_comments'] == ['Добавь больше саксофона']
+
+
 def test_refine_suno_rejects_blank_comment(client):
     pid = client.get('/api/projects').json()[0]['id']
     assert client.post(f'/api/projects/{pid}/suno/refine', json={'comment': '  '}).status_code == 422

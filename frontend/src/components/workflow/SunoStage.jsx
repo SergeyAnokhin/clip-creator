@@ -1,5 +1,8 @@
-import { Copy, MessageSquare, Mic, MicOff, Save, Sparkles, Zap } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, ChevronRight, Copy, MessageSquare, Mic, MicOff, Save, Sparkles, Zap } from 'lucide-react';
 import ModelPicker from './ModelPicker.jsx';
+import { buildSunoPromptPreview } from '../../lib/sunoPrompt.js';
+import { estimateCost, estimateTokensFromChars, formatCost } from '../../lib/pricing.js';
 
 export const SKILLS = [
   {
@@ -17,14 +20,107 @@ export const SKILLS = [
   },
 ];
 
+function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="glass-card" style={{ marginBottom: 16 }}>
+      <div
+        className="suno-panel-title"
+        style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          {L.suno_basePromptTitle}
+          <span style={{ fontWeight: 400, fontSize: 11.5, color: 'var(--text-dim)' }}>
+            · {(sunoBasePrompt || '').length} {L.suno_previewCharsLabel.toLowerCase()}
+          </span>
+        </span>
+      </div>
+      {open && (
+        <>
+          <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 10 }}>{L.suno_basePromptGlobalHint}</div>
+          {!!sunoPromptPresets?.length && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              {sunoPromptPresets.map((preset) => (
+                <button
+                  key={preset.id}
+                  className="chip"
+                  title={preset.description}
+                  onClick={() => actions.updateSunoBasePrompt(preset.prompt)}
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <textarea
+            className="suno-textarea"
+            value={sunoBasePrompt || ''}
+            onChange={(e) => actions.updateSunoBasePrompt(e.target.value)}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function PromptPreviewPanel({
+  L, sunoBasePrompt, referenceExamples, skillPrompt, blocks, genModel, modelPrices,
+}) {
+  const [open, setOpen] = useState(false);
+  const previewText = buildSunoPromptPreview({
+    basePrompt: sunoBasePrompt, examples: referenceExamples, skillPrompt, blocks,
+  });
+  const tokens = estimateTokensFromChars(previewText);
+  const price = genModel ? modelPrices?.[genModel] : null;
+  const cost = price ? estimateCost(price, { inputTokens: tokens }) : null;
+
+  return (
+    <div className="glass-card" style={{ marginBottom: 16 }}>
+      <div
+        className="suno-panel-title"
+        style={{ marginBottom: open ? 12 : 0, cursor: 'pointer' }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        {L.suno_previewTitle}
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-dim)' }}>
+        <span>{L.suno_previewCharsLabel}: {previewText.length}</span>
+        <span>{L.suno_previewTokensLabel}: {tokens}</span>
+        <span>
+          {L.suno_previewCostLabel}: {genModel ? `${formatCost(cost)} (${L.suno_previewCostHint})` : L.suno_previewNoModel}
+        </span>
+      </div>
+      {open && (
+        <pre
+          style={{
+            marginTop: 12, marginBottom: 0, fontFamily: "'SF Mono',monospace", fontSize: 12,
+            color: 'rgba(255,255,255,0.75)', whiteSpace: 'pre-wrap', lineHeight: 1.6, maxHeight: 420, overflowY: 'auto',
+          }}
+        >
+          {previewText}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function SunoStage({
   L, project, skillId, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported,
-  sunoLoading, trackUrl, wishLibrary, wishModel, simpleModelFavorites, modelPrices, actions,
+  sunoLoading, trackUrl, wishLibrary, genModel, simpleModelDefault, simpleModelFavorites, textModelFavorites,
+  modelPrices, sunoBasePrompt, sunoPromptPresets, referenceExamples, actions,
 }) {
+  const wishModelEntry = simpleModelFavorites?.find((f) => `${f.provider}:${f.id}` === simpleModelDefault);
+  const wishModelLabel = wishModelEntry ? wishModelEntry.label : (simpleModelDefault || L.suno_wishModelNotSet);
+
   return (
     <>
       <div className="stage-heading-title" style={{ marginBottom: 4 }}>{L.sunoStageTitle}</div>
       <div className="stage-heading-subtitle" style={{ marginBottom: 18 }}>{L.sunoStageSubtitle}</div>
+
+      <BasePromptPanel L={L} sunoBasePrompt={sunoBasePrompt} sunoPromptPresets={sunoPromptPresets} actions={actions} />
 
       <div className="glass-card" style={{ marginBottom: 16 }}>
         <div className="suno-panel-title">
@@ -73,14 +169,6 @@ export default function SunoStage({
           <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={actions.applyRefinement}>
             {L.apply}
           </button>
-          <ModelPicker
-            favorites={simpleModelFavorites}
-            value={wishModel}
-            onChange={actions.selectWishModel}
-            emptyLabel={L.modelPickerEmpty}
-            prices={modelPrices}
-            L={L}
-          />
           <button
             className="icon-btn"
             style={{ width: 38, height: 38 }}
@@ -89,6 +177,9 @@ export default function SunoStage({
           >
             <Save size={15} />
           </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 8 }}>
+          {L.suno_wishModelLabel}: {wishModelLabel} · {L.suno_wishModelHint}
         </div>
         {!!wishLibrary?.length && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -122,10 +213,26 @@ export default function SunoStage({
         )}
       </div>
 
-      <button className="btn btn-gradient" style={{ marginBottom: 18, padding: '12px 20px', fontSize: 14 }} onClick={actions.generateSuno}>
-        <Zap size={16} />
-        {L.generateForSuno}
-      </button>
+      <PromptPreviewPanel
+        L={L} sunoBasePrompt={sunoBasePrompt} referenceExamples={referenceExamples}
+        skillPrompt={project.skill_prompt} blocks={project.blocks} genModel={genModel} modelPrices={modelPrices}
+      />
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
+        <button className="btn btn-gradient" style={{ padding: '12px 20px', fontSize: 14 }} onClick={actions.generateSuno}>
+          <Zap size={16} />
+          {L.generateForSuno}
+        </button>
+        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.suno_genModelLabel}:</span>
+        <ModelPicker
+          favorites={textModelFavorites}
+          value={genModel}
+          onChange={actions.selectGenModel}
+          emptyLabel={L.modelPickerEmpty}
+          prices={modelPrices}
+          L={L}
+        />
+      </div>
 
       {sunoLoading && (
         <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>⏳ {L.generatingSuno}</div>

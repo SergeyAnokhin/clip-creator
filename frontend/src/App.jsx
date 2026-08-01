@@ -39,7 +39,6 @@ function App() {
   const suno = useSunoStage({
     activeProject, setActiveProject, updateProject, showToast, L,
     textModelDefault: settings.textModels.default,
-    simpleModelDefault: settings.simpleModels.default,
     onAiCall: usage.actions.refreshToday,
   });
   const scenes = useScenesStage({
@@ -91,11 +90,17 @@ function App() {
     recordingSeconds: voice.recordingSeconds,
     voiceSupported: voice.isSupported,
     wishLibrary: settings.wishLibrary,
+    simpleModelDefault: settings.simpleModels.default,
     simpleModelFavorites: settings.simpleModels.favorites,
+    textModelFavorites: settings.textModels.favorites,
     modelPrices: usage.priceMap,
+    sunoBasePrompt: settings.sunoBasePrompt,
+    sunoPromptPresets: settings.sunoPromptPresets,
+    referenceExamples: settings.referenceExamples,
     actions: {
       ...suno.actions, startVoice: voice.startVoice,
-      saveWishToLibrary: (text) => settings.actions.saveWishToLibrary(text, suno.state.wishModel),
+      saveWishToLibrary: (text) => settings.actions.saveWishToLibrary(text),
+      updateSunoBasePrompt: settings.actions.updateSunoBasePrompt,
     },
   };
 

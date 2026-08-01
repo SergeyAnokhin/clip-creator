@@ -4,6 +4,7 @@ import time
 import httpx
 
 from .. import usage
+from . import text_models
 
 # Real seam: `model` is a composite "{provider}:{model_id}" string (see
 # settings.text_models). When provider == 'google' and settings.api_keys.google
@@ -127,14 +128,19 @@ async def generate(
     return {'style': style, 'lyrics': raw_lyrics}
 
 
-async def refine(project: dict, comment: str) -> str:
-    """Folds the user's free-text wish into the existing skill prompt as a
-    plain instruction sentence; the full prompt (base + examples + this) is
-    what actually gets sent to the model on the next generate() call."""
-    await asyncio.sleep(0.05)
+async def refine(project: dict, comment: str, settings: dict | None = None, usage_ctx: dict | None = None) -> dict:
+    """Cleans the user's free-text wish via the configured `simple_models`
+    model (see text_models.clean_wish - degrades to the wish verbatim without
+    a configured model/key) and folds the result into the existing skill
+    prompt as a plain instruction sentence; the full prompt (base + examples
+    + this) is what actually gets sent to the model on the next generate()
+    call."""
+    clean_comment = await text_models.clean_wish(comment, settings or {}, usage_ctx)
     base = (project.get('skill_prompt') or '').rstrip()
     if not base:
-        return comment.strip()
-    if base.endswith(('.', '!', '?')):
-        return f'{base} Additionally, {comment.strip()}.'
-    return f'{base}. Additionally, {comment.strip()}.'
+        skill_prompt = clean_comment.strip()
+    elif base.endswith(('.', '!', '?')):
+        skill_prompt = f'{base} Additionally, {clean_comment.strip()}.'
+    else:
+        skill_prompt = f'{base}. Additionally, {clean_comment.strip()}.'
+    return {'skill_prompt': skill_prompt, 'clean_comment': clean_comment}
