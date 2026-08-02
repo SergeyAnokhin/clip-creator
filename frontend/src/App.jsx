@@ -40,6 +40,7 @@ function App() {
     activeProject, setActiveProject, updateProject, showToast, L,
     textModelDefault: settings.textModels.default,
     onAiCall: usage.actions.refreshToday,
+    onWishLibraryChange: settings.actions.setWishLibrary,
   });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
@@ -99,7 +100,6 @@ function App() {
     referenceExamples: settings.referenceExamples,
     actions: {
       ...suno.actions, startVoice: voice.startVoice,
-      saveWishToLibrary: (text) => settings.actions.saveWishToLibrary(text),
       updateSunoBasePrompt: settings.actions.updateSunoBasePrompt,
     },
   };

@@ -3,8 +3,11 @@
 Versecraft is a two-process local app: a React (Vite) frontend talks over HTTP
 to a FastAPI backend, which persists everything as JSON files on disk. There is
 no database and no auth — it's single-user. Scene-text generation (the
-storyboard split into scenes) is still **stubbed**; Suno text generation and
-scene *image* generation both make **real** provider calls (see below).
+storyboard split into scenes) is still **stubbed**; the music-prompt
+generation (`suno.generate`) and scene *image* generation both make **real**
+provider calls (see below). "Suno" in identifiers, routes, and settings keys
+is a legacy name kept for backward compatibility — the feature itself targets
+any lyrics-to-music service (Suno, Mureka, ...); the UI calls it "Музыка/Music".
 
 ```text
 ┌───────────────┐   fetch /api/*   ┌─────────────────┐   read/write JSON   ┌───────────────┐
@@ -32,7 +35,7 @@ value) so it doesn't need editing when the frontend's port changes.
 A project moves through three stages, all inside one workflow screen:
 
 ```text
-Lyrics  →  Suno  →  Scenes
+Lyrics  →  Music  →  Scenes
 blocks     style +   storyboard +
            lyrics    images per scene
 ```
@@ -42,9 +45,11 @@ blocks     style +   storyboard +
    clones blocks until the structure is right. Every operation is a pure
    function in [`lib/lyrics.js`](../frontend/src/lib/lyrics.js), so the stage
    never needs anything from the backend beyond the generic project `PATCH`.
-2. **Suno** — pick a *skill* (an instruction template, defined in `SKILLS` in
-   `SunoStage.jsx`), optionally refine it with a free-text wish, then generate
-   a `style` + `lyrics` pair to paste into Suno.
+2. **Music** (labeled "Музыка (AI)"/"Music (AI)" in the UI, `stage: 'suno'`
+   internally) — edit the "Дополнения к промпту" text, optionally toggle on
+   reusable "AI-wish" cards (or dictate a new one), then generate a `style` +
+   `lyrics` pair to paste into whichever music service (Suno, Mureka, ...)
+   the user is targeting.
 3. **Scenes** — turn the lyrics into a storyboard (default 5 scenes), generate
    image variants per scene, and rate them; the top-rated variant becomes the
    scene's main frame.
@@ -80,22 +85,18 @@ without knowing whether the result is canned or real. Keys come from
     'google'` **and** `settings.api_keys.google` is set, it calls the real
     Gemini API (`generativelanguage.googleapis.com`, using `model_id` from
     the composite) with a prompt assembled from `settings.suno_base_prompt` +
-    `settings.suno_reference_examples` + the project's `skill_prompt` (skill
-    template + folded-in refinement wishes), asking for a `===STYLE===` /
-    `===LYRICS===`-delimited reply that `_parse_gemini_response` splits into
-    `{style, lyrics}`.
+    the project's active wishes (resolved from `settings.suno_wish_library`
+    via `active_wish_ids`, sent as an emphasized numbered block right after
+    the base prompt) + `settings.suno_reference_examples` + the project's
+    `skill_prompt` ("Дополнения к промпту" on the Suno stage), asking for a
+    `===STYLE===` / `===LYRICS===`-delimited reply that
+    `_parse_gemini_response` splits into `{style, lyrics}`. See "The Suno
+    prompt" below for the full layer order.
   - otherwise (no key, or any other provider) it falls back to the old
     deterministic stub: `lyrics` = the formatted blocks, `style` = a canned
     string. This keeps tests and no-key setups working unchanged, and is also
     the current (documented) limitation for Replicate/FAL/OpenRouter as Suno
     text-generation providers — only Google is really wired.
-  - `refine` first runs the user's free-text "wish" through
-    `text_models.clean_wish` (tidies up voice-dictated rambling/repetition via
-    `settings.simple_models.default` — falls back to the wish verbatim if no
-    simple model/key is configured), then folds the cleaned result into
-    `skill_prompt` as a plain "Additionally, …" sentence. The cleaned text
-    (not the raw input) is what's returned and what gets appended to
-    `project.refinement_comments`.
   - a generation failure (bad key, non-200, unparsable Gemini reply) is
     surfaced by the router as `HTTPException(502, ...)`, not a silent stub
     fallback — see [`routers/generation.py`](../backend/app/routers/generation.py).
@@ -111,25 +112,30 @@ without knowing whether the result is canned or real. Keys come from
     FAL has no public model-listing API), so those two always return a small
     hardcoded `CURATED_MODELS` list — the user can still add any model id
     manually via the same UI.
-- `text_models.clean_wish`/`clean_wish_and_title` back, respectively,
-  `suno.refine` (see above) and the wish-library save
-  (`POST /api/settings/wish-library`): both read `settings.simple_models
-  .default` (the wish-library route also accepts a request-level `model`
-  override for that one save - see `routers/settings.py::add_wish`, which
-  applies it to a throwaway settings copy so it never overwrites the real
-  default); if it points at Google, OpenRouter or DeepSeek with a key
-  configured, one call both tidies the wish text and (for the library-save
-  path only) produces a short title, parsed from a `===WISH===`/`===TITLE===`
-  -delimited reply the same way `suno.generate` parses `===STYLE===`/
-  `===LYRICS===`. Otherwise (no default set, unsupported provider, missing
-  key, malformed reply, or any API failure) it falls back to the wish text
-  unchanged plus a local truncate for the title. There is deliberately no
-  per-screen model picker for this on `SunoStage.jsx` — it's a single global
-  setting, unlike `text_models.default`/`genModel` which the Suno stage lets
-  you override per call. Both helpers, and the older single-purpose
-  `generate_wish_title`, share the same `_complete_google`/`_complete_openrouter`/
-  `_complete_deepseek` request plumbing via a `prompt_template` parameter.
-  Never raises — cleanup/titling must not block applying or saving a wish.
+- `text_models.clean_wish_and_title` backs every wish save, via
+  `providers/wish_library.py::add_or_get_wish` — called both from
+  `POST /api/settings/wish-library` (Settings → Wishes tab, library-only,
+  doesn't touch any project) and from `POST /api/projects/{id}/suno/wishes`
+  (the Suno stage's "Применить" button, which additionally activates the new
+  wish for the current project — see "The Suno prompt" below). Both read
+  `settings.simple_models.default` (the library route also accepts a
+  request-level `model` override for that one save, applied to a throwaway
+  settings copy so it never overwrites the real default); if it points at
+  Google, OpenRouter or DeepSeek with a key configured, one call both tidies
+  the wish text and produces a short, emoji-prefixed title, parsed from a
+  `===WISH===`/`===TITLE===`-delimited reply the same way `suno.generate`
+  parses `===STYLE===`/`===LYRICS===`. Otherwise (no default set, unsupported
+  provider, missing key, malformed reply, or any API failure) it falls back
+  to the wish text unchanged plus a local truncate for the title. There is
+  deliberately no per-screen model picker for this on `SunoStage.jsx` — it's
+  a single global setting, unlike `text_models.default`/`genModel` which the
+  Suno stage lets you override per call. `add_or_get_wish` also dedups by
+  exact text: applying the same wish twice reuses the existing card instead
+  of creating a duplicate. `clean_wish_and_title`, and the older
+  single-purpose `generate_wish_title`, share the same
+  `_complete_google`/`_complete_openrouter`/`_complete_deepseek` request
+  plumbing via a `prompt_template` parameter. Never raises — titling must not
+  block applying or saving a wish.
 - `image_models.list_models(provider, api_key)` backs the Settings image-model
   "refresh models" button (`GET /api/settings/image-models/{provider}`),
   mirroring `text_models.list_models`'s shape and split:
@@ -292,24 +298,47 @@ would plausibly *say out loud* — prompt/instruction text for an AI step,
 lyrics, style descriptions — not on precise/copy-pasted input like URLs, API
 keys, or titles.
 
-## The Suno prompt: base instructions, examples, per-song wish
+## The music prompt: base instructions, active wishes, examples, per-song add-ons
 
-Three layers get concatenated into what's actually sent to Gemini, from most
-to least reusable:
+Four layers get concatenated into what's actually sent to Gemini, in this
+order (`suno._build_gemini_prompt`):
 
 1. `settings.suno_base_prompt` — the general "how to adapt lyrics/style for
-   Suno" instructions, editable in Settings. Seeded from
+   this music service" instructions, editable in Settings. Seeded from
    [`providers/suno_prompt_defaults.py`](../backend/app/providers/suno_prompt_defaults.py)
    (`DEFAULT_SUNO_BASE_PROMPT`), adapted from a prompt the user already used
    manually with an LLM before this feature existed, and rewritten for Suno
    v5.5 prompting conventions (Style-field ordering/limits, bracket
    semantics, vocal-tag reliability, Russian stress-mark techniques). The
-   Settings → Suno-промпты tab also offers built-in alternate variants
-   (`SUNO_BASE_PROMPT_PRESETS`, served read-only via
-   `GET /api/settings/suno-prompt-presets`, not part of `settings.json`) that
-   only differ in Style-block field order — a "load preset, edit, save" flow
-   for A/B testing that one open question the source guides disagree on.
-2. `settings.suno_reference_examples` — a handful of curated finished
+   Settings → "Музыкальные промпты" tab also offers built-in alternate
+   variants, grouped by target service and served read-only (not part of
+   `settings.json`) via `GET /api/settings/suno-prompt-presets`
+   (`SUNO_BASE_PROMPT_PRESETS` in `suno_prompt_defaults.py` plus
+   `MUREKA_BASE_PROMPT_PRESETS` in
+   [`providers/mureka_prompt_defaults.py`](../backend/app/providers/mureka_prompt_defaults.py),
+   concatenated by the route). Each preset object carries `{id, service, name,
+   description, prompt}` — `service` (`'Suno'` / `'Mureka'`) is the group
+   label the frontend renders above its chips/rows
+   (`lib/sunoPrompt.js`'s `groupPresetsByService`, used by both
+   `SunoStage.jsx`'s compact panel and `SettingsScreen.jsx`'s full tab). The
+   two Suno presets only differ in Style-block field order; the two Mureka
+   presets differ in whether vocal-delivery cues go only in the Style-block
+   (`mureka-strict`) or can also be written as in-text parenthetical
+   directives like `(whispering)` (`mureka-directed`) — both output shapes
+   still respect the same `STYLE-BLOCK`/`LYRICS-MARKUP` contract the
+   `===STYLE===`/`===LYRICS===` response-format footer below expects, so any
+   new preset must keep emitting those two block headers. "Load preset, edit,
+   save" is an A/B-testing flow — loading a preset just overwrites the shared
+   `settings.suno_base_prompt` text field, so switching between a Suno and a
+   Mureka preset replaces the previous one rather than keeping both.
+2. The project's **active wishes** — the text of every
+   `settings.suno_wish_library` entry whose id is in
+   `project.active_wish_ids`, rendered as a single numbered block headed
+   "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ — обязательно учесть:" right after the
+   base prompt, so the model can't miss them (there's no literal
+   attention-weight knob on the API, so a clearly marked, prominently placed
+   block is the emphasis mechanism). Omitted entirely when no wish is active.
+3. `settings.suno_reference_examples` — a handful of curated finished
    style+lyrics examples (also seeded from `suno_prompt_defaults.py`,
    `DEFAULT_REFERENCE_EXAMPLES`), sent as "use as a reference, don't copy
    verbatim" material. Kept as plain text in settings rather than uploaded
@@ -322,22 +351,36 @@ to least reusable:
    into "Сохранить" (with a "Отмена" to bail out), so editing reuses the same
    input instead of a separate inline form. Both lists only persist on the
    Settings screen's own "Сохранить" button, unlike the wish library below.
-3. `project.skill_prompt` — the per-song skill template (`SunoStage.jsx`
-   `SKILLS`) plus any refinement "wishes" folded in via `suno.refine`.
+4. `project.skill_prompt` — the per-song, freely-editable "Дополнения к
+   промпту" text on the Suno stage (`SunoStage.jsx`), seeded from a fixed
+   skill template on project creation. Unlike the old `suno/refine` flow,
+   nothing gets folded into this text automatically anymore — it's purely
+   whatever the user typed there.
 
-`settings.suno_wish_library` is a separate, flat list of saved wish snippets
-(free text) the user can re-apply to *any* project's refinement box — distinct
-from `project.refinement_comments`, which is just the per-project history of
-wishes already applied. Saving to the library persists immediately (its own
-`POST /api/settings/wish-library`, not a `PUT /api/settings`); it does not
-require visiting the Settings screen. Each entry's `text` is tidied up and its
-`title` auto-generated in one `clean_wish_and_title` call (see above) so the
-Settings → Wishes tab can show a scannable list instead of raw text; both
-`title` and `text` can be corrected later from that tab
+`settings.suno_wish_library` is a separate, global list of reusable wish
+"cards" (`{id, title, text, created_at}`) — not tied to any one project. The
+Suno stage's "Доработка через AI-пожелание" section drives it two ways:
+typing or dictating new text and clicking "Применить" calls
+`POST /api/projects/{id}/suno/wishes`, which cleans+titles the text (or reuses
+an existing card with identical text — see `wish_library.add_or_get_wish`)
+*and* immediately activates it for the current project; clicking an existing
+card toggles it active/inactive for the current project only (a plain
+`PATCH /api/projects/{id}` with the updated `active_wish_ids`, no LLM call).
+The same card can be active for one song and inactive for another — that's
+the whole point of keeping wishes and their per-project activation separate.
+Cards are also listable/editable from Settings → Wishes
 (`PATCH /api/settings/wish-library/{id}`, `SettingsScreen.jsx`'s inline edit
-mode), by typing or by voice (`useFieldVoice`, see "Voice input" above).
+mode, by typing or by voice — `useFieldVoice`, see "Voice input" above),
+independent of any project.
 
-All three layers, plus the raw lyrics and the response-format footer
+`project.refinement_comments` still exists in `config.json` for backward
+compatibility but is unused — it was the per-project history of wishes folded
+in by the old `suno/refine` flow, replaced entirely by the card model above.
+Projects predating this rework get it (and `skill_prompt`) reset once on
+first load (`routers/projects.py::migrate_legacy_project`, keyed off the
+*absence* of `active_wish_ids` — see `data-model.md`).
+
+All four layers, plus the raw lyrics and the response-format footer
 `suno.generate` appends, are visible **on the Suno stage itself** before you
 generate anything: a collapsed-by-default "Базовый промпт" panel edits layer 1
 directly (autosaves via its own debounced `PUT /api/settings`, separate from
@@ -345,14 +388,14 @@ the Settings screen's field, which only persists via its own "Сохранить
 button — see `useSettings.updateSunoBasePrompt`), and a collapsed-by-default
 "Что уйдёт в модель" panel shows the full assembled text plus a rough
 input-token/cost estimate (`lib/sunoPrompt.js`'s `buildSunoPromptPreview`
-mirrors `_build_gemini_prompt` client-side; `lib/pricing.js`'s
-`estimateTokensFromChars` mirrors the backend's chars/4 heuristic — both are
-ex-ante UI estimates only, never the source of truth for what a call actually
-cost). The model that preview prices against, and that "Generate for Suno"
-actually uses, is a `ModelPicker` over `text_models.favorites` next to the
-button — session-only, seeded from `text_models.default`, same pattern the
-wish-model picker used before it was replaced by the always-global
-`simple_models.default` (see above).
+mirrors `_build_gemini_prompt` client-side, including the active-wishes block
+— keep both in sync; `lib/pricing.js`'s `estimateTokensFromChars` mirrors the
+backend's chars/4 heuristic — both are ex-ante UI estimates only, never the
+source of truth for what a call actually cost). The model that preview prices
+against, and that "Generate for Suno" actually uses, is a `ModelPicker` over
+`text_models.favorites` next to the button — session-only, seeded from
+`text_models.default`, same pattern the wish-model picker used before it was
+replaced by the always-global `simple_models.default` (see above).
 
 ## Conventions and gotchas
 

@@ -51,7 +51,7 @@ export const api = {
   updateWishSnippet: (id, patch) => request(`/api/settings/wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   generateSuno: (id, body) => request(`${projectPath(id)}/suno/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
-  refineSuno: (id, comment) => request(`${projectPath(id)}/suno/refine`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  addSunoWish: (id, text) => request(`${projectPath(id)}/suno/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
 
   generateSceneStoryboard: (id, body) => request(`${projectPath(id)}/scenes/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),

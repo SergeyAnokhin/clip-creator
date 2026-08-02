@@ -18,7 +18,7 @@ const LYRICS_MARKER = '===LYRICS===';
  * re-assembles the real prompt itself from persisted settings/project state
  * at request time; this preview can drift from it if either side changes
  * without updating the other. */
-export function buildSunoPromptPreview({ basePrompt, examples, skillPrompt, blocks }) {
+export function buildSunoPromptPreview({ basePrompt, examples, skillPrompt, blocks, activeWishes }) {
   const rawLyrics = formatLyrics(compileLyrics(blocks || []), typeLabel);
 
   let examplesBlock = '';
@@ -28,7 +28,13 @@ export function buildSunoPromptPreview({ basePrompt, examples, skillPrompt, bloc
       + labeled.join('\n\n---\n\n');
   }
 
-  const instructions = [basePrompt, examplesBlock, skillPrompt]
+  let wishesBlock = '';
+  if (activeWishes?.length) {
+    const items = activeWishes.map((w, i) => `${i + 1}. ${w}`).join('\n');
+    wishesBlock = 'ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ — обязательно учесть:\n' + items;
+  }
+
+  const instructions = [basePrompt, wishesBlock, examplesBlock, skillPrompt]
     .filter((part) => (part || '').trim())
     .join('\n\n');
 
@@ -36,4 +42,17 @@ export function buildSunoPromptPreview({ basePrompt, examples, skillPrompt, bloc
     + `Исходная структурированная лирика для адаптации:\n${rawLyrics}\n\n`
     + 'Ответь СТРОГО в этом формате, без какого-либо текста до или после:\n'
     + `${STYLE_MARKER}\n<style-block здесь>\n${LYRICS_MARKER}\n<lyrics-markup здесь>`;
+}
+
+/** Groups base-prompt presets (from GET /api/settings/suno-prompt-presets) by
+ * their `service` field (e.g. "Suno", "Mureka") for display, preserving the
+ * order services first appear in. */
+export function groupPresetsByService(presets) {
+  const groups = new Map();
+  for (const preset of presets) {
+    const service = preset.service || '';
+    if (!groups.has(service)) groups.set(service, []);
+    groups.get(service).push(preset);
+  }
+  return [...groups.entries()];
 }

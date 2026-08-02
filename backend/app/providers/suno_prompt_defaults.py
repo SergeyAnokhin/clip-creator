@@ -148,14 +148,16 @@ _PROMPT_GENRE_FIRST = _SHARED_INTRO + _BODY_TEMPLATE.format(style_order=_STYLE_O
 SUNO_BASE_PROMPT_PRESETS = [
     {
         'id': 'vocal-first',
-        'name': 'Вокал + жанр первыми (по умолчанию)',
+        'service': 'Suno',
+        'name': 'Suno · вокал + жанр первыми (по умолчанию)',
         'description': 'Vocal-дескрипторы и жанр — в первых позициях Style-блока. По одному из источников это '
                         'надёжнее для узнаваемости пола/тембра вокала, чем канонический порядок.',
         'prompt': _PROMPT_VOCAL_FIRST,
     },
     {
         'id': 'genre-first',
-        'name': 'Жанр первым (канонический порядок)',
+        'service': 'Suno',
+        'name': 'Suno · жанр первым (канонический порядок)',
         'description': 'Genre → Mood → Instrumentation → Vocal → Mastering — порядок, который чаще всего приводят '
                         'справочные гайды Suno. Стоит сравнить на своём материале с вариантом «вокал первым».',
         'prompt': _PROMPT_GENRE_FIRST,

@@ -4,7 +4,6 @@ import time
 import httpx
 
 from .. import usage
-from . import text_models
 
 # Real seam: `model` is a composite "{provider}:{model_id}" string (see
 # settings.text_models). When provider == 'google' and settings.api_keys.google
@@ -36,7 +35,7 @@ def _format_lyrics(blocks: list[dict]) -> str:
     return '\n\n'.join(segments)
 
 
-def _build_gemini_prompt(raw_lyrics: str, skill_prompt: str, settings: dict) -> str:
+def _build_gemini_prompt(raw_lyrics: str, skill_prompt: str, settings: dict, active_wishes: list[str] | None = None) -> str:
     base_prompt = settings.get('suno_base_prompt', '')
     examples = settings.get('suno_reference_examples', [])
     examples_block = ''
@@ -44,7 +43,12 @@ def _build_gemini_prompt(raw_lyrics: str, skill_prompt: str, settings: dict) -> 
         labeled = [f'Пример {i}:\n{ex}' for i, ex in enumerate(examples, start=1)]
         examples_block = 'Эталонные примеры адаптации (ориентир по тону и формату, не копировать дословно):\n\n' + '\n\n---\n\n'.join(labeled)
 
-    instructions = '\n\n'.join(part for part in [base_prompt, examples_block, skill_prompt] if part.strip())
+    wishes_block = ''
+    if active_wishes:
+        items = '\n'.join(f'{i}. {w}' for i, w in enumerate(active_wishes, start=1))
+        wishes_block = 'ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ — обязательно учесть:\n' + items
+
+    instructions = '\n\n'.join(part for part in [base_prompt, wishes_block, examples_block, skill_prompt] if part.strip())
 
     return (
         f'{instructions}\n\n'
@@ -67,9 +71,9 @@ def _parse_gemini_response(text: str, fallback_lyrics: str) -> dict:
 
 async def _generate_via_gemini(
     raw_lyrics: str, skill_prompt: str, settings: dict, api_key: str, model_id: str,
-    usage_ctx: dict | None = None,
+    usage_ctx: dict | None = None, active_wishes: list[str] | None = None,
 ) -> dict:
-    prompt = _build_gemini_prompt(raw_lyrics, skill_prompt, settings)
+    prompt = _build_gemini_prompt(raw_lyrics, skill_prompt, settings, active_wishes)
     url = _GEMINI_URL.format(model=model_id)
     model = f'google:{model_id}'
 
@@ -111,7 +115,7 @@ async def _generate_via_gemini(
 
 async def generate(
     project: dict, skill_prompt: str = '', model: str = '', settings: dict | None = None,
-    usage_ctx: dict | None = None,
+    usage_ctx: dict | None = None, active_wishes: list[str] | None = None,
 ) -> dict:
     settings = settings or {}
     raw_lyrics = _format_lyrics(project.get('blocks', []))
@@ -119,28 +123,10 @@ async def generate(
     provider, _, model_id = model.partition(':')
     api_key = (settings.get('api_keys') or {}).get('google', '')
     if provider == 'google' and model_id and api_key:
-        return await _generate_via_gemini(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx)
+        return await _generate_via_gemini(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx, active_wishes)
 
     # No network call here (deterministic stub), so nothing to bill - the
     # ledger must not record a call that never happened.
     await asyncio.sleep(0.05)
     style = project.get('style') or 'Cinematic Orchestral Folk, Warm Vocal, 90 BPM, Nostalgic'
     return {'style': style, 'lyrics': raw_lyrics}
-
-
-async def refine(project: dict, comment: str, settings: dict | None = None, usage_ctx: dict | None = None) -> dict:
-    """Cleans the user's free-text wish via the configured `simple_models`
-    model (see text_models.clean_wish - degrades to the wish verbatim without
-    a configured model/key) and folds the result into the existing skill
-    prompt as a plain instruction sentence; the full prompt (base + examples
-    + this) is what actually gets sent to the model on the next generate()
-    call."""
-    clean_comment = await text_models.clean_wish(comment, settings or {}, usage_ctx)
-    base = (project.get('skill_prompt') or '').rstrip()
-    if not base:
-        skill_prompt = clean_comment.strip()
-    elif base.endswith(('.', '!', '?')):
-        skill_prompt = f'{base} Additionally, {clean_comment.strip()}.'
-    else:
-        skill_prompt = f'{base}. Additionally, {clean_comment.strip()}.'
-    return {'skill_prompt': skill_prompt, 'clean_comment': clean_comment}

@@ -1,9 +1,9 @@
 # clip-creator (Versecraft)
 
-A workflow tool that turns a poem into song lyrics/style for Suno and an AI-generated
-scene/image storyboard. See [`docs/specs/`](docs/specs/) for the original product
-specification (reference only, not kept in sync with the code — see
-[CLAUDE.md](CLAUDE.md)).
+A workflow tool that turns a poem into song lyrics/style for a music-generation
+service (Suno, Mureka, ...) and an AI-generated scene/image storyboard. See
+[`docs/specs/`](docs/specs/) for the original product specification (reference
+only, not kept in sync with the code — see [CLAUDE.md](CLAUDE.md)).
 
 - **Frontend**: React (Vite) — [`frontend/`](frontend/)
 - **Backend**: FastAPI (Python) — [`backend/`](backend/)
@@ -47,8 +47,10 @@ npm test
 [`docs/examples/poem-to-lyrics/`](docs/examples/poem-to-lyrics/) holds 7
 hand-written `INPUT:` / `OUTPUT:` pairs — a raw Russian poem and the
 Suno-formatted lyrics it should turn into. Use them as the reference set when
-working on the lyrics builder or on the (currently stubbed) Suno provider,
-instead of inventing sample poems.
+working on the lyrics builder or on the music-prompt provider
+([`backend/app/providers/suno.py`](backend/app/providers/suno.py) — makes a
+real Gemini call when a Google API key is configured), instead of inventing
+sample poems.
 
 ## Documentation
 

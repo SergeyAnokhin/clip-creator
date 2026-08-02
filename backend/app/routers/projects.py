@@ -11,9 +11,28 @@ from ..slug import make_slug
 
 router = APIRouter(prefix='/api/projects', tags=['projects'])
 
+DEFAULT_SKILL_PROMPT = 'Transform the following structured lyrics into a music-service-ready format using strict bracket tags.'
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def migrate_legacy_project(project: dict) -> dict:
+    """One-time reset for projects created before the AI-wish library
+    rework: `active_wish_ids` (see suno "Доработка через AI-пожелание")
+    didn't exist yet, and `skill_prompt` may hold text folded in by the old
+    `suno.refine()` flow (now removed) along with `refinement_comments`
+    history that's no longer shown anywhere. Detected by the *absence* of
+    `active_wish_ids`, so this only ever fires once per project - the reset
+    fields are saved back immediately."""
+    if 'active_wish_ids' in project:
+        return project
+    project['skill_prompt'] = DEFAULT_SKILL_PROMPT
+    project['refinement_comments'] = []
+    project['active_wish_ids'] = []
+    storage.save_project(project['id'], project)
+    return project
 
 
 def _split_into_blocks(raw_text: str) -> list[dict]:
@@ -78,8 +97,9 @@ async def create_project(body: ProjectCreate):
         'tags': ['Intro'],
         'blocks': blocks,
         'skill_id': 'skill_a',
-        'skill_prompt': 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags.',
+        'skill_prompt': DEFAULT_SKILL_PROMPT,
         'refinement_comments': [],
+        'active_wish_ids': [],
         'style': '',
         'lyrics': '',
         'model_used': '',
@@ -98,7 +118,7 @@ def get_project(project_id: str):
     project = storage.load_project(project_id)
     if project is None:
         raise HTTPException(404, 'Project not found')
-    return project
+    return migrate_legacy_project(project)
 
 
 @router.patch('/{project_id}')
@@ -106,6 +126,7 @@ def patch_project(project_id: str, patch: dict = Body(...)):
     project = storage.load_project(project_id)
     if project is None:
         raise HTTPException(404, 'Project not found')
+    project = migrate_legacy_project(project)
     project.update(patch)
     project['updated_at'] = _now()
     storage.save_project(project_id, project)

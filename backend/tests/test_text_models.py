@@ -180,44 +180,6 @@ def test_generate_wish_title_falls_back_on_api_error(monkeypatch):
     assert title == text_models.truncate_title('добавь больше саксофона')
 
 
-def test_clean_wish_falls_back_without_simple_model():
-    import asyncio
-    settings = {'simple_models': {'default': ''}, 'api_keys': {}}
-    text = asyncio.run(text_models.clean_wish('добавь саксофона саксофона побольше', settings))
-    assert text == 'добавь саксофона саксофона побольше'
-
-
-def test_clean_wish_falls_back_when_key_missing():
-    import asyncio
-    settings = {'simple_models': {'default': 'google:gemini-2.0-flash-lite'}, 'api_keys': {'google': ''}}
-    text = asyncio.run(text_models.clean_wish('добавь саксофона', settings))
-    assert text == 'добавь саксофона'
-
-
-def test_clean_wish_calls_google_when_configured(monkeypatch):
-    payload = {'candidates': [{'content': {'parts': [{'text': 'Добавь больше саксофона'}]}}]}
-    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
-    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
-
-    import asyncio
-    settings = {'simple_models': {'default': 'google:gemini-2.0-flash-lite'}, 'api_keys': {'google': 'test-key'}}
-    text = asyncio.run(text_models.clean_wish('саксофона саксофона побольше эм', settings))
-
-    assert text == 'Добавь больше саксофона'
-    assert 'саксофона саксофона побольше эм' in fake_client.last_call['json']['contents'][0]['parts'][0]['text']
-
-
-def test_clean_wish_falls_back_on_api_error(monkeypatch):
-    fake_client = _FakeAsyncClient(_FakeResponse(500, text='boom'))
-    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
-
-    import asyncio
-    settings = {'simple_models': {'default': 'google:gemini-2.0-flash-lite'}, 'api_keys': {'google': 'test-key'}}
-    text = asyncio.run(text_models.clean_wish('добавь саксофона', settings))
-
-    assert text == 'добавь саксофона'
-
-
 def test_clean_wish_and_title_falls_back_without_simple_model():
     import asyncio
     settings = {'simple_models': {'default': ''}, 'api_keys': {}}

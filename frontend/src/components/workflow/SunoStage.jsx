@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, MessageSquare, Mic, MicOff, Save, Sparkles, Zap } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, ChevronRight, Copy, MessageSquare, Mic, MicOff, Sparkles, Zap } from 'lucide-react';
 import ModelPicker from './ModelPicker.jsx';
-import { buildSunoPromptPreview } from '../../lib/sunoPrompt.js';
+import { buildSunoPromptPreview, groupPresetsByService } from '../../lib/sunoPrompt.js';
 import { estimateCost, estimateTokensFromChars, formatCost } from '../../lib/pricing.js';
 
 function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
@@ -24,20 +24,23 @@ function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
       {open && (
         <>
           <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 10 }}>{L.suno_basePromptGlobalHint}</div>
-          {!!sunoPromptPresets?.length && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              {sunoPromptPresets.map((preset) => (
-                <button
-                  key={preset.id}
-                  className={`chip${sunoBasePrompt === preset.prompt ? ' is-active' : ''}`}
-                  title={preset.description}
-                  onClick={() => actions.updateSunoBasePrompt(preset.prompt)}
-                >
-                  {preset.name}
-                </button>
-              ))}
+          {!!sunoPromptPresets?.length && groupPresetsByService(sunoPromptPresets).map(([service, presets]) => (
+            <div key={service} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 6 }}>{service}</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {presets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    className={`chip${sunoBasePrompt === preset.prompt ? ' is-active' : ''}`}
+                    title={preset.description}
+                    onClick={() => actions.updateSunoBasePrompt(preset.prompt)}
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
+          ))}
           <textarea
             className="suno-textarea"
             value={sunoBasePrompt || ''}
@@ -50,11 +53,11 @@ function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
 }
 
 function PromptPreviewPanel({
-  L, sunoBasePrompt, referenceExamples, skillPrompt, blocks, genModel, modelPrices,
+  L, sunoBasePrompt, referenceExamples, skillPrompt, blocks, activeWishes, genModel, modelPrices,
 }) {
   const [open, setOpen] = useState(false);
   const previewText = buildSunoPromptPreview({
-    basePrompt: sunoBasePrompt, examples: referenceExamples, skillPrompt, blocks,
+    basePrompt: sunoBasePrompt, examples: referenceExamples, skillPrompt, blocks, activeWishes,
   });
   const tokens = estimateTokensFromChars(previewText);
   const price = genModel ? modelPrices?.[genModel] : null;
@@ -98,25 +101,8 @@ export default function SunoStage({
 }) {
   const wishModelEntry = simpleModelFavorites?.find((f) => `${f.provider}:${f.id}` === simpleModelDefault);
   const wishModelLabel = wishModelEntry ? wishModelEntry.label : (simpleModelDefault || L.suno_wishModelNotSet);
-  const [selectedWishIds, setSelectedWishIds] = useState([]);
-
-  useEffect(() => {
-    setSelectedWishIds([]);
-  }, [project.id]);
-
-  function toggleWish(wish) {
-    setSelectedWishIds((prev) => {
-      const next = prev.includes(wish.id) ? prev.filter((id) => id !== wish.id) : [...prev, wish.id];
-      const texts = (wishLibrary || []).filter((w) => next.includes(w.id)).map((w) => w.text);
-      actions.setRefinementText(texts.join(' '));
-      return next;
-    });
-  }
-
-  async function handleApplyRefinement() {
-    await actions.applyRefinement();
-    setSelectedWishIds([]);
-  }
+  const activeWishIds = project.active_wish_ids || [];
+  const activeWishes = (wishLibrary || []).filter((w) => activeWishIds.includes(w.id)).map((w) => w.text);
 
   return (
     <>
@@ -158,16 +144,8 @@ export default function SunoStage({
               {isRecordingRefinement ? <MicOff size={15} /> : <Mic size={15} />}
             </button>
           )}
-          <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={handleApplyRefinement}>
+          <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={actions.addWish}>
             {L.apply}
-          </button>
-          <button
-            className="icon-btn"
-            style={{ width: 38, height: 38 }}
-            title={L.saveWishToLibrary}
-            onClick={() => actions.saveWishToLibrary(refinementText)}
-          >
-            <Save size={15} />
           </button>
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 8 }}>
@@ -178,9 +156,9 @@ export default function SunoStage({
             {wishLibrary.map((wish) => (
               <button
                 key={wish.id}
-                className={`chip${selectedWishIds.includes(wish.id) ? ' is-active' : ''}`}
+                className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
                 title={wish.text}
-                onClick={() => toggleWish(wish)}
+                onClick={() => actions.toggleWish(wish.id)}
               >
                 {wish.title}
               </button>
@@ -193,21 +171,12 @@ export default function SunoStage({
             {L.recording} · {recordingSeconds}s
           </div>
         )}
-        {!!project.refinement_comments?.length && (
-          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 11.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
-              {L.refinementHistory}
-            </div>
-            {project.refinement_comments.map((comment, i) => (
-              <div key={i} style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.6)' }}>· {comment}</div>
-            ))}
-          </div>
-        )}
       </div>
 
       <PromptPreviewPanel
         L={L} sunoBasePrompt={sunoBasePrompt} referenceExamples={referenceExamples}
-        skillPrompt={project.skill_prompt} blocks={project.blocks} genModel={genModel} modelPrices={modelPrices}
+        skillPrompt={project.skill_prompt} blocks={project.blocks} activeWishes={activeWishes}
+        genModel={genModel} modelPrices={modelPrices}
       />
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>

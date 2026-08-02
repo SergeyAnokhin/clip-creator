@@ -1,10 +1,8 @@
-from datetime import datetime, timezone
-from uuid import uuid4
-
 from fastapi import APIRouter, Body, HTTPException
 
 from .. import storage, usage
-from ..providers import image_models, text_models
+from ..providers import image_models, text_models, wish_library
+from ..providers.mureka_prompt_defaults import MUREKA_BASE_PROMPT_PRESETS
 from ..providers.suno_prompt_defaults import (
     DEFAULT_REFERENCE_EXAMPLES, DEFAULT_SUNO_BASE_PROMPT, SUNO_BASE_PROMPT_PRESETS,
 )
@@ -30,25 +28,10 @@ DEFAULT_SETTINGS = {
 }
 
 
-def _normalize_wish_library(wishes: list) -> list:
-    """Old format was a flat list of strings; wrap those into the current
-    {id, title, text, created_at} shape without touching disk until the next
-    save (see storage.save_settings callers)."""
-    normalized = []
-    for w in wishes:
-        if isinstance(w, str):
-            normalized.append({
-                'id': uuid4().hex[:8], 'title': text_models.truncate_title(w), 'text': w, 'created_at': '',
-            })
-        else:
-            normalized.append(w)
-    return normalized
-
-
 @router.get('')
 def get_settings():
     merged = {**DEFAULT_SETTINGS, **storage.load_settings()}
-    merged['suno_wish_library'] = _normalize_wish_library(merged.get('suno_wish_library', []))
+    merged['suno_wish_library'] = wish_library.normalize_wish_library(merged.get('suno_wish_library', []))
     return merged
 
 
@@ -104,11 +87,12 @@ def get_models_catalog():
 
 @router.get('/suno-prompt-presets')
 def get_suno_prompt_presets():
-    """Built-in alternate base-prompt variants (see suno_prompt_defaults.py) the
-    Settings -> Suno-промпты tab offers to load into the editable
-    settings.suno_base_prompt, so users can A/B test them - read-only, not
-    stored per-user."""
-    return SUNO_BASE_PROMPT_PRESETS
+    """Built-in alternate base-prompt variants, grouped by music service (see
+    suno_prompt_defaults.py and mureka_prompt_defaults.py - each entry carries
+    a `service` label like 'Suno' or 'Mureka') the Settings -> music-prompts
+    tab offers to load into the editable settings.suno_base_prompt, so users
+    can A/B test them - read-only, not stored per-user."""
+    return SUNO_BASE_PROMPT_PRESETS + MUREKA_BASE_PROMPT_PRESETS
 
 
 @router.post('/wish-library')
@@ -119,26 +103,9 @@ async def add_wish(body: dict = Body(...)):
     model = (body.get('model') or '').strip()
 
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
-    wish_library = _normalize_wish_library(settings.get('suno_wish_library', []))
-    if any(w['text'] == text for w in wish_library):
-        return {'suno_wish_library': wish_library, 'wish': next(w for w in wish_library if w['text'] == text)}
-
-    # `model`, if the caller picked one for this save, only overrides which
-    # model titles *this* wish - it must not get persisted as the new
-    # settings.simple_models.default, so it's applied to a throwaway copy.
-    title_settings = settings if not model else {
-        **settings, 'simple_models': {**settings.get('simple_models', {}), 'default': model},
-    }
-    usage_ctx = usage.context('wish_title', None, title_settings)
-    result = await text_models.clean_wish_and_title(text, title_settings, usage_ctx=usage_ctx)
-    wish = {
-        'id': uuid4().hex[:8], 'title': result['title'], 'text': result['clean_text'],
-        'created_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-    }
-    wish_library = [*wish_library, wish]
-    settings['suno_wish_library'] = wish_library
-    storage.save_settings(settings)
-    return {'suno_wish_library': wish_library, 'wish': wish}
+    usage_ctx = usage.context('wish_title', None, settings)
+    result = await wish_library.add_or_get_wish(text, settings, usage_ctx=usage_ctx, model=model)
+    return {'suno_wish_library': result['wish_library'], 'wish': result['wish']}
 
 
 @router.patch('/wish-library/{wish_id}')
@@ -147,8 +114,8 @@ def update_wish(wish_id: str, body: dict = Body(...)):
     auto-generated title from `add_wish` needs a correction) - no LLM call,
     so no usage tracking here unlike `add_wish`."""
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
-    wish_library = _normalize_wish_library(settings.get('suno_wish_library', []))
-    wish = next((w for w in wish_library if w['id'] == wish_id), None)
+    wish_lib = wish_library.normalize_wish_library(settings.get('suno_wish_library', []))
+    wish = next((w for w in wish_lib if w['id'] == wish_id), None)
     if wish is None:
         raise HTTPException(404, 'Wish not found')
 
@@ -163,6 +130,6 @@ def update_wish(wish_id: str, body: dict = Body(...)):
             raise HTTPException(422, 'text is required')
         wish['text'] = text
 
-    settings['suno_wish_library'] = wish_library
+    settings['suno_wish_library'] = wish_lib
     storage.save_settings(settings)
-    return {'suno_wish_library': wish_library, 'wish': wish}
+    return {'suno_wish_library': wish_lib, 'wish': wish}

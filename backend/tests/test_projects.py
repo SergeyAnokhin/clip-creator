@@ -24,6 +24,34 @@ def test_get_missing_project_returns_404(client):
     assert client.get('/api/projects/does-not-exist').status_code == 404
 
 
+def test_legacy_project_without_active_wish_ids_is_reset_once_on_load(client):
+    """Projects created before the AI-wish library rework have no
+    `active_wish_ids` key and may carry `skill_prompt` text folded in by the
+    old suno.refine() flow - both get reset to defaults the first time such
+    a project loads (see projects.migrate_legacy_project)."""
+    import json
+    import os
+    from pathlib import Path
+
+    pid = client.get('/api/projects').json()[0]['id']
+    config_path = Path(os.environ['APP_DATA_DIR']) / 'projects' / pid / 'config.json'
+    legacy = json.loads(config_path.read_text(encoding='utf-8'))
+    del legacy['active_wish_ids']
+    legacy['skill_prompt'] = 'Custom prompt. Additionally, old folded wish.'
+    legacy['refinement_comments'] = ['old folded wish']
+    config_path.write_text(json.dumps(legacy), encoding='utf-8')
+
+    fetched = client.get(f'/api/projects/{pid}').json()
+
+    assert fetched['active_wish_ids'] == []
+    assert fetched['refinement_comments'] == []
+    assert fetched['skill_prompt'] == projects_router.DEFAULT_SKILL_PROMPT
+
+    persisted = json.loads(config_path.read_text(encoding='utf-8'))
+    assert persisted['active_wish_ids'] == []
+    assert persisted['skill_prompt'] == projects_router.DEFAULT_SKILL_PROMPT
+
+
 def test_patch_missing_project_returns_404(client):
     assert client.patch('/api/projects/does-not-exist', json={'title': 'x'}).status_code == 404
 

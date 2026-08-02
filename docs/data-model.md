@@ -26,8 +26,9 @@ app_data/
 | `created_at`, `updated_at` | str | ISO-8601 `…Z`; `updated_at` refreshed on every write |
 | `tags` | str[] | Home-screen chips only |
 | `blocks` | Block[] | Source of truth for the lyrics builder |
-| `skill_id`, `skill_prompt` | str | Active Suno skill and its (editable) prompt |
-| `refinement_comments` | str[] | "AI-wish" history — the *cleaned* text `suno.refine` folded into `skill_prompt`, not the user's raw input (see below) |
+| `skill_id`, `skill_prompt` | str | Active Suno skill and its (freely editable) "Дополнения к промпту" text — always sent last in the assembled prompt, after the base prompt and any active wishes |
+| `active_wish_ids` | str[] | Ids of `settings.suno_wish_library` entries currently toggled on for this project (see below) — resolved to their `text` and sent as an emphasized block on `suno/generate` |
+| `refinement_comments` | str[] | Unused — kept only for backward compatibility with old `config.json` files. Was the "AI-wish" history under the old `suno/refine` flow (removed); always `[]` on projects created or migrated since |
 | `style`, `lyrics` | str | Suno output; `style` non-empty ⇒ `suno_done` in the list view |
 | `model_used` | str | Text model used for the last generation |
 | `track_url` | str | User-pasted Suno track link |
@@ -49,6 +50,13 @@ backward compatibility, never read or edited.
 extension depends on the provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly
 one `is_selected` per scene once anything is rated.
 
+**Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
+predating the AI-wish library rework. The first time such a project loads
+through any route (`routers/projects.py::migrate_legacy_project`), its
+`skill_prompt` is reset to the default skill text, `refinement_comments` is
+cleared, and `active_wish_ids` is set to `[]` — persisted immediately, so
+this only ever fires once per project.
+
 ## Usage ledger (`app_data/usage/YYYY-MM.jsonl`)
 
 One JSON object per line, append-only, one file per calendar month. Full
@@ -57,7 +65,7 @@ call site are in [usage-tracking.md](usage-tracking.md); summary:
 
 `{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
 
-`task` is one of `suno_generate|wish_refine|wish_title|scene_storyboard|scene_image`.
+`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image`.
 `cost.amount` is `null` (never `0`) when the price or usage units needed to
 compute it are unknown; `cost.source` is `provider|catalog|unknown`.
 
@@ -82,37 +90,43 @@ partial merge server-side, so the frontend can persist e.g. just
   it's excluded from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
   `_MODEL_PROVIDERS` in `routers/settings.py`). `text_models.default` is
   what `suno.generate` parses to decide whether to call the real Gemini API
-  (see below); `simple_models.default` is used for lightweight tasks —
-  cleaning up the user's free-text "AI-wish" before it's folded into
-  `skill_prompt` (`suno/refine`) and, combined with title generation in the
-  same call, wish-library saves
+  (see below); `simple_models.default` is used for lightweight tasks — in one
+  call, tidying up the user's free-text "AI-wish" and generating its
+  emoji-prefixed title when it's saved to `suno_wish_library`
   ([`providers/text_models.py`](../backend/app/providers/text_models.py)
-  `clean_wish`/`clean_wish_and_title`) — there is deliberately **no** per-call
-  model picker for this on the Suno stage, only the one global default in
-  Settings; `image_models.default`/`.favorites` populate the
+  `clean_wish_and_title`, wrapped by
+  [`providers/wish_library.py`](../backend/app/providers/wish_library.py)
+  `add_or_get_wish`) — there is deliberately **no** per-call model picker for
+  this on the Suno stage, only the one global default in Settings;
+  `image_models.default`/`.favorites` populate the
   image-model picker in Settings ([`providers/image_models.py`](../backend/app/providers/image_models.py))
   and the per-generation `ModelPicker` in `ScenesStage.jsx`, whose composite
   is what `providers/images.py` actually dispatches to a real provider call
   (see `architecture.md`).
-- `suno_base_prompt` — the general "how to adapt for Suno" instructions, sent
-  on every `suno/generate` call that uses Gemini. `GET /api/settings/suno-prompt-presets`
-  (not part of `settings.json` — a read-only, hardcoded list from
-  `suno_prompt_defaults.SUNO_BASE_PROMPT_PRESETS`) offers alternate full-text
-  variants of this prompt to load into the field from Settings, for A/B
-  testing Style-block phrasing (currently: vocal-first vs. canonical
-  genre-first field ordering).
+- `suno_base_prompt` — the general "how to adapt for this music service"
+  instructions, sent on every `suno/generate` call that uses Gemini.
+  `GET /api/settings/suno-prompt-presets` (not part of `settings.json` — a
+  read-only, hardcoded list combining `suno_prompt_defaults.SUNO_BASE_PROMPT_PRESETS`
+  and `mureka_prompt_defaults.MUREKA_BASE_PROMPT_PRESETS`) offers alternate
+  full-text variants of this prompt to load into the field from Settings, for
+  A/B testing. Each entry is `{id, service, name, description, prompt}` —
+  `service` groups them in the UI ("Suno": vocal-first vs. canonical
+  genre-first field ordering; "Mureka": vocal cues only in the Style-block vs.
+  also as in-text parenthetical directives like `(whispering)`).
 - `suno_reference_examples` — curated example style+lyrics blocks, sent
   alongside the base prompt as "reference, don't copy verbatim" material.
-- `suno_wish_library` — saved wish snippets for reuse across projects
-  (distinct from a project's own `refinement_comments` history), each
+- `suno_wish_library` — global, reusable wish "cards", each
   `{id, title, text, created_at}`. `text` and `title` are both produced in a
   single call to `clean_wish_and_title` on save — `text` is the tidied-up
   wish (not the user's raw input verbatim), `title` a short auto-generated
-  label — real LLM call if `simple_models.default` points at
-  Google/OpenRouter/DeepSeek with a key configured, otherwise `text` is kept
-  as-is and `title` falls back to a local truncate. Legacy plain-string
-  entries are normalized to this shape on `GET /api/settings` (not rewritten
-  to disk until the next save).
+  label prefixed with one emoji (e.g. `"🎷 Больше саксофона"`) — real LLM
+  call if `simple_models.default` points at Google/OpenRouter/DeepSeek with a
+  key configured, otherwise `text` is kept as-is and `title` falls back to a
+  local truncate. Legacy plain-string entries are normalized to this shape on
+  `GET /api/settings` (not rewritten to disk until the next save). Each
+  project independently toggles a subset of these cards on via its own
+  `active_wish_ids` (see above) — the same card can be active for one song
+  and inactive for another.
 - `pricing_overrides` — user-supplied AI price corrections, keyed by
   `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
   wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
@@ -160,8 +174,8 @@ reference-image upload (multipart).
 | `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
 | `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit of an existing wish's title and/or text (either field, or both); no LLM call, so no usage tracking; `404` if `id` is unknown, `422` if a given field is blank |
-| `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model}` → `{style, lyrics, skill_id, model_used}`. `model` is the `"{provider}:{model_id}"` composite — the Suno stage seeds it from `settings.text_models.default` but lets the user override it per-call via the `ModelPicker` next to "Generate for Suno"; `provider == 'google'` + a Google key calls the real Gemini API; a failed call returns `502` instead of falling back |
-| `POST /api/projects/{id}/suno/refine` | `{comment}` → `{skill_prompt, refinement_comments}`. `comment` is first cleaned up via `suno.refine` → `text_models.clean_wish` (`settings.simple_models.default`, no per-call override); both the returned `skill_prompt` and the appended `refinement_comments` entry reflect the *cleaned* text, not the raw `comment` |
+| `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model, active_wish_ids?}` → `{style, lyrics, skill_id, model_used}`. `model` is the `"{provider}:{model_id}"` composite — the Suno stage seeds it from `settings.text_models.default` but lets the user override it per-call via the `ModelPicker` next to "Сгенерировать промпт"/"Generate prompt"; `active_wish_ids` (falls back to the project's own field if omitted) is resolved against `settings.suno_wish_library` and sent as an emphasized, numbered "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" block right after the base prompt; `provider == 'google'` + a Google key calls the real Gemini API; a failed call returns `502` instead of falling back |
+| `POST /api/projects/{id}/suno/wishes` | `{text}` → `{wish, suno_wish_library, active_wish_ids}`. Cleans+titles `text` via `wish_library.add_or_get_wish` (reuses an existing card with the same text instead of duplicating it), then immediately activates that wish's id for this project — the "Применить" button on the Suno stage's "Доработка через AI-пожелание" section. Replaces the old `suno/refine`, which instead folded the wish into `skill_prompt` and only kept a read-only history |
 | `POST /api/projects/{id}/scenes/generate` | `{style_description, model?}` → `{scenes, style_description}` — **replaces all scenes**, clearing their images. `model` (from `settings.text_models`) is accepted and forwarded to the provider seam but not yet used - `scenes.py` is still a non-AI stub (see `architecture.md`) |
 | `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background generation job per requested variant (`model` = `"{provider}:{model_id}"` from `settings.image_models`, provider ∈ `krea\|replicate\|fal\|google`) and returns immediately; poll each job below. A finished job appends its image to `scenes[n].images` on its own, independent of polling |
 | `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useScenesStage.js`); job state is in-memory only (see `architecture.md`) |

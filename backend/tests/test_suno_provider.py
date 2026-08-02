@@ -47,6 +47,27 @@ def test_build_gemini_prompt_includes_base_examples_and_skill_prompt():
     assert suno._LYRICS_MARKER in prompt
 
 
+def test_build_gemini_prompt_places_active_wishes_in_marked_block_right_after_base():
+    settings = {'suno_base_prompt': 'BASE RULES', 'suno_reference_examples': ['EXAMPLE ONE']}
+    prompt = suno._build_gemini_prompt(
+        '[Verse]\nRaw poem', 'SKILL PROMPT', settings,
+        active_wishes=['Больше саксофона', 'Женский бэк-вокал'],
+    )
+
+    assert 'ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ' in prompt
+    assert '1. Больше саксофона' in prompt
+    assert '2. Женский бэк-вокал' in prompt
+    # right after the base prompt, before the reference examples
+    assert prompt.index('BASE RULES') < prompt.index('ВАЖНЫЕ ТРЕБОВАНИЯ') < prompt.index('EXAMPLE ONE')
+
+
+def test_build_gemini_prompt_omits_wishes_block_when_none_active():
+    settings = {'suno_base_prompt': 'BASE RULES', 'suno_reference_examples': []}
+    prompt = suno._build_gemini_prompt('[Verse]\nRaw poem', 'SKILL PROMPT', settings, active_wishes=[])
+
+    assert 'ВАЖНЫЕ ТРЕБОВАНИЯ' not in prompt
+
+
 class _FakeResponse:
     def __init__(self, status_code, payload=None, text=''):
         self.status_code = status_code

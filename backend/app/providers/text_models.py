@@ -41,13 +41,6 @@ _TITLE_PROMPT = (
     'пожелания к песне. Ответь только заголовком, без кавычек и пояснений.\n\n{text}'
 )
 
-_WISH_CLEAN_PROMPT = (
-    'Ниже — свободный текст пожелания к песне, возможно надиктованный голосом: в нём могут быть '
-    'слова-паразиты, повторы или несвязные фрагменты. Перепиши его одним связным предложением на том же '
-    'языке, сохранив авторский смысл и все конкретные детали (инструменты, темп, жанр, настроение и т.п.), '
-    'ничего не добавляя от себя. Ответь только переписанным текстом, без кавычек и пояснений.\n\n{text}'
-)
-
 _WISH_MARKER = '===WISH==='
 _TITLE_MARKER = '===TITLE==='
 
@@ -176,39 +169,14 @@ async def generate_wish_title(text: str, settings: dict, usage_ctx: dict | None 
         return truncate_title(text)
 
 
-async def clean_wish(text: str, settings: dict, usage_ctx: dict | None = None) -> str:
-    """Runs the user's free-text wish (often voice-dictated, so possibly
-    rambling/repetitive) through the configured `simple_models` model to tidy
-    it into one clean sentence before it gets folded into the skill prompt.
-    Falls back to the original text verbatim - same degrade-gracefully
-    philosophy as generate_wish_title() - whenever no simple model/key is
-    configured or the call fails."""
-    text = (text or '').strip()
-    if not text:
-        return text
-
-    default = ((settings.get('simple_models') or {}).get('default') or '').strip()
-    provider, _, model_id = default.partition(':')
-    api_key = (settings.get('api_keys') or {}).get(provider, '')
-
-    try:
-        if provider == 'google' and model_id and api_key:
-            result = await _complete_google(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_PROMPT)
-        elif provider == 'openrouter' and model_id and api_key:
-            result = await _complete_openrouter(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_PROMPT)
-        elif provider == 'deepseek' and model_id and api_key:
-            result = await _complete_deepseek(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_PROMPT)
-        else:
-            return text
-        return result.strip().strip('"').strip() or text
-    except Exception:
-        return text
-
-
 async def clean_wish_and_title(text: str, settings: dict, usage_ctx: dict | None = None) -> dict:
-    """Same tidy-up as clean_wish(), but in one model call also produces a
-    short title - used when saving a wish to the library, so a save costs one
-    LLM call instead of two."""
+    """Runs the user's free-text wish (often voice-dictated, so possibly
+    rambling/repetitive) through the configured `simple_models` model,
+    tidying it into one clean sentence and, in the same call, producing a
+    short emoji-prefixed title - used when saving a wish to the library
+    (see providers/wish_library.py). Falls back to the original text
+    verbatim + a truncated title whenever no simple model/key is configured
+    or the call fails."""
     text = (text or '').strip()
     if not text:
         return {'clean_text': text, 'title': text}

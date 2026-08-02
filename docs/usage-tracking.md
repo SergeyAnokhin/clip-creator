@@ -39,8 +39,8 @@ bounds how much has to be read for a "today" or date-ranged query.
 | --- | --- | --- |
 | `id` | str | `u_` + 12 hex chars |
 | `ts` | str | UTC ISO-8601, `…Z` |
-| `task` | str | `suno_generate` \| `wish_refine` \| `wish_title` \| `scene_storyboard` \| `scene_image` |
-| `project_id` | str \| null | The project slug (= "стих"); `null` for calls with no project (wish-title) |
+| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` |
+| `project_id` | str \| null | The project slug (= "стих"); `null` for `wish_title` calls made from the Settings → Wishes tab (library-only, no project); set for `wish_title` calls made from a project's Suno stage ("Применить") |
 | `provider`, `model_id`, `model` | str | `model` is the `"{provider}:{model_id}"` composite, denormalized for grouping |
 | `status` | str | `ok` \| `error` |
 | `duration_ms` | int | Wall-clock around the provider call |

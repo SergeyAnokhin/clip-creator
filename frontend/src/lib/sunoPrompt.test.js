@@ -35,4 +35,22 @@ describe('buildSunoPromptPreview', () => {
     });
     expect(text).toContain('[Prechorus]\nX');
   });
+
+  it('places active wishes in a marked block right after the base prompt', () => {
+    const text = buildSunoPromptPreview({
+      basePrompt: 'BASE', examples: ['Example one'], skillPrompt: 'SKILL', blocks: [],
+      activeWishes: ['Больше саксофона', 'Женский бэк-вокал'],
+    });
+
+    expect(text).toContain('ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ');
+    expect(text).toContain('1. Больше саксофона');
+    expect(text).toContain('2. Женский бэк-вокал');
+    expect(text.indexOf('BASE')).toBeLessThan(text.indexOf('ВАЖНЫЕ ТРЕБОВАНИЯ'));
+    expect(text.indexOf('ВАЖНЫЕ ТРЕБОВАНИЯ')).toBeLessThan(text.indexOf('Пример 1'));
+  });
+
+  it('omits the wishes block when no wish is active', () => {
+    const text = buildSunoPromptPreview({ basePrompt: 'BASE', examples: [], skillPrompt: '', blocks: [], activeWishes: [] });
+    expect(text).not.toContain('ВАЖНЫЕ ТРЕБОВАНИЯ');
+  });
 });

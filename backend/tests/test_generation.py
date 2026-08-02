@@ -99,33 +99,48 @@ def test_generate_suno_formats_lyrics_from_current_blocks(client):
     assert resp.json()['lyrics'] == '[Intro]\nLine one\n\n[Vocal Interlude]\n\n[Verse]\nLine two'
 
 
-def test_refine_suno_rewrites_prompt_and_appends_comment_history(client):
+def test_add_suno_wish_creates_card_and_activates_it_for_project(client):
     pid = client.get('/api/projects').json()[0]['id']
     before = client.get(f'/api/projects/{pid}').json()
 
-    resp = client.post(f'/api/projects/{pid}/suno/refine', json={'comment': 'Add more jazz'})
+    resp = client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Add more jazz'})
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body['skill_prompt'].startswith(before['skill_prompt'].rstrip('.'))
-    assert 'Add more jazz' in body['skill_prompt']
-    assert body['refinement_comments'] == ['Add more jazz']
+    wish = body['wish']
+    assert wish['text'] == 'Add more jazz'
+    assert wish['title']
+    assert body['active_wish_ids'] == [wish['id']]
+    assert any(w['id'] == wish['id'] for w in body['suno_wish_library'])
 
+    # skill_prompt is left untouched - no more folding the wish into it
     saved = client.get(f'/api/projects/{pid}').json()
-    assert saved['skill_prompt'] == body['skill_prompt']
-    assert saved['refinement_comments'] == ['Add more jazz']
+    assert saved['active_wish_ids'] == [wish['id']]
+    assert saved['skill_prompt'] == before['skill_prompt']
+    assert saved['refinement_comments'] == []
 
-    resp2 = client.post(f'/api/projects/{pid}/suno/refine', json={'comment': 'Saxophone solo'})
-    assert resp2.json()['refinement_comments'] == ['Add more jazz', 'Saxophone solo']
+    settings = client.get('/api/settings').json()
+    assert any(w['id'] == wish['id'] for w in settings['suno_wish_library'])
 
 
-def test_refine_suno_cleans_comment_via_configured_simple_model(client, monkeypatch):
+def test_add_suno_wish_reuses_existing_card_by_text(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    first = client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Saxophone solo'}).json()
+    second = client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Saxophone solo'}).json()
+
+    assert first['wish']['id'] == second['wish']['id']
+    assert second['active_wish_ids'] == [first['wish']['id']]
+
+
+def test_add_suno_wish_cleans_and_titles_via_configured_simple_model(client, monkeypatch):
     from app.providers import text_models
 
     class _FakeResponse:
         status_code = 200
         def json(self):
-            return {'candidates': [{'content': {'parts': [{'text': 'Добавь больше саксофона'}]}}]}
+            return {'candidates': [{'content': {'parts': [{
+                'text': '===WISH===\nДобавь больше саксофона\n===TITLE===\n🎷 Больше саксофона',
+            }]}}]}
 
     class _FakeAsyncClient:
         async def __aenter__(self):
@@ -142,17 +157,39 @@ def test_refine_suno_cleans_comment_via_configured_simple_model(client, monkeypa
     })
 
     pid = client.get('/api/projects').json()[0]['id']
-    resp = client.post(f'/api/projects/{pid}/suno/refine', json={'comment': 'саксофона саксофона побольше эм'})
+    resp = client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'саксофона саксофона побольше эм'})
 
     assert resp.status_code == 200
-    body = resp.json()
-    assert 'Добавь больше саксофона' in body['skill_prompt']
-    assert body['refinement_comments'] == ['Добавь больше саксофона']
+    wish = resp.json()['wish']
+    assert wish['text'] == 'Добавь больше саксофона'
+    assert wish['title'] == '🎷 Больше саксофона'
 
 
-def test_refine_suno_rejects_blank_comment(client):
+def test_add_suno_wish_rejects_blank_text(client):
     pid = client.get('/api/projects').json()[0]['id']
-    assert client.post(f'/api/projects/{pid}/suno/refine', json={'comment': '  '}).status_code == 422
+    assert client.post(f'/api/projects/{pid}/suno/wishes', json={'text': '  '}).status_code == 422
+
+
+def test_generate_suno_sends_active_wishes_as_resolved_list(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    added = client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Add more jazz'}).json()
+    fake_generate = AsyncMock(return_value={'style': 'S', 'lyrics': 'L'})
+    monkeypatch.setattr(generation_router.suno, 'generate', fake_generate)
+
+    client.post(f'/api/projects/{pid}/suno/generate', json={'active_wish_ids': [added['wish']['id']]})
+
+    assert fake_generate.call_args.kwargs['active_wishes'] == ['Add more jazz']
+
+
+def test_generate_suno_falls_back_to_projects_active_wish_ids_when_not_sent(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Add more jazz'})
+    fake_generate = AsyncMock(return_value={'style': 'S', 'lyrics': 'L'})
+    monkeypatch.setattr(generation_router.suno, 'generate', fake_generate)
+
+    client.post(f'/api/projects/{pid}/suno/generate', json={})
+
+    assert fake_generate.call_args.kwargs['active_wishes'] == ['Add more jazz']
 
 
 def test_generate_scenes_calls_provider_seam_and_persists(client, monkeypatch):
@@ -278,9 +315,9 @@ def test_generate_suno_missing_project_returns_404(client):
     assert client.post('/api/projects/does-not-exist/suno/generate', json={}).status_code == 404
 
 
-def test_refine_suno_missing_project_returns_404(client):
+def test_add_suno_wish_missing_project_returns_404(client):
     assert client.post(
-        '/api/projects/does-not-exist/suno/refine', json={'comment': 'hi'},
+        '/api/projects/does-not-exist/suno/wishes', json={'text': 'hi'},
     ).status_code == 404
 
 

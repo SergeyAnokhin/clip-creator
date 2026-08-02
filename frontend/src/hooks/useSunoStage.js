@@ -6,7 +6,7 @@ import { api } from '../api/client.js';
  * only as a stable label sent to the backend (usage-ledger meta); there's no
  * more UI to change it. */
 export function useSunoStage({
-  activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, onAiCall,
+  activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, onAiCall, onWishLibraryChange,
 }) {
   const [skillId, setSkillId] = useState('skill_a');
   const [refinementText, setRefinementText] = useState('');
@@ -28,21 +28,26 @@ export function useSunoStage({
   function setSkillPrompt(value) {
     updateProject((p) => ({ ...p, skill_prompt: value }), { immediate: false });
   }
-  async function applyRefinement() {
+  async function addWish() {
     if (!refinementText.trim() || !activeProject) return;
-    const comment = refinementText;
     try {
-      const result = await api.refineSuno(activeProject.id, comment);
-      setActiveProject((p) => ({
-        ...p, skill_prompt: result.skill_prompt, refinement_comments: result.refinement_comments,
-      }));
+      const result = await api.addSunoWish(activeProject.id, refinementText);
+      setActiveProject((p) => ({ ...p, active_wish_ids: result.active_wish_ids }));
+      onWishLibraryChange?.(result.suno_wish_library);
       setRefinementText('');
-      showToast(L.toast_generated);
+      showToast(L.toast_saved);
     } catch {
-      showToast('Не удалось применить правку');
+      showToast('Не удалось сохранить пожелание');
     } finally {
       onAiCall?.();
     }
+  }
+  function toggleWish(wishId) {
+    updateProject((p) => {
+      const active = p.active_wish_ids || [];
+      const next = active.includes(wishId) ? active.filter((id) => id !== wishId) : [...active, wishId];
+      return { ...p, active_wish_ids: next };
+    });
   }
   async function generateSuno() {
     if (!activeProject) return;
@@ -50,6 +55,7 @@ export function useSunoStage({
     try {
       const result = await api.generateSuno(activeProject.id, {
         skill_id: skillId, skill_prompt: activeProject.skill_prompt, model: genModel,
+        active_wish_ids: activeProject.active_wish_ids,
       });
       setActiveProject((p) => ({
         ...p, style: result.style, lyrics: result.lyrics, skill_id: result.skill_id, model_used: result.model_used,
@@ -79,7 +85,7 @@ export function useSunoStage({
     state: { skillId, refinementText, sunoLoading, trackUrl, genModel },
     resetForProject,
     actions: {
-      setSkillPrompt, setRefinementText, applyRefinement,
+      setSkillPrompt, setRefinementText, addWish, toggleWish,
       generateSuno, copyStyle, copyLyrics, setTrackUrl, saveTrackUrl, selectGenModel: setGenModel,
     },
   };

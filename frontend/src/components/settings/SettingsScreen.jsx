@@ -4,6 +4,7 @@ import { api } from '../../api/client.js';
 import { modelPriceMap } from '../../lib/pricing.js';
 import { downloadJSON } from '../../lib/download.js';
 import { useFieldVoice } from '../../hooks/useVoice.js';
+import { groupPresetsByService } from '../../lib/sunoPrompt.js';
 import ModelFavorites from './ModelFavorites.jsx';
 import PricingPanel from './PricingPanel.jsx';
 import UsagePill from '../UsagePill.jsx';
@@ -379,26 +380,31 @@ export default function SettingsScreen({
                 <div className="settings-panel">
                   <div className="settings-panel-label">{L.settings_sunoPromptPresets}</div>
                   <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>{L.settings_sunoPromptPresetsHint}</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {sunoPromptPresets.map((preset) => {
-                      const isActive = sunoBasePrompt === preset.prompt;
-                      return (
-                        <div className="settings-row" key={preset.id} style={{ alignItems: 'flex-start' }}>
-                          <div>
-                            <div className="settings-row-name">{preset.name}</div>
-                            <div style={{ fontSize: 12, opacity: 0.7 }}>{preset.description}</div>
-                          </div>
-                          <button
-                            className={`btn btn-accent-soft${isActive ? ' is-active' : ''}`}
-                            style={{ flexShrink: 0 }}
-                            onClick={() => actions.setSunoBasePrompt(preset.prompt)}
-                          >
-                            {isActive ? L.settings_presetLoaded : L.settings_loadPreset}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  {groupPresetsByService(sunoPromptPresets).map(([service, presets]) => (
+                    <div key={service} style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 11.5, opacity: 0.6, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>{service}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {presets.map((preset) => {
+                          const isActive = sunoBasePrompt === preset.prompt;
+                          return (
+                            <div className="settings-row" key={preset.id} style={{ alignItems: 'flex-start' }}>
+                              <div>
+                                <div className="settings-row-name">{preset.name}</div>
+                                <div style={{ fontSize: 12, opacity: 0.7 }}>{preset.description}</div>
+                              </div>
+                              <button
+                                className={`btn btn-accent-soft${isActive ? ' is-active' : ''}`}
+                                style={{ flexShrink: 0 }}
+                                onClick={() => actions.setSunoBasePrompt(preset.prompt)}
+                              >
+                                {isActive ? L.settings_presetLoaded : L.settings_loadPreset}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 

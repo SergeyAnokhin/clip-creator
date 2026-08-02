@@ -4,7 +4,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 
 from .. import storage, usage
-from ..providers import images, scenes, suno
+from ..providers import images, scenes, suno, wish_library
+from .projects import migrate_legacy_project
 from .settings import DEFAULT_SETTINGS
 
 router = APIRouter(prefix='/api/projects', tags=['generation'])
@@ -21,15 +22,22 @@ async def generate_suno(project_id: str, body: dict = Body(default={})):
     project = storage.load_project(project_id)
     if project is None:
         raise HTTPException(404, 'Project not found')
+    project = migrate_legacy_project(project)
 
     skill_id = body.get('skill_id', project.get('skill_id', 'skill_a'))
     skill_prompt = body.get('skill_prompt', project.get('skill_prompt', ''))
     model = body.get('model', '')
+    active_wish_ids = body.get('active_wish_ids', project.get('active_wish_ids', []))
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    wish_lookup = {w['id']: w['text'] for w in wish_library.normalize_wish_library(settings.get('suno_wish_library', []))}
+    active_wishes = [wish_lookup[wid] for wid in active_wish_ids if wid in wish_lookup]
     usage_ctx = usage.context('suno_generate', project_id, settings, skill_id=skill_id)
 
     try:
-        result = await suno.generate(project, skill_prompt=skill_prompt, model=model, settings=settings, usage_ctx=usage_ctx)
+        result = await suno.generate(
+            project, skill_prompt=skill_prompt, model=model, settings=settings,
+            usage_ctx=usage_ctx, active_wishes=active_wishes,
+        )
     except Exception as exc:
         raise HTTPException(502, f'Не удалось сгенерировать через {model or "провайдер"}: {exc}') from exc
     project['style'] = result['style']
@@ -42,27 +50,35 @@ async def generate_suno(project_id: str, body: dict = Body(default={})):
     return {**result, 'skill_id': skill_id, 'model_used': model}
 
 
-@router.post('/{project_id}/suno/refine')
-async def refine_suno(project_id: str, body: dict = Body(...)):
+@router.post('/{project_id}/suno/wishes')
+async def add_suno_wish(project_id: str, body: dict = Body(...)):
+    """Cleans+titles the user's free-text wish (dictated or typed), saves it
+    to the global, cross-project settings.suno_wish_library (or reuses an
+    existing entry with the same text - see wish_library.add_or_get_wish),
+    and immediately activates it for this project. Replaces the old
+    suno/refine flow, which destructively folded the wish into skill_prompt
+    instead of keeping it as a reusable, toggleable card."""
     project = storage.load_project(project_id)
     if project is None:
         raise HTTPException(404, 'Project not found')
+    project = migrate_legacy_project(project)
 
-    comment = (body.get('comment') or '').strip()
-    if not comment:
-        raise HTTPException(422, 'comment is required')
+    text = (body.get('text') or '').strip()
+    if not text:
+        raise HTTPException(422, 'text is required')
 
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
-    usage_ctx = usage.context('wish_refine', project_id, settings)
-    result = await suno.refine(project, comment, settings=settings, usage_ctx=usage_ctx)
-    skill_prompt = result['skill_prompt']
-    refinement_comments = [*project.get('refinement_comments', []), result['clean_comment']]
+    usage_ctx = usage.context('wish_title', project_id, settings)
+    result = await wish_library.add_or_get_wish(text, settings, usage_ctx=usage_ctx)
+    wish = result['wish']
 
-    project['skill_prompt'] = skill_prompt
-    project['refinement_comments'] = refinement_comments
+    active_wish_ids = project.get('active_wish_ids', [])
+    if wish['id'] not in active_wish_ids:
+        active_wish_ids = [*active_wish_ids, wish['id']]
+    project['active_wish_ids'] = active_wish_ids
     project['updated_at'] = _now()
     storage.save_project(project_id, project)
-    return {'skill_prompt': skill_prompt, 'refinement_comments': refinement_comments}
+    return {'wish': wish, 'suno_wish_library': result['wish_library'], 'active_wish_ids': active_wish_ids}
 
 
 @router.post('/{project_id}/scenes/generate')

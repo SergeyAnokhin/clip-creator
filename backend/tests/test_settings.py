@@ -1,3 +1,26 @@
+def test_get_suno_prompt_presets_covers_both_services(client):
+    from app.providers.suno_prompt_defaults import DEFAULT_SUNO_BASE_PROMPT
+
+    resp = client.get('/api/settings/suno-prompt-presets')
+    assert resp.status_code == 200
+    presets = resp.json()
+
+    ids = [p['id'] for p in presets]
+    assert len(ids) == len(set(ids))
+
+    services = {p['service'] for p in presets}
+    assert services == {'Suno', 'Mureka'}
+
+    for preset in presets:
+        assert preset['name']
+        assert preset['description']
+        assert 'STYLE-BLOCK' in preset['prompt']
+        assert 'LYRICS-MARKUP' in preset['prompt']
+
+    suno_presets = [p for p in presets if p['service'] == 'Suno']
+    assert suno_presets[0]['prompt'] == DEFAULT_SUNO_BASE_PROMPT
+
+
 def test_get_settings_returns_defaults(client):
     resp = client.get('/api/settings')
     assert resp.status_code == 200

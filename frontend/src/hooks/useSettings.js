@@ -213,7 +213,7 @@ export function useSettings({ showToast, onAiCall }) {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings,
       addSpecialTag, removeSpecialTag, updateSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
-      addReferenceExample, removeReferenceExample, updateReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet,
+      addReferenceExample, removeReferenceExample, updateReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet, setWishLibrary,
       addTextModelFavorite, removeTextModelFavorite, setTextModelDefault,
       addSimpleModelFavorite, removeSimpleModelFavorite, setSimpleModelDefault,
       addImageModelFavorite, removeImageModelFavorite, setImageModelDefault,
