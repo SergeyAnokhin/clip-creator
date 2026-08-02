@@ -39,7 +39,9 @@ export default function SettingsScreen({
 }) {
   const [activeTab, setActiveTab] = useState('general');
   const [newTagDraft, setNewTagDraft] = useState('');
+  const [editingTagIndex, setEditingTagIndex] = useState(null);
   const [newExampleDraft, setNewExampleDraft] = useState('');
+  const [editingExampleIndex, setEditingExampleIndex] = useState(null);
   const [newWishDraft, setNewWishDraft] = useState('');
   const [editingWishId, setEditingWishId] = useState(null);
   const [editWishTitle, setEditWishTitle] = useState('');
@@ -82,6 +84,42 @@ export default function SettingsScreen({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (file) actions.importGeneralSettings(file);
+  }
+
+  function startEditTag(index) {
+    setEditingTagIndex(index);
+    setNewTagDraft(specialTags[index]);
+  }
+  function cancelEditTag() {
+    setEditingTagIndex(null);
+    setNewTagDraft('');
+  }
+  function submitTagDraft() {
+    if (editingTagIndex !== null) {
+      actions.updateSpecialTag(editingTagIndex, newTagDraft);
+    } else {
+      actions.addSpecialTag(newTagDraft);
+    }
+    setEditingTagIndex(null);
+    setNewTagDraft('');
+  }
+
+  function startEditExample(index) {
+    setEditingExampleIndex(index);
+    setNewExampleDraft(referenceExamples[index]);
+  }
+  function cancelEditExample() {
+    setEditingExampleIndex(null);
+    setNewExampleDraft('');
+  }
+  function submitExampleDraft() {
+    if (editingExampleIndex !== null) {
+      actions.updateReferenceExample(editingExampleIndex, newExampleDraft);
+    } else {
+      actions.addReferenceExample(newExampleDraft);
+    }
+    setEditingExampleIndex(null);
+    setNewExampleDraft('');
   }
 
   function startEditWish(wish) {
@@ -300,8 +338,19 @@ export default function SettingsScreen({
                 <div className="settings-panel-label">{L.settings_specialTags}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {specialTags.map((tag, i) => (
-                    <div className="settings-row" key={i}>
-                      <span className="settings-row-name">{tag}</span>
+                    <div
+                      className="settings-row"
+                      key={i}
+                      style={i === editingTagIndex ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
+                    >
+                      <span
+                        className="settings-row-name"
+                        style={{ width: 'auto', flex: 1, cursor: 'pointer' }}
+                        title={L.settings_clickToEdit}
+                        onClick={() => startEditTag(i)}
+                      >
+                        {tag}
+                      </span>
                       <button className="icon-btn icon-btn-danger" onClick={() => actions.removeSpecialTag(i)}>
                         <Trash2 size={13} />
                       </button>
@@ -315,12 +364,14 @@ export default function SettingsScreen({
                     onChange={(e) => setNewTagDraft(e.target.value)}
                     placeholder={L.settings_specialTagsPlaceholder}
                   />
-                  <button
-                    className="btn btn-accent-soft"
-                    onClick={() => { actions.addSpecialTag(newTagDraft); setNewTagDraft(''); }}
-                  >
-                    {L.add}
+                  <button className="btn btn-accent-soft" onClick={submitTagDraft}>
+                    {editingTagIndex !== null ? L.save : L.add}
                   </button>
+                  {editingTagIndex !== null && (
+                    <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditTag}>
+                      {L.cancel}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -329,21 +380,24 @@ export default function SettingsScreen({
                   <div className="settings-panel-label">{L.settings_sunoPromptPresets}</div>
                   <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>{L.settings_sunoPromptPresetsHint}</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {sunoPromptPresets.map((preset) => (
-                      <div className="settings-row" key={preset.id} style={{ alignItems: 'flex-start' }}>
-                        <div>
-                          <div className="settings-row-name">{preset.name}</div>
-                          <div style={{ fontSize: 12, opacity: 0.7 }}>{preset.description}</div>
+                    {sunoPromptPresets.map((preset) => {
+                      const isActive = sunoBasePrompt === preset.prompt;
+                      return (
+                        <div className="settings-row" key={preset.id} style={{ alignItems: 'flex-start' }}>
+                          <div>
+                            <div className="settings-row-name">{preset.name}</div>
+                            <div style={{ fontSize: 12, opacity: 0.7 }}>{preset.description}</div>
+                          </div>
+                          <button
+                            className={`btn btn-accent-soft${isActive ? ' is-active' : ''}`}
+                            style={{ flexShrink: 0 }}
+                            onClick={() => actions.setSunoBasePrompt(preset.prompt)}
+                          >
+                            {isActive ? L.settings_presetLoaded : L.settings_loadPreset}
+                          </button>
                         </div>
-                        <button
-                          className="btn btn-accent-soft"
-                          style={{ flexShrink: 0 }}
-                          onClick={() => actions.setSunoBasePrompt(preset.prompt)}
-                        >
-                          {L.settings_loadPreset}
-                        </button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -362,9 +416,18 @@ export default function SettingsScreen({
                 <div className="settings-panel-label">{L.settings_referenceExamples}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {referenceExamples.map((example, i) => (
-                    <div className="settings-row" key={i}>
-                      <span className="settings-row-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {example.slice(0, 80)}{example.length > 80 ? '…' : ''}
+                    <div
+                      className="settings-row"
+                      key={i}
+                      style={i === editingExampleIndex ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
+                    >
+                      <span
+                        className="settings-row-name"
+                        style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                        title={L.settings_clickToEdit}
+                        onClick={() => startEditExample(i)}
+                      >
+                        {example}
                       </span>
                       <button className="icon-btn icon-btn-danger" onClick={() => actions.removeReferenceExample(i)}>
                         <Trash2 size={13} />
@@ -380,13 +443,16 @@ export default function SettingsScreen({
                     onChange={(e) => setNewExampleDraft(e.target.value)}
                     placeholder={L.settings_referenceExamplesPlaceholder}
                   />
-                  <button
-                    className="btn btn-accent-soft"
-                    style={{ alignSelf: 'flex-start' }}
-                    onClick={() => { actions.addReferenceExample(newExampleDraft); setNewExampleDraft(''); }}
-                  >
-                    {L.add}
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-accent-soft" style={{ alignSelf: 'flex-start' }} onClick={submitExampleDraft}>
+                      {editingExampleIndex !== null ? L.save : L.add}
+                    </button>
+                    {editingExampleIndex !== null && (
+                      <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditExample}>
+                        {L.cancel}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </>

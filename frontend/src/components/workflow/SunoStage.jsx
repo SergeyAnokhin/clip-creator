@@ -1,24 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Copy, MessageSquare, Mic, MicOff, Save, Sparkles, Zap } from 'lucide-react';
 import ModelPicker from './ModelPicker.jsx';
 import { buildSunoPromptPreview } from '../../lib/sunoPrompt.js';
 import { estimateCost, estimateTokensFromChars, formatCost } from '../../lib/pricing.js';
-
-export const SKILLS = [
-  {
-    id: 'skill_a',
-    label: 'Suno Structure & Style Pro',
-    template: 'Transform the following structured lyrics into a Suno-ready format using strict bracket tags '
-      + '([Verse], [Chorus], [Bridge], [Fade Out]). Optimize rhythm for singing, keep the original imagery, '
-      + 'and produce a compact Style of Music description (genre, instrumentation, vocal type, BPM, mood).',
-  },
-  {
-    id: 'skill_b',
-    label: 'Suno Lyrics Adapter',
-    template: 'Transform the following structured lyrics into a Suno-ready format. Place meta-tags for vocals, '
-      + 'pauses and instruments ([Verse], [Chorus], [Guitar Solo], [Fade Out]) and optimize the rhythm for singing.',
-  },
-];
 
 function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
   const [open, setOpen] = useState(false);
@@ -45,7 +29,7 @@ function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
               {sunoPromptPresets.map((preset) => (
                 <button
                   key={preset.id}
-                  className="chip"
+                  className={`chip${sunoBasePrompt === preset.prompt ? ' is-active' : ''}`}
                   title={preset.description}
                   onClick={() => actions.updateSunoBasePrompt(preset.prompt)}
                 >
@@ -108,12 +92,31 @@ function PromptPreviewPanel({
 }
 
 export default function SunoStage({
-  L, project, skillId, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported,
+  L, project, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported,
   sunoLoading, trackUrl, wishLibrary, genModel, simpleModelDefault, simpleModelFavorites, textModelFavorites,
   modelPrices, sunoBasePrompt, sunoPromptPresets, referenceExamples, actions,
 }) {
   const wishModelEntry = simpleModelFavorites?.find((f) => `${f.provider}:${f.id}` === simpleModelDefault);
   const wishModelLabel = wishModelEntry ? wishModelEntry.label : (simpleModelDefault || L.suno_wishModelNotSet);
+  const [selectedWishIds, setSelectedWishIds] = useState([]);
+
+  useEffect(() => {
+    setSelectedWishIds([]);
+  }, [project.id]);
+
+  function toggleWish(wish) {
+    setSelectedWishIds((prev) => {
+      const next = prev.includes(wish.id) ? prev.filter((id) => id !== wish.id) : [...prev, wish.id];
+      const texts = (wishLibrary || []).filter((w) => next.includes(w.id)).map((w) => w.text);
+      actions.setRefinementText(texts.join(' '));
+      return next;
+    });
+  }
+
+  async function handleApplyRefinement() {
+    await actions.applyRefinement();
+    setSelectedWishIds([]);
+  }
 
   return (
     <>
@@ -126,17 +129,6 @@ export default function SunoStage({
         <div className="suno-panel-title">
           <Sparkles size={16} color="#ff9d5c" />
           {L.selectedSkill}
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          {SKILLS.map((sk) => (
-            <button
-              key={sk.id}
-              className={`chip${skillId === sk.id ? ' is-active' : ''}`}
-              onClick={() => actions.selectSkill(sk.id, sk.template)}
-            >
-              {sk.label}
-            </button>
-          ))}
         </div>
         <textarea
           className="suno-textarea"
@@ -166,7 +158,7 @@ export default function SunoStage({
               {isRecordingRefinement ? <MicOff size={15} /> : <Mic size={15} />}
             </button>
           )}
-          <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={actions.applyRefinement}>
+          <button className="btn btn-accent-soft" style={{ flexShrink: 0 }} onClick={handleApplyRefinement}>
             {L.apply}
           </button>
           <button
@@ -186,9 +178,9 @@ export default function SunoStage({
             {wishLibrary.map((wish) => (
               <button
                 key={wish.id}
-                className="chip"
+                className={`chip${selectedWishIds.includes(wish.id) ? ' is-active' : ''}`}
                 title={wish.text}
-                onClick={() => actions.setRefinementText(wish.text)}
+                onClick={() => toggleWish(wish)}
               >
                 {wish.title}
               </button>

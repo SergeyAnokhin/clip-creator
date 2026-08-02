@@ -89,6 +89,12 @@
   background: rgba(255, 157, 92, 0.22);
 }
 
+.btn-accent-soft.is-active {
+  background: var(--accent-grad);
+  border: none;
+  color: var(--accent-ink);
+}
+
 .icon-btn {
   width: 36px;
   height: 36px;

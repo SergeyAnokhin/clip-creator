@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { api } from '../api/client.js';
 
-/** Suno stage: the active skill, its (editable) prompt, the refinement box,
- * and the generated style/lyrics pair. The skill *templates* themselves live
- * in `SKILLS` in components/workflow/SunoStage.jsx. */
+/** Suno stage: the skill_prompt (freely editable, no more preset templates),
+ * the refinement box, and the generated style/lyrics pair. `skillId` is kept
+ * only as a stable label sent to the backend (usage-ledger meta); there's no
+ * more UI to change it. */
 export function useSunoStage({
   activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, onAiCall,
 }) {
@@ -26,10 +27,6 @@ export function useSunoStage({
 
   function setSkillPrompt(value) {
     updateProject((p) => ({ ...p, skill_prompt: value }), { immediate: false });
-  }
-  function selectSkill(id, template) {
-    setSkillId(id);
-    updateProject((p) => ({ ...p, skill_id: id, skill_prompt: template }));
   }
   async function applyRefinement() {
     if (!refinementText.trim() || !activeProject) return;
@@ -82,7 +79,7 @@ export function useSunoStage({
     state: { skillId, refinementText, sunoLoading, trackUrl, genModel },
     resetForProject,
     actions: {
-      selectSkill, setSkillPrompt, setRefinementText, applyRefinement,
+      setSkillPrompt, setRefinementText, applyRefinement,
       generateSuno, copyStyle, copyLyrics, setTrackUrl, saveTrackUrl, selectGenModel: setGenModel,
     },
   };

@@ -315,7 +315,13 @@ to least reusable:
    verbatim" material. Kept as plain text in settings rather than uploaded
    files: the source files were inconsistent sizes (1.5 KB to 84 KB) and raw
    file upload isn't worth the cost/latency for text this small — curated text
-   embedded in the prompt does the same job for a fraction of the tokens.
+   embedded in the prompt does the same job for a fraction of the tokens. Like
+   `settings.special_tags` (the Vocal-Interlude-style bracket tags editable on
+   the same tab), this list is click-to-edit in `SettingsScreen.jsx`: clicking
+   a row loads its full text into the add field below and turns "Добавить"
+   into "Сохранить" (with a "Отмена" to bail out), so editing reuses the same
+   input instead of a separate inline form. Both lists only persist on the
+   Settings screen's own "Сохранить" button, unlike the wish library below.
 3. `project.skill_prompt` — the per-song skill template (`SunoStage.jsx`
    `SKILLS`) plus any refinement "wishes" folded in via `suno.refine`.
 

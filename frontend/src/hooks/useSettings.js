@@ -50,6 +50,11 @@ export function useSettings({ showToast, onAiCall }) {
   function removeSpecialTag(index) {
     setSpecialTags((prev) => prev.filter((_, i) => i !== index));
   }
+  function updateSpecialTag(index, text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setSpecialTags((prev) => prev.map((t, i) => (i === index ? trimmed : t)));
+  }
   function addReferenceExample(text) {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -57,6 +62,11 @@ export function useSettings({ showToast, onAiCall }) {
   }
   function removeReferenceExample(index) {
     setReferenceExamples((prev) => prev.filter((_, i) => i !== index));
+  }
+  function updateReferenceExample(index, text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setReferenceExamples((prev) => prev.map((t, i) => (i === index ? trimmed : t)));
   }
 
   function addTextModelFavorite(entry) {
@@ -202,8 +212,8 @@ export function useSettings({ showToast, onAiCall }) {
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'),
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings,
-      addSpecialTag, removeSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
-      addReferenceExample, removeReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet,
+      addSpecialTag, removeSpecialTag, updateSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
+      addReferenceExample, removeReferenceExample, updateReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet,
       addTextModelFavorite, removeTextModelFavorite, setTextModelDefault,
       addSimpleModelFavorite, removeSimpleModelFavorite, setSimpleModelDefault,
       addImageModelFavorite, removeImageModelFavorite, setImageModelDefault,
