@@ -13,7 +13,7 @@ export const isVoiceInputSupported = !!getSpeechRecognitionCtor();
  * dictates into a lyrics block, the Suno refinement box, or a scene's static
  * prompt - but the transcript now comes from actual recognition instead of a
  * canned string. See docs/architecture.md. */
-export function useVoice({ updateProject, showToast, L, lang, setRefinementText }) {
+export function useVoice({ updateProject, showToast, L, lang, setRefinementText, setSceneWishText }) {
   const [recordingKind, setRecordingKind] = useState(null);
   const [recordingTarget, setRecordingTarget] = useState(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -33,6 +33,8 @@ export function useVoice({ updateProject, showToast, L, lang, setRefinementText 
       }));
     } else if (kind === 'refinement') {
       setRefinementText(transcript);
+    } else if (kind === 'sceneWish') {
+      setSceneWishText(transcript);
     } else if (kind === 'scene') {
       updateProject((p) => ({
         ...p,

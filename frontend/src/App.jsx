@@ -54,8 +54,11 @@ function App() {
     imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
   });
-  // Depends on suno's refinement box, so it must be created after it.
-  const voice = useVoice({ updateProject, showToast, L, lang: settings.lang, setRefinementText: suno.actions.setRefinementText });
+  // Depends on suno's refinement box and scenes' wish box, so it must be created after them.
+  const voice = useVoice({
+    updateProject, showToast, L, lang: settings.lang,
+    setRefinementText: suno.actions.setRefinementText, setSceneWishText: scenes.actions.setSceneWishText,
+  });
 
   // ---------- navigation ----------
   async function openProject(id) {
@@ -115,6 +118,7 @@ function App() {
   const scenesState = {
     ...scenes.state,
     sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
+    isRecordingSceneWish: voice.recordingKind === 'sceneWish',
     recordingSeconds: voice.recordingSeconds,
     voiceSupported: voice.isSupported,
     textModelFavorites: settings.textModels.favorites,
@@ -126,6 +130,7 @@ function App() {
     hideMotionPrompt: settings.hideMotionPrompt,
     actions: {
       ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx),
+      startVoice: voice.startVoice,
       updateSceneBasePromptNarrative: settings.actions.updateSceneBasePromptNarrative,
       updateSceneBasePromptAbstract: settings.actions.updateSceneBasePromptAbstract,
       setHideMotionPrompt: settings.actions.setHideMotionPrompt,

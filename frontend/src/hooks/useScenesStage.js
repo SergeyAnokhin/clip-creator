@@ -31,6 +31,7 @@ export function useScenesStage({
   const [sceneMode, setSceneMode] = useState('narrative');
   const [sceneCount, setSceneCount] = useState(DEFAULT_SCENE_COUNT);
   const [styleDescription, setStyleDescription] = useState('');
+  const [sceneWishText, setSceneWishText] = useState('');
   const [storyboardLoading, setStoryboardLoading] = useState(false);
   const [wishLoading, setWishLoading] = useState(false);
   const [lastDebug, setLastDebug] = useState(null);
@@ -53,6 +54,7 @@ export function useScenesStage({
 
   function resetForProject(project) {
     setStyleDescription(project.style_description || '');
+    setSceneWishText('');
     setSceneMode(project.scene_mode || 'narrative');
     setSceneCount(project.scenes?.length || DEFAULT_SCENE_COUNT);
     setSceneTextModel(textModels.default || '');
@@ -104,13 +106,14 @@ export function useScenesStage({
     }
   }
 
-  async function addSceneWish(text) {
-    if (!text?.trim() || !activeProject) return;
+  async function addSceneWish() {
+    if (!sceneWishText.trim() || !activeProject) return;
     setWishLoading(true);
     try {
-      const result = await api.addSceneWish(activeProject.id, text);
+      const result = await api.addSceneWish(activeProject.id, sceneWishText);
       setActiveProject((p) => ({ ...p, active_scene_wish_ids: result.active_scene_wish_ids }));
       onSceneWishLibraryChange?.(result.scene_wish_library);
+      setSceneWishText('');
       showToast(L.toast_saved);
     } catch {
       showToast('Не удалось сохранить пожелание');
@@ -162,13 +165,13 @@ export function useScenesStage({
 
   return {
     state: {
-      sceneTextModel, sceneImageModel, sceneImageLoadingIdx, sceneMode, sceneCount, styleDescription, storyboardLoading,
-      wishLoading, lastDebug, sceneError, elapsedSeconds,
+      sceneTextModel, sceneImageModel, sceneImageLoadingIdx, sceneMode, sceneCount, styleDescription, sceneWishText,
+      storyboardLoading, wishLoading, lastDebug, sceneError, elapsedSeconds,
     },
     resetForProject,
     actions: {
       selectSceneTextModel: setSceneTextModel, selectSceneImageModel: setSceneImageModel,
-      setSceneMode, setSceneCount,
+      setSceneMode, setSceneCount, setSceneWishText,
       onStyleDescriptionChange, generateStoryboard, addSceneWish, toggleSceneWish,
       onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
       onGenerateImage: generateSceneImage,

@@ -298,15 +298,18 @@ Dictation into text fields uses the browser's native **Web Speech API**
 (`window.SpeechRecognition` / `window.webkitSpeechRecognition`) — no backend
 call, no third-party library. All of it lives in
 [`useVoice.js`](../frontend/src/hooks/useVoice.js), which `App.jsx` wires up
-last (it writes into the Suno refinement box, so it depends on `suno`).
+last (it writes into the Suno refinement box and the Scenes wish box, so it
+depends on both `suno` and `scenes`).
 
 - **Feature detection, not a polyfill.** `isVoiceInputSupported` is a
   module-level `!!(window.SpeechRecognition || window.webkitSpeechRecognition)`
   check. `useVoice` exposes it as `isSupported`; `App.jsx` forwards it to each
-  stage as `voiceSupported`, and the three mic buttons
+  stage as `voiceSupported`, and the four mic buttons
   ([`BlockCard.jsx`](../frontend/src/components/workflow/BlockCard.jsx),
   [`SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx)'s
   refinement box,
+  [`ScenesStage.jsx`](../frontend/src/components/workflow/ScenesStage.jsx)'s
+  scene-wish box,
   [`SceneTextCard.jsx`](../frontend/src/components/workflow/SceneTextCard.jsx)/
   [`SceneCard.jsx`](../frontend/src/components/workflow/SceneCard.jsx)'s
   static-prompt edit) only render when it's `true`. No error message, no
@@ -325,8 +328,9 @@ last (it writes into the Suno refinement box, so it depends on `suno`).
   final transcript (`event.results[0][0].transcript`) is spliced into the
   target field via the same callback the mock used to use
   (`updateProject` for a lyrics block/scene prompt, `setRefinementText` for
-  the Suno wish box) — never stored inside the hook itself, so the field
-  stays a normal controlled `value`/`onChange` component.
+  the Suno wish box, `setSceneWishText` for the Scenes wish box) — never
+  stored inside the hook itself, so the field stays a normal controlled
+  `value`/`onChange` component.
 - **Errors** are split three ways in `onerror`: `'not-allowed'` (mic
   permission denied), `'no-speech'` (nothing heard), and everything else —
   each shows its own short toast (`L.toast_voice_denied` /

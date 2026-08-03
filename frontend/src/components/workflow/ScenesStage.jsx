@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Minus, Plus, Sparkles, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Mic, MicOff, Minus, Plus, Sparkles, Zap } from 'lucide-react';
 import SceneTextCard from './SceneTextCard.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import { formatCost, formatTokens } from '../../lib/pricing.js';
@@ -135,11 +135,10 @@ function DebugPanel({ L, lastDebug }) {
 export default function ScenesStage({
   L, project, isMobile, sceneTextModel, textModelFavorites, modelPrices,
   sceneImageModel, sceneImageModelFavorites, sceneImageLoadingIdx,
-  sceneMode, sceneCount, styleDescription, storyboardLoading, wishLoading, elapsedSeconds, sceneError, lastDebug,
+  sceneMode, sceneCount, styleDescription, sceneWishText, storyboardLoading, wishLoading, elapsedSeconds, sceneError, lastDebug,
   sceneWishLibrary, sceneBasePromptNarrative, sceneBasePromptAbstract, hideMotionPrompt,
-  sceneRecordingIdx, recordingSeconds, voiceSupported, actions,
+  sceneRecordingIdx, isRecordingSceneWish, recordingSeconds, voiceSupported, actions,
 }) {
-  const [wishDraft, setWishDraft] = useState('');
   const activeWishIds = project.active_scene_wish_ids || [];
 
   return (
@@ -164,13 +163,22 @@ export default function ScenesStage({
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <input
             className="field"
-            value={wishDraft}
-            onChange={(e) => setWishDraft(e.target.value)}
-            placeholder={L.scene_wishPlaceholder}
+            value={sceneWishText}
+            onChange={(e) => actions.setSceneWishText(e.target.value)}
+            placeholder={isRecordingSceneWish ? L.listening : L.scene_wishPlaceholder}
           />
+          {voiceSupported && (
+            <button
+              className={`icon-btn${isRecordingSceneWish ? ' icon-btn-recording' : ''}`}
+              style={{ width: 38, height: 38 }}
+              onClick={() => actions.startVoice('sceneWish')}
+            >
+              {isRecordingSceneWish ? <MicOff size={15} /> : <Mic size={15} />}
+            </button>
+          )}
           <button
             className="btn btn-accent-soft" style={{ flexShrink: 0 }}
-            onClick={() => { actions.addSceneWish(wishDraft); setWishDraft(''); }}
+            onClick={actions.addSceneWish}
             disabled={wishLoading}
           >
             {wishLoading ? <Loader2 size={14} className="spin" /> : null}
@@ -179,6 +187,12 @@ export default function ScenesStage({
         </div>
         {wishLoading && (
           <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 8 }}>⏳ {L.scene_wishLoading}</div>
+        )}
+        {isRecordingSceneWish && (
+          <div className="recording-banner" style={{ marginTop: 10 }}>
+            <span className="recording-dot" />
+            {L.recording} · {recordingSeconds}s
+          </div>
         )}
         {!!sceneWishLibrary?.length && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
