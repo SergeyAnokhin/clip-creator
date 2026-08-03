@@ -266,6 +266,40 @@ def test_today_total_respects_timezone_offset(usage, tmp_path, monkeypatch):
     assert plus3_today['date'] == (fixed_now + datetime.timedelta(minutes=180)).strftime('%Y-%m-%d')
 
 
+def test_period_totals_splits_today_week_month_total(usage, tmp_path, monkeypatch):
+    # 2026-07-15 is a Wednesday, so the local week starts Monday 2026-07-13.
+    import datetime
+    fixed_now = datetime.datetime(2026, 7, 15, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr(usage, '_utcnow', lambda: fixed_now)
+
+    def _rec(rec_id, ts):
+        return {
+            'id': rec_id, 'ts': ts, 'task': 'wish_title',
+            'project_id': None, 'provider': 'deepseek', 'model_id': 'deepseek-chat',
+            'model': 'deepseek:deepseek-chat', 'status': 'ok', 'duration_ms': 1,
+            'units': {'input_tokens': 1_000_000, 'output_tokens': 0}, 'cost': {'amount': 0.27, 'source': 'catalog'},
+            'prompt_preview': '', 'response_preview': '', 'prompt_chars': 0, 'response_chars': 0,
+            'error': None, 'meta': {},
+        }
+
+    usage_dir = tmp_path / 'usage'
+    usage_dir.mkdir(parents=True, exist_ok=True)
+    (usage_dir / '2026-07.jsonl').write_text(
+        json.dumps(_rec('u_today', '2026-07-15T09:00:00Z')) + '\n'
+        + json.dumps(_rec('u_monday', '2026-07-13T09:00:00Z')) + '\n',
+        encoding='utf-8',
+    )
+    (usage_dir / '2026-06.jsonl').write_text(
+        json.dumps(_rec('u_last_month', '2026-06-20T09:00:00Z')) + '\n', encoding='utf-8',
+    )
+
+    result = usage.period_totals(tz_offset=0)
+    assert result['today']['calls'] == 1
+    assert result['week']['calls'] == 2
+    assert result['month']['calls'] == 2
+    assert result['total']['calls'] == 3
+
+
 def test_summarize_by_day_uses_timezone_offset(usage, tmp_path):
     usage_dir = tmp_path / 'usage'
     usage_dir.mkdir(parents=True, exist_ok=True)

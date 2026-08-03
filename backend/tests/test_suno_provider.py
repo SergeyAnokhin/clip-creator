@@ -3,41 +3,53 @@ import pytest
 from app.providers import suno
 
 
-def test_generate_falls_back_to_stub_without_gemini_key():
+def test_generate_falls_back_to_stub_without_api_key():
     project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Line one'}]}
 
     import asyncio
     result = asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings={'api_keys': {'google': ''}}))
 
-    assert result == {'style': 'Cinematic Orchestral Folk, Warm Vocal, 90 BPM, Nostalgic', 'lyrics': '[Verse]\nLine one'}
+    assert result['style'] == 'Cinematic Orchestral Folk, Warm Vocal, 90 BPM, Nostalgic'
+    assert result['lyrics'] == '[Verse]\nLine one'
+    assert result['debug'] == {'stub': True, 'reason': 'no_api_key', 'requested_model': 'google:gemini-2.5-flash'}
 
 
-def test_generate_falls_back_to_stub_for_non_google_provider():
+def test_generate_falls_back_to_stub_for_unsupported_provider():
     project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Line one'}]}
 
     import asyncio
     result = asyncio.run(suno.generate(project, model='replicate:some-model', settings={'api_keys': {'google': 'key'}}))
 
     assert result['lyrics'] == '[Verse]\nLine one'
+    assert result['debug'] == {'stub': True, 'reason': 'unsupported_provider', 'requested_model': 'replicate:some-model'}
 
 
-def test_parse_gemini_response_splits_on_markers():
+def test_generate_falls_back_to_stub_when_no_model_selected():
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Line one'}]}
+
+    import asyncio
+    result = asyncio.run(suno.generate(project, model='', settings={'api_keys': {'google': 'key'}}))
+
+    assert result['debug'] == {'stub': True, 'reason': 'no_model_selected', 'requested_model': ''}
+
+
+def test_parse_model_response_splits_on_markers():
     text = f'{suno._STYLE_MARKER}\nSynthpop, 128 BPM\n{suno._LYRICS_MARKER}\n[Verse]\nHello'
-    result = suno._parse_gemini_response(text, fallback_lyrics='fallback')
+    result = suno._parse_model_response(text, fallback_lyrics='fallback')
     assert result == {'style': 'Synthpop, 128 BPM', 'lyrics': '[Verse]\nHello'}
 
 
-def test_parse_gemini_response_without_markers_falls_back_to_raw_text():
-    result = suno._parse_gemini_response('some unstructured reply', fallback_lyrics='fallback')
+def test_parse_model_response_without_markers_falls_back_to_raw_text():
+    result = suno._parse_model_response('some unstructured reply', fallback_lyrics='fallback')
     assert result == {'style': '', 'lyrics': 'some unstructured reply'}
 
 
-def test_build_gemini_prompt_includes_base_examples_and_skill_prompt():
+def test_build_prompt_includes_base_examples_and_skill_prompt():
     settings = {
         'suno_base_prompt': 'BASE RULES',
         'suno_reference_examples': ['EXAMPLE ONE'],
     }
-    prompt = suno._build_gemini_prompt('[Verse]\nRaw poem', 'SKILL PROMPT', settings)
+    prompt = suno._build_prompt('[Verse]\nRaw poem', 'SKILL PROMPT', settings)
 
     assert 'BASE RULES' in prompt
     assert 'EXAMPLE ONE' in prompt
@@ -47,9 +59,9 @@ def test_build_gemini_prompt_includes_base_examples_and_skill_prompt():
     assert suno._LYRICS_MARKER in prompt
 
 
-def test_build_gemini_prompt_places_active_wishes_in_marked_block_right_after_base():
+def test_build_prompt_places_active_wishes_in_marked_block_right_after_base():
     settings = {'suno_base_prompt': 'BASE RULES', 'suno_reference_examples': ['EXAMPLE ONE']}
-    prompt = suno._build_gemini_prompt(
+    prompt = suno._build_prompt(
         '[Verse]\nRaw poem', 'SKILL PROMPT', settings,
         active_wishes=['Больше саксофона', 'Женский бэк-вокал'],
     )
@@ -61,9 +73,9 @@ def test_build_gemini_prompt_places_active_wishes_in_marked_block_right_after_ba
     assert prompt.index('BASE RULES') < prompt.index('ВАЖНЫЕ ТРЕБОВАНИЯ') < prompt.index('EXAMPLE ONE')
 
 
-def test_build_gemini_prompt_omits_wishes_block_when_none_active():
+def test_build_prompt_omits_wishes_block_when_none_active():
     settings = {'suno_base_prompt': 'BASE RULES', 'suno_reference_examples': []}
-    prompt = suno._build_gemini_prompt('[Verse]\nRaw poem', 'SKILL PROMPT', settings, active_wishes=[])
+    prompt = suno._build_prompt('[Verse]\nRaw poem', 'SKILL PROMPT', settings, active_wishes=[])
 
     assert 'ВАЖНЫЕ ТРЕБОВАНИЯ' not in prompt
 
@@ -88,8 +100,8 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args):
         return False
 
-    async def post(self, url, params=None, json=None):
-        self.last_call = {'url': url, 'params': params, 'json': json}
+    async def post(self, url, params=None, json=None, headers=None):
+        self.last_call = {'url': url, 'params': params, 'json': json, 'headers': headers}
         return self._response
 
 
@@ -109,9 +121,81 @@ def test_generate_calls_gemini_and_parses_result(monkeypatch):
     import asyncio
     result = asyncio.run(suno.generate(project, skill_prompt='Adapt it', model='google:gemini-2.5-flash', settings=settings))
 
-    assert result == {'style': 'Synthpop', 'lyrics': '[Verse]\nAdapted'}
+    assert result['style'] == 'Synthpop'
+    assert result['lyrics'] == '[Verse]\nAdapted'
+    assert result['debug']['stub'] is False
+    assert result['debug']['response'] == payload
+    assert result['debug']['request']['model'] == 'gemini-2.5-flash'
     assert fake_client.last_call['params'] == {'key': 'test-key'}
     assert 'gemini-2.5-flash' in fake_client.last_call['url']
+    assert result['debug']['missing_markers'] is False
+
+
+def test_generate_flags_missing_markers_when_model_ignores_the_format(monkeypatch):
+    payload = {'candidates': [{'content': {'parts': [{'text': 'some unstructured reply'}]}}]}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'google': 'test-key'}}
+
+    import asyncio
+    result = asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings=settings))
+
+    assert result['style'] == ''
+    assert result['debug']['stub'] is False
+    assert result['debug']['missing_markers'] is True
+
+
+def test_generate_calls_openrouter_and_parses_result(monkeypatch):
+    payload = {
+        'choices': [{'message': {'content': (
+            f'{suno._STYLE_MARKER}\nSynthpop\n{suno._LYRICS_MARKER}\n[Verse]\nAdapted'
+        )}}],
+        'usage': {'prompt_tokens': 400, 'completion_tokens': 90, 'total_tokens': 490, 'cost': 0.002},
+    }
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'openrouter': 'or-key'}, 'suno_base_prompt': 'BASE', 'suno_reference_examples': []}
+
+    import asyncio
+    result = asyncio.run(suno.generate(
+        project, skill_prompt='Adapt it', model='openrouter:google/gemini-3.6-flash', settings=settings,
+    ))
+
+    assert result['style'] == 'Synthpop'
+    assert result['lyrics'] == '[Verse]\nAdapted'
+    assert result['debug']['stub'] is False
+    assert result['debug']['request']['model'] == 'google/gemini-3.6-flash'
+    assert fake_client.last_call['headers'] == {'Authorization': 'Bearer or-key'}
+    assert fake_client.last_call['json']['model'] == 'google/gemini-3.6-flash'
+
+
+def test_generate_calls_deepseek_and_parses_result(monkeypatch):
+    payload = {
+        'choices': [{'message': {'content': (
+            f'{suno._STYLE_MARKER}\nSynthpop\n{suno._LYRICS_MARKER}\n[Verse]\nAdapted'
+        )}}],
+        'usage': {'prompt_tokens': 300, 'completion_tokens': 60, 'total_tokens': 360},
+    }
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'deepseek': 'ds-key'}, 'suno_base_prompt': 'BASE', 'suno_reference_examples': []}
+
+    import asyncio
+    result = asyncio.run(suno.generate(
+        project, skill_prompt='Adapt it', model='deepseek:deepseek-chat', settings=settings,
+    ))
+
+    assert result['style'] == 'Synthpop'
+    assert result['lyrics'] == '[Verse]\nAdapted'
+    assert result['debug']['stub'] is False
+    assert fake_client.last_call['headers'] == {'Authorization': 'Bearer ds-key'}
+    assert fake_client.last_call['json']['model'] == 'deepseek-chat'
 
 
 def test_generate_raises_on_non_200_gemini_response(monkeypatch):

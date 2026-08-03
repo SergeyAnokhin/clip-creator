@@ -326,3 +326,36 @@ def today_total(tz_offset: int = 0, overrides: dict | None = None) -> dict:
         'date': today_str, 'cost': totals['cost'], 'currency': pricing.CURRENCY,
         'calls': totals['calls'], 'unknown_cost_calls': totals['unknown_cost_calls'],
     }
+
+
+def _cost_since(local_midnight: datetime, tz_offset: int, overrides: dict | None) -> dict:
+    """Totals for everything from `local_midnight` (a wall-clock instant,
+    tagged UTC per the `_utcnow() + tz_offset` convention above) up to now.
+    Mirrors today_total's approach: widen the shard scan to whole UTC days,
+    then keep only records whose real timestamp is at/after the true UTC
+    instant that local_midnight represents - ISO 8601 UTC strings compare
+    lexicographically the same as chronologically, so a plain string
+    comparison against `rec['ts']` is exact without re-parsing it."""
+    utc_start = local_midnight - timedelta(minutes=tz_offset)
+    cutoff = utc_start.isoformat().replace('+00:00', 'Z')
+    matched = _matching_records(date_from=utc_start.strftime('%Y-%m-%d'), overrides=overrides)
+    return _totals([r for r in matched if r.get('ts', '') >= cutoff])
+
+
+def period_totals(tz_offset: int = 0, overrides: dict | None = None) -> dict:
+    """Spend for today / this week (since local Monday) / this month (since
+    the 1st, local) / all time - backs the header cost pill's expanded view,
+    so a user never has to open the full Usage screen just to sanity-check
+    "how much this week?"."""
+    local_now = _utcnow() + timedelta(minutes=tz_offset)
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = local_midnight - timedelta(days=local_midnight.weekday())
+    month_start = local_midnight.replace(day=1)
+
+    return {
+        'currency': pricing.CURRENCY,
+        'today': _cost_since(local_midnight, tz_offset, overrides),
+        'week': _cost_since(week_start, tz_offset, overrides),
+        'month': _cost_since(month_start, tz_offset, overrides),
+        'total': _totals(_matching_records(overrides=overrides)),
+    }

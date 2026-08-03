@@ -60,6 +60,7 @@ export const api = {
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),
   usageToday: (tzOffset) => request(`/api/usage/today${qs({ tz_offset: tzOffset })}`),
+  usagePeriodTotals: (tzOffset) => request(`/api/usage/period-totals${qs({ tz_offset: tzOffset })}`),
   getPricing: () => request('/api/usage/pricing'),
   putPricingOverrides: (overrides) => request('/api/usage/pricing', { method: 'PUT', body: JSON.stringify({ pricing_overrides: overrides }) }),
 

@@ -60,6 +60,11 @@ def today(tz_offset: int = 0):
     return usage.today_total(tz_offset=tz_offset, overrides=_overrides())
 
 
+@router.get('/period-totals')
+def period_totals(tz_offset: int = 0):
+    return usage.period_totals(tz_offset=tz_offset, overrides=_overrides())
+
+
 @router.get('/pricing')
 def get_pricing():
     overrides = _overrides()

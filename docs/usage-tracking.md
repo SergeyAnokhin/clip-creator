@@ -15,7 +15,7 @@ pricing.compute_cost(model, units, overrides)   ← only if the provider didn't 
 app_data/usage/YYYY-MM.jsonl   (append-only, one JSON object per line)
    │
    ▼
-routers/usage.py  →  GET /api/usage/records | /summary | /today, GET|PUT /api/usage/pricing
+routers/usage.py  →  GET /api/usage/records | /summary | /today | /period-totals, GET|PUT /api/usage/pricing
    │
    ▼
 hooks/useUsage.js  →  UsageScreen, UsagePill (3 headers), price labels in ModelPicker/ModelFavorites
@@ -213,7 +213,8 @@ catalog lookups, and the Settings refresh button fires several at once.
 | --- | --- |
 | `GET /api/usage/records` | Filters: `project_id, task, provider, model, status, date_from, date_to, limit (≤500, default 100), offset`. → `{records, total, limit, offset, totals}`, newest first |
 | `GET /api/usage/summary` | Same filters + `group_by ∈ project\|task\|model\|provider\|day` (default `day`) + `tz_offset`. → `{group_by, currency, groups: [{key, calls, errors, cost, unknown_cost_calls, input_tokens, output_tokens, images, duration_ms}], totals}` |
-| `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls}` — backs the header pill |
+| `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls}` — backs the header pill's collapsed (today-only) view |
+| `GET /api/usage/period-totals` | `tz_offset` → `{currency, today, week, month, total}`, each a `{calls, errors, cost, unknown_cost_calls}` totals object (`week` since local Monday, `month` since the 1st, `total` all-time) — backs the header pill's expanded view, fetched lazily on first expand |
 | `GET /api/usage/pricing` | → `{pricing_version, currency, models: [...], overrides}` — merged catalog for the UI |
 | `PUT /api/usage/pricing` | Body `{pricing_overrides}` → validated (`pricing.validate_overrides`) and persisted into `settings.pricing_overrides`; `422` on a malformed row |
 
@@ -224,8 +225,8 @@ catalog lookups, and the Settings refresh button fires several at once.
 | File | Role |
 | --- | --- |
 | [`lib/pricing.js`](../frontend/src/lib/pricing.js) | Pure: `formatCost`, `formatTokens`, `estimateCost`, `priceLabel`, `modelPriceMap` — vitest-covered in `pricing.test.js` |
-| [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
-| [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared "spend today" pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header |
+| [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `periodTotals` loads lazily via `loadPeriodTotals` (called when the pill first expands); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
+| [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared header cost pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header. Collapsed: today's spend only. Click: expands an in-place popover with today/week/month/all-time and an "Все расходы →" link — that link is the only way to reach the full Usage screen from here |
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |
 | [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog, and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
 | `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50`, `· $0.04 за кадр`, or `price ?` — the token price needs no unit suffix since "per 1M" is the only unit used app-wide, but the image price keeps `L.price_perImage` since that unit isn't obvious). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |

@@ -131,7 +131,8 @@ function App() {
           onSubmitNewProject={projects.homeActions.submitNewProject}
           onFilterChange={projects.homeActions.setHomeFilter} onSearchChange={projects.homeActions.setHomeSearch}
           onOpenProject={openProject} onDeleteProject={projects.homeActions.deleteProject}
-          usageToday={usage.today} onOpenUsage={openUsage}
+          usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
+          onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
         />
       )}
 
@@ -142,7 +143,8 @@ function App() {
           lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
-          usageToday={usage.today} onOpenUsage={openUsage}
+          usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
+          onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
         />
       )}
 
@@ -154,7 +156,8 @@ function App() {
           specialTags={settings.specialTags}
           sunoBasePrompt={settings.sunoBasePrompt} sunoPromptPresets={settings.sunoPromptPresets}
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
-          pricing={usage.pricing} usageToday={usage.today}
+          pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
+          onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           onClose={closeSettings} onOpenUsage={openUsage}
           actions={{ ...settings.actions, savePricingOverrides: usage.actions.savePricingOverrides, refreshPricing: usage.actions.refreshPricing }}
         />

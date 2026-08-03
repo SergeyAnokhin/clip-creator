@@ -35,8 +35,8 @@ const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes'];
 export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, specialTags,
   sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary,
-  pricing, usageToday,
-  onClose, onOpenUsage, actions,
+  pricing, usageToday, usagePeriodTotals,
+  onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
   const [activeTab, setActiveTab] = useState('general');
   const [newTagDraft, setNewTagDraft] = useState('');
@@ -182,7 +182,7 @@ export default function SettingsScreen({
         </button>
         <div className="workflow-title">{L.settingsTitle}</div>
         <div style={{ flex: 1 }} />
-        <UsagePill L={L} today={usageToday} onOpen={onOpenUsage} />
+        <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       </div>
 
       <div style={{ flex: 1, padding: '32px 24px' }}>

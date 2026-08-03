@@ -8,7 +8,7 @@ export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
   lyricsState, sunoState, scenesState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
-  usageToday, onOpenUsage,
+  usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
 }) {
   const isMobile = viewport === 'mobile';
 
@@ -25,7 +25,8 @@ export default function WorkflowScreen({
         onOpenSettings={onOpenSettings}
         onChangeTitle={(title) => updateProject((p) => ({ ...p, title }), { immediate: false })}
         onChangeAuthor={(author) => updateProject((p) => ({ ...p, author }), { immediate: false })}
-        usageToday={usageToday} onOpenUsage={onOpenUsage}
+        usageToday={usageToday} usagePeriodTotals={usagePeriodTotals} onOpenUsage={onOpenUsage}
+        onLoadUsagePeriodTotals={onLoadUsagePeriodTotals}
       />
 
       <div className="workflow-body">
@@ -42,7 +43,7 @@ export default function WorkflowScreen({
         <div className="workflow-main" style={{ padding: isMobile ? '18px 14px' : '28px 32px' }}>
           <div className="workflow-main-inner">
             {activeStage === 'lyrics' && <LyricsStage L={L} project={project} viewport={viewport} {...lyricsState} />}
-            {activeStage === 'suno' && <SunoStage L={L} project={project} {...sunoState} />}
+            {activeStage === 'suno' && <SunoStage L={L} project={project} isMobile={isMobile} {...sunoState} />}
             {activeStage === 'scenes' && <ScenesStage L={L} project={project} isMobile={isMobile} {...scenesState} />}
           </div>
         </div>

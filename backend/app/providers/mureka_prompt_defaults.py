@@ -3,10 +3,15 @@ SUNO_BASE_PROMPT_PRESETS in suno_prompt_defaults.py for the Suno equivalent -
 both lists are merged and served by GET /api/settings/suno-prompt-presets and
 loaded into the same settings.suno_base_prompt field). Built from four
 research reports on Mureka/MusiCoT prompting for Russian 40-55 y.o. retro-pop
-audiences (mid-2026). The two presets only differ on the one point where the
-source reports genuinely disagree: whether vocal-delivery cues belong only in
-the Style-block (strict) or can also be written as in-text parenthetical
-directives like "(whispering)" (directed) - everything else is shared."""
+audiences (mid-2026), then densified to match the concrete-over-vague,
+heavily-decorated direction validated on the Suno presets - within Mureka's
+own real constraint (it splits style across several short fields rather than
+one long block, so the Style-block target stays compact; unlike Suno's cap,
+this one isn't just a stylistic preference). The two presets only differ on
+the one point where the source reports genuinely disagree: whether
+vocal-delivery cues belong only in the Style-block (strict) or can also be
+written as in-text parenthetical directives like "(whispering)" (directed) -
+everything else is shared."""
 
 _SHARED_INTRO = """\
 Ты — продюсер-музыкант, который адаптирует стихи и черновую лирику под сервис Mureka \
@@ -39,9 +44,13 @@ _MARKUP_DIRECTED = """\
 нужный эффект в Style-блок словами ("whispered verse", "belting chorus")."""
 
 _BODY_TEMPLATE = """\
-STYLE-BLOCK (только на английском, ключевые слова через запятую — не абзацем, 4-7 \
-дескрипторов). Целься в 200-350 символов при практическом потолке поля ~400 — длиннее \
-не значит лучше, а противоречивые дескрипторы ломают планировщик MusiCoT.
+STYLE-BLOCK (только на английском, ключевые слова и короткие уточняющие клаузы через \
+запятую — не сплошным абзацем, 6-9 дескрипторов). Целься в 280-390 символов при \
+практическом потолке поля ~400 — это реальный лимит из-за того, как Mureka разносит \
+стиль по отдельным полям, а не стилистическое пожелание, так что не расширяй его, но и \
+не сдавай пустой список из 3-4 общих слов: каждый дескриптор должен называть конкретный \
+элемент (инструмент/тембр/приём), а не расплывчатое прилагательное — плотный список из \
+конкретики важнее его длины.
 - Порядок значим: ведущий инструмент или жанр — первым, он несёт больший вес. Один \
 главный жанровый якорь и одна эпоха (максимум два жанра, доминирующий первым); не \
 смешивай противоречащие энергии в одном промпте (aggressive + gentle, ambient + \
@@ -68,6 +77,11 @@ LYRICS-MARKUP:
 структуры, а не как оформление. Порядок и количество блоков должны точно совпадать с \
 входной лирикой на всём протяжении песни — переставлять, удалять или добавлять новые \
 смысловые блоки запрещено.
+- Не ограничивайся голыми заголовками секций: у [Intro] и [Outro] называй конкретный \
+инструментальный заход/затухание ([Instrumental Break] с уточнением, что играет), а \
+между куплетом и припевом используй [Pre-Chorus] как отдельный блок, если в оригинале \
+есть для него материал — это даёт MusiCoT больше опорных точек для драматургии, чем один \
+плоский [Verse] → [Chorus].
 - В начальной части песни (особенно куплеты и припевы) строго сохраняй оригинальный \
 текст — не переписывай и не переформулируй строки.
 - ЖЁСТКАЯ СЛОГОВАЯ СИММЕТРИЯ: строго одинаковое число слогов в соответствующих строках \
@@ -113,7 +127,7 @@ kick, synth-brass stabs или supersaw lead, off-beat bass, tragic lyrics по�
 барабаны, wide stereo chorus, anthemic hook;
 - Modern Retro Blend: 112-120 BPM, ретро-тембры (vintage analog synths, gated reverb) \
 поверх современного чистого сведения (deep sub bass, punchy modern drums).
-Style-block ≤400 символов (целься в 200-350); Lyrics-markup — 2 куплета + 2 припева на \
+Style-block ≤400 символов (целься в 280-390); Lyrics-markup — 2 куплета + 2 припева на \
 генерацию, без перегрузки лишними блоками.
 """
 

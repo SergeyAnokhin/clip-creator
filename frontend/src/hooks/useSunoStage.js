@@ -11,18 +11,24 @@ export function useSunoStage({
   const [skillId, setSkillId] = useState('skill_a');
   const [refinementText, setRefinementText] = useState('');
   const [sunoLoading, setSunoLoading] = useState(false);
+  const [wishLoading, setWishLoading] = useState(false);
   const [trackUrl, setTrackUrl] = useState('');
   // Session-only pick for the "Сгенерировать для Suno" call, seeded from the
   // global default - lets you try another model without going to Settings,
   // without silently changing everyone's default (same pattern the old
   // per-screen wish-model picker used, before that was moved to Settings-only).
   const [genModel, setGenModel] = useState(textModelDefault || '');
+  // Raw request/response from the last generateSuno() call, for the debug
+  // panel - deliberately not persisted onto the project (would bloat
+  // project.json with a full raw API payload on every generation).
+  const [lastDebug, setLastDebug] = useState(null);
 
   function resetForProject(project) {
     setSkillId(project.skill_id || 'skill_a');
     setRefinementText('');
     setTrackUrl(project.track_url || '');
     setGenModel(textModelDefault || '');
+    setLastDebug(null);
   }
 
   function setSkillPrompt(value) {
@@ -30,6 +36,7 @@ export function useSunoStage({
   }
   async function addWish() {
     if (!refinementText.trim() || !activeProject) return;
+    setWishLoading(true);
     try {
       const result = await api.addSunoWish(activeProject.id, refinementText);
       setActiveProject((p) => ({ ...p, active_wish_ids: result.active_wish_ids }));
@@ -39,6 +46,7 @@ export function useSunoStage({
     } catch {
       showToast('Не удалось сохранить пожелание');
     } finally {
+      setWishLoading(false);
       onAiCall?.();
     }
   }
@@ -60,6 +68,7 @@ export function useSunoStage({
       setActiveProject((p) => ({
         ...p, style: result.style, lyrics: result.lyrics, skill_id: result.skill_id, model_used: result.model_used,
       }));
+      setLastDebug(result.debug || null);
       showToast(L.toast_generated);
     } catch {
       showToast('Не удалось сгенерировать');
@@ -82,7 +91,7 @@ export function useSunoStage({
   }
 
   return {
-    state: { skillId, refinementText, sunoLoading, trackUrl, genModel },
+    state: { skillId, refinementText, sunoLoading, wishLoading, trackUrl, genModel, lastDebug },
     resetForProject,
     actions: {
       setSkillPrompt, setRefinementText, addWish, toggleWish,

@@ -45,7 +45,7 @@ function EditableField({ value, placeholder, onCommit }) {
 
 export default function WorkflowHeader({
   L, langLabel, title, author, onGoHome, onToggleSidebar, onToggleLang, onOpenSettings,
-  onChangeTitle, onChangeAuthor, usageToday, onOpenUsage,
+  onChangeTitle, onChangeAuthor, usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
 }) {
   return (
     <div className="workflow-header">
@@ -63,7 +63,7 @@ export default function WorkflowHeader({
         </span>
       </div>
       <div style={{ flex: 1 }} />
-      <UsagePill L={L} today={usageToday} onOpen={onOpenUsage} />
+      <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       <button
         className="btn-ghost"
         style={{ borderRadius: 20, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }}

@@ -49,8 +49,8 @@ hand-written `INPUT:` / `OUTPUT:` pairs — a raw Russian poem and the
 Suno-formatted lyrics it should turn into. Use them as the reference set when
 working on the lyrics builder or on the music-prompt provider
 ([`backend/app/providers/suno.py`](backend/app/providers/suno.py) — makes a
-real Gemini call when a Google API key is configured), instead of inventing
-sample poems.
+real call to Google, OpenRouter or DeepSeek when the matching API key is
+configured), instead of inventing sample poems.
 
 ## Documentation
 

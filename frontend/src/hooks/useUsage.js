@@ -15,6 +15,7 @@ const EMPTY_PRICING = { models: [], overrides: {}, pricing_version: '', currency
  * user who never opens it never pays for that request. */
 export function useUsage() {
   const [today, setToday] = useState(null);
+  const [periodTotals, setPeriodTotals] = useState(null);
   const [pricing, setPricing] = useState(EMPTY_PRICING);
   const [records, setRecords] = useState([]);
   const [total, setTotal] = useState(0);
@@ -26,6 +27,11 @@ export function useUsage() {
 
   function refreshToday() {
     api.usageToday(TZ_OFFSET).then(setToday).catch(() => {});
+  }
+  // Lazy - only fetched when the header cost pill is first expanded, so a
+  // user who never opens it never pays for the extra request.
+  function loadPeriodTotals() {
+    api.usagePeriodTotals(TZ_OFFSET).then(setPeriodTotals).catch(() => {});
   }
   function refreshPricing() {
     api.getPricing().then(setPricing).catch(() => {});
@@ -60,11 +66,11 @@ export function useUsage() {
   }
 
   return {
-    today, pricing, priceMap: modelPriceMap(pricing.models),
+    today, periodTotals, pricing, priceMap: modelPriceMap(pricing.models),
     records, total, offset, limit: PAGE_SIZE, hasMore: records.length < total,
     summary, groupBy, filters, loading,
     actions: {
-      refreshToday, refreshPricing, loadRecords, loadMore: () => loadRecords(false),
+      refreshToday, loadPeriodTotals, refreshPricing, loadRecords, loadMore: () => loadRecords(false),
       loadSummary, setFilter, resetFilters, setGroupBy, savePricingOverrides,
     },
   };

@@ -81,25 +81,31 @@ without knowing whether the result is canned or real. Keys come from
 - `suno.generate` recomputes the raw structured lyrics from the project's
   *current* blocks every time (so Lyrics-stage edits always show up), then:
   - `model` is the composite `"{provider}:{model_id}"` string from
-    `settings.text_models.default` (see `data-model.md`). If `provider ==
-    'google'` **and** `settings.api_keys.google` is set, it calls the real
-    Gemini API (`generativelanguage.googleapis.com`, using `model_id` from
-    the composite) with a prompt assembled from `settings.suno_base_prompt` +
-    the project's active wishes (resolved from `settings.suno_wish_library`
-    via `active_wish_ids`, sent as an emphasized numbered block right after
-    the base prompt) + `settings.suno_reference_examples` + the project's
-    `skill_prompt` ("Дополнения к промпту" on the Suno stage), asking for a
-    `===STYLE===` / `===LYRICS===`-delimited reply that
-    `_parse_gemini_response` splits into `{style, lyrics}`. See "The Suno
-    prompt" below for the full layer order.
-  - otherwise (no key, or any other provider) it falls back to the old
-    deterministic stub: `lyrics` = the formatted blocks, `style` = a canned
-    string. This keeps tests and no-key setups working unchanged, and is also
-    the current (documented) limitation for Replicate/FAL/OpenRouter as Suno
-    text-generation providers — only Google is really wired.
-  - a generation failure (bad key, non-200, unparsable Gemini reply) is
-    surfaced by the router as `HTTPException(502, ...)`, not a silent stub
-    fallback — see [`routers/generation.py`](../backend/app/routers/generation.py).
+    `settings.text_models.default` (see `data-model.md`). If `provider` is one
+    of `google` / `openrouter` / `deepseek` **and** the matching
+    `settings.api_keys.<provider>` is set, it calls that provider's chat API
+    (Gemini's `generateContent`, OpenRouter's `/chat/completions`, or
+    DeepSeek's OpenAI-compatible `/chat/completions`) with a prompt assembled
+    from `settings.suno_base_prompt` + the project's active wishes (resolved
+    from `settings.suno_wish_library` via `active_wish_ids`, sent as an
+    emphasized numbered block right after the base prompt) +
+    `settings.suno_reference_examples` + the project's `skill_prompt`
+    ("Дополнения к промпту" on the Suno stage), asking for a `===STYLE===` /
+    `===LYRICS===`-delimited reply that `_parse_model_response` splits into
+    `{style, lyrics}`. See "The Suno prompt" below for the full layer order.
+  - otherwise (no model picked, an unsupported provider like
+    Replicate/FAL/Krea, or a supported provider missing its key) it falls
+    back to the old deterministic stub: `lyrics` = the formatted blocks,
+    `style` = a canned string, and `debug.reason` is one of
+    `no_model_selected` / `unsupported_provider` / `no_api_key` — the Suno
+    stage's debug panel (see below) surfaces that reason directly instead of
+    a generic "check your settings" message.
+  - a generation failure (bad key, non-200, unparsable reply) is surfaced by
+    the router as `HTTPException(502, ...)`, not a silent stub fallback —
+    see [`routers/generation.py`](../backend/app/routers/generation.py). A
+    real call that succeeds but doesn't follow the `===STYLE===`/`===LYRICS===`
+    format sets `debug.missing_markers = true` instead (style then comes back
+    empty) rather than failing the request.
 - `text_models.list_models(provider, api_key)` backs the Settings "refresh
   models" button (`GET /api/settings/models/{provider}`):
   - Google, OpenRouter and DeepSeek all expose a real, filterable models

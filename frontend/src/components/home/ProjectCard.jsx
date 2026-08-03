@@ -18,7 +18,10 @@ export default function ProjectCard({ project, L, lang, onOpen, onDelete }) {
           aria-label={L.delete}
           onClick={(e) => {
             e.stopPropagation();
-            onDelete(project.id);
+            const message = L.confirmDeleteProject.replace('{title}', project.title);
+            if (window.confirm(message)) {
+              onDelete(project.id);
+            }
           }}
         >
           <Trash2 size={13} />
