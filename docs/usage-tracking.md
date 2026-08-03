@@ -207,6 +207,28 @@ ones someone has already priced.
 "refresh models" catalog calls) are **not logged** — they're free/no-cost
 catalog lookups, and the Settings refresh button fires several at once.
 
+**Suno generate: timeout + a usage summary in the response, not just the
+ledger.** `suno.py`'s three `_generate_via_*` functions cap the provider HTTP
+call at `_TIMEOUT_SECONDS` (120s, i.e. 2 minutes) via `httpx.AsyncClient`. A
+timeout is caught explicitly (not left to bubble up as a generic
+`httpx.TimeoutException`), recorded to the ledger as an error with a
+human-readable message (`"Таймаут: модель {model} не ответила за 120
+секунд."`), and re-raised as a `RuntimeError` carrying that same message —
+`routers/generation.py` wraps it into an HTTP 502 whose `detail` the frontend
+surfaces verbatim (see below), instead of a generic "failed" toast.
+
+Separately from the ledger write, each provider function also attaches a
+`usage` object to the `debug` dict already returned to the frontend (`{
+duration_ms, input_tokens, output_tokens, total_tokens, reasoning_tokens,
+cached_input_tokens, cost: {amount, currency, source} }`), built by
+`suno._usage_summary()`. This mirrors `usage._write`'s cost-source priority
+exactly (an OpenRouter-reported `usage.cost` always wins as `source:
+'provider'`; otherwise it's `pricing.compute_cost()`'s catalog estimate,
+`source: 'catalog'`, or `'unknown'` if the model has no price) so the
+debug panel's numbers can never disagree with what lands in the ledger. This
+exists because the ledger itself isn't fetched by `SunoStage.jsx` — the debug
+panel only has whatever `POST .../suno/generate` returns.
+
 ## HTTP API — `backend/app/routers/usage.py`
 
 | Route | Notes |
@@ -230,6 +252,8 @@ catalog lookups, and the Settings refresh button fires several at once.
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |
 | [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog, and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
 | `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50`, `· $0.04 за кадр`, or `price ?` — the token price needs no unit suffix since "per 1M" is the only unit used app-wide, but the image price keeps `L.price_perImage` since that unit isn't obvious). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
+| `components/workflow/SunoStage.jsx`'s `UsageSummaryLine` | Compact, icon-led strip (🔤 tokens in→out, 💰 cost - `≈` prefix means estimated/`cost.source !== 'provider'`, no prefix means the provider billed that exact amount, 🕐 finish time, ⏱ response time) rendered from `lastDebug.usage` + a client-stamped `lastDebug.completedAt`. Sits directly under the debug panel's title and is shown **regardless of whether the panel itself is expanded** (`DebugPanel`'s `hasUsage` check) - the whole point is not needing to open raw JSON to see what a call cost |
+| `useSunoStage.js`'s `elapsedSeconds` / `sunoError` | `elapsedSeconds`: a `setInterval`-driven ticking counter, started/stopped by a `sunoLoading` effect (not managed inside `generateSuno()` itself, so it can't drift out of sync with the loading spinner) — shown next to the "⏳ Генерация текста и стиля..." line while a generate call is in flight. `sunoError`: unlike the toast (which auto-dismisses after a few seconds), this is rendered in the same spot the loading line occupies and **persists until the next `generateSuno()` call** clears it — a timeout or provider error stays visible instead of flashing past. Both the toast and this persistent line show the same message (`err.detail`, see below); the failure is also `console.error`'d for devtools visibility |
 
 **Navigation note.** The Usage screen is reachable from all three top-level
 screens (home/workflow/settings), including Settings itself. `App.jsx` keeps

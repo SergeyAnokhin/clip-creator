@@ -7,7 +7,16 @@ async function request(path, options) {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`${options?.method || 'GET'} ${path} failed: ${res.status} ${body}`);
+    const err = new Error(`${options?.method || 'GET'} ${path} failed: ${res.status} ${body}`);
+    // FastAPI's HTTPException body is `{"detail": "..."}` - surface that
+    // human-readable message separately so callers (e.g. the Suno generate
+    // flow's timeout error) can show it directly instead of this raw string.
+    try {
+      err.detail = JSON.parse(body)?.detail;
+    } catch {
+      // body wasn't JSON - err.detail stays undefined, caller falls back.
+    }
+    throw err;
   }
   if (res.status === 204) return null;
   return res.json();

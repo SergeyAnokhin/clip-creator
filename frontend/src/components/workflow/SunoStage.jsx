@@ -2,10 +2,20 @@ import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Copy, Loader2, MessageSquare, Mic, MicOff, Sparkles, Zap } from 'lucide-react';
 import ModelPicker from './ModelPicker.jsx';
 import { buildSunoPromptPreview, groupPresetsByService } from '../../lib/sunoPrompt.js';
-import { estimateCost, estimateTokensFromChars, formatCost } from '../../lib/pricing.js';
+import { estimateCost, estimateTokensFromChars, formatCost, formatTokens } from '../../lib/pricing.js';
 import { TYPE_COLORS } from '../../i18n/dict.js';
 
 const _TAG_COLOR_DEFAULT = '#ff9d5c';
+
+/** `12с` / `1м 05с` (or the EN `12s` / `1m 05s`) - used both for the ticking
+ * "waiting for model" counter and for a completed call's response time. */
+function formatDuration(totalSeconds, L) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  if (s < 60) return `${s}${L.suno_unitSeconds}`;
+  const m = Math.floor(s / 60);
+  const rem = String(s % 60).padStart(2, '0');
+  return `${m}${L.suno_unitMinutes} ${rem}${L.suno_unitSeconds}`;
+}
 
 /** Renders lyrics text with `[Tag]` markers colored the same way block types
  * are colored on the Lyrics stage (see BlockCard.jsx's TYPE_COLORS) - tags
@@ -120,9 +130,37 @@ function stubMessage(L, debug) {
   return (L[key] || L.suno_debugReason_no_model_selected).replace('{model}', model);
 }
 
+/** Compact tokens / cost / finish-time / duration strip for the last real
+ * call, from `debug.usage` (see backend's `suno._usage_summary`) plus a
+ * client-side `completedAt` timestamp stamped by useSunoStage.js right when
+ * the response arrives. Deliberately icon-first and terse - this sits right
+ * under the debug panel's title, visible whether or not the panel itself is
+ * expanded, so it has to read at a glance. `≈` prefixes an estimated cost
+ * (`cost.source !== 'provider'`, i.e. computed from the price catalog rather
+ * than reported by the API); no prefix means the provider itself billed
+ * exactly that amount (currently only OpenRouter does). */
+function UsageSummaryLine({ L, usage, completedAt }) {
+  if (!usage) return null;
+  const { input_tokens, output_tokens, duration_ms, cost } = usage;
+  const isEstimate = cost?.amount != null && cost.source !== 'provider';
+  const costText = `${isEstimate ? '≈' : ''}${formatCost(cost?.amount)}`;
+  const timeText = completedAt
+    ? new Date(completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : null;
+  return (
+    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>
+      <span title={L.suno_debugUsageTokens}>🔤 {formatTokens(input_tokens)}→{formatTokens(output_tokens)}</span>
+      <span title={L.suno_debugUsageCost}>💰 {costText}</span>
+      {timeText && <span title={L.suno_debugUsageTime}>🕐 {timeText}</span>}
+      {duration_ms != null && <span title={L.suno_debugUsageTime}>⏱ {formatDuration(duration_ms / 1000, L)}</span>}
+    </div>
+  );
+}
+
 function DebugPanel({ L, lastDebug }) {
   const [open, setOpen] = useState(false);
   const needsAttention = !!(lastDebug?.stub || lastDebug?.missing_markers);
+  const hasUsage = !lastDebug?.stub && !!lastDebug?.usage;
   // Auto-expand whenever a fresh result needs a heads-up (stub or a
   // real call that didn't return both blocks) - otherwise this is exactly
   // the info that used to be invisible behind a collapsed panel.
@@ -134,7 +172,7 @@ function DebugPanel({ L, lastDebug }) {
     <div className="glass-card" style={{ marginBottom: 16 }}>
       <div
         className="suno-panel-title"
-        style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        style={{ marginBottom: (open || hasUsage) ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
         onClick={() => setOpen((o) => !o)}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -143,6 +181,9 @@ function DebugPanel({ L, lastDebug }) {
         </span>
         {!open && needsAttention && <span style={{ fontSize: 12 }}>⚠️</span>}
       </div>
+      {/* Shown regardless of `open` - tokens/cost/finish-time is exactly
+          what the user has to expand the raw JSON to dig out otherwise. */}
+      {hasUsage && <UsageSummaryLine L={L} usage={lastDebug.usage} completedAt={lastDebug.completedAt} />}
       {open && (
         !lastDebug ? (
           <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.suno_debugNoData}</div>
@@ -188,7 +229,7 @@ function DebugPanel({ L, lastDebug }) {
 export default function SunoStage({
   L, project, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported, isMobile,
   sunoLoading, wishLoading, trackUrl, wishLibrary, genModel, simpleModelDefault, simpleModelFavorites, textModelFavorites,
-  modelPrices, sunoBasePrompt, sunoPromptPresets, referenceExamples, lastDebug, actions,
+  modelPrices, sunoBasePrompt, sunoPromptPresets, referenceExamples, lastDebug, elapsedSeconds, sunoError, actions,
 }) {
   const wishModelEntry = simpleModelFavorites?.find((f) => `${f.provider}:${f.id}` === simpleModelDefault);
   const wishModelLabel = wishModelEntry ? wishModelEntry.label : (simpleModelDefault || L.suno_wishModelNotSet);
@@ -294,7 +335,14 @@ export default function SunoStage({
       </div>
 
       {sunoLoading && (
-        <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>⏳ {L.generatingSuno}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>
+          ⏳ {L.generatingSuno} · {formatDuration(elapsedSeconds, L)}
+        </div>
+      )}
+      {/* Sticks here (not just a toast) until the next generateSuno() call
+          clears it - a timeout/error must stay visible, not flash past. */}
+      {!sunoLoading && sunoError && (
+        <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 16 }}>⚠️ {sunoError}</div>
       )}
 
       <DebugPanel L={L} lastDebug={lastDebug} />

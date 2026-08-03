@@ -3,7 +3,7 @@ import time
 
 import httpx
 
-from .. import usage
+from .. import pricing, usage
 
 # Real seam: `model` is a composite "{provider}:{model_id}" string (see
 # settings.text_models). When the provider is one of google/openrouter/deepseek
@@ -24,6 +24,11 @@ _DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
 _SUPPORTED_PROVIDERS = ('google', 'openrouter', 'deepseek')
 _STYLE_MARKER = '===STYLE==='
 _LYRICS_MARKER = '===LYRICS==='
+# How long we'll wait on a single provider call before giving up. Suno-style
+# generation prompts are long and some models (esp. reasoning models) take a
+# while, but an unbounded wait leaves the UI's "waiting" spinner stuck forever
+# on a hung connection - 2 minutes is generous without being indefinite.
+_TIMEOUT_SECONDS = 120
 
 
 def _format_lyrics(blocks: list[dict]) -> str:
@@ -74,6 +79,30 @@ def _parse_model_response(text: str, fallback_lyrics: str) -> dict:
     return {'style': '', 'lyrics': text.strip() or fallback_lyrics}
 
 
+def _usage_summary(model: str, units: dict, provider_cost: float | None,
+                    overrides: dict | None, duration_ms: int) -> dict:
+    """Token counts + cost + wall-clock time for the debug panel. Mirrors
+    usage._write's cost-source priority exactly - a provider-reported cost
+    (currently only OpenRouter's `usage.cost`) always wins over the catalog
+    estimate, so this never disagrees with what actually lands in the
+    ledger. `source: 'provider'` means exact; `'catalog'` means estimated
+    from `pricing.BUILTIN_PRICING`/overrides; `'unknown'` means no price is
+    known for the model."""
+    if provider_cost is not None:
+        amount, source = float(provider_cost), 'provider'
+    else:
+        amount, source = pricing.compute_cost(model, units, overrides)
+    return {
+        'duration_ms': duration_ms,
+        'input_tokens': units.get('input_tokens'),
+        'output_tokens': units.get('output_tokens'),
+        'total_tokens': units.get('total_tokens'),
+        'reasoning_tokens': units.get('reasoning_tokens'),
+        'cached_input_tokens': units.get('cached_input_tokens'),
+        'cost': {'amount': amount, 'currency': pricing.CURRENCY, 'source': source},
+    }
+
+
 async def _generate_via_gemini(
     raw_lyrics: str, skill_prompt: str, settings: dict, api_key: str, model_id: str,
     usage_ctx: dict | None = None, active_wishes: list[str] | None = None,
@@ -87,8 +116,15 @@ async def _generate_via_gemini(
     debug_request = {'url': url, 'model': model_id, 'body': request_body}
 
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=60) as http_client:
-        resp = await http_client.post(url, params={'key': api_key}, json=request_body)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http_client:
+            resp = await http_client.post(url, params={'key': api_key}, json=request_body)
+    except httpx.TimeoutException:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        error = f'Таймаут: модель {model} не ответила за {_TIMEOUT_SECONDS} секунд.'
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                      prompt=raw_lyrics, error=error)
+        raise RuntimeError(error) from None
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code != 200:
@@ -105,9 +141,6 @@ async def _generate_via_gemini(
         raise RuntimeError(f'Неожиданный ответ Gemini: {data}') from exc
 
     result = _parse_model_response(text, raw_lyrics)
-    result['debug'] = {
-        'stub': False, 'request': debug_request, 'response': data, 'missing_markers': _LYRICS_MARKER not in text,
-    }
     usage_metadata = data.get('usageMetadata') or {}
     units = {
         'input_tokens': usage_metadata.get('promptTokenCount'),
@@ -115,6 +148,10 @@ async def _generate_via_gemini(
         'total_tokens': usage_metadata.get('totalTokenCount'),
         'cached_input_tokens': usage_metadata.get('cachedContentTokenCount'),
         'reasoning_tokens': usage_metadata.get('thoughtsTokenCount'),
+    }
+    result['debug'] = {
+        'stub': False, 'request': debug_request, 'response': data, 'missing_markers': _LYRICS_MARKER not in text,
+        'usage': _usage_summary(model, units, None, settings.get('pricing_overrides'), duration_ms),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
                  units=units, prompt=raw_lyrics, response=text)
@@ -133,8 +170,15 @@ async def _generate_via_openrouter(
     debug_request = {'url': _OPENROUTER_URL, 'model': model_id, 'body': request_body}
 
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=60) as http_client:
-        resp = await http_client.post(_OPENROUTER_URL, headers={'Authorization': f'Bearer {api_key}'}, json=request_body)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http_client:
+            resp = await http_client.post(_OPENROUTER_URL, headers={'Authorization': f'Bearer {api_key}'}, json=request_body)
+    except httpx.TimeoutException:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        error = f'Таймаут: модель {model} не ответила за {_TIMEOUT_SECONDS} секунд.'
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                      prompt=raw_lyrics, error=error)
+        raise RuntimeError(error) from None
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code != 200:
@@ -151,9 +195,6 @@ async def _generate_via_openrouter(
         raise RuntimeError(f'Неожиданный ответ OpenRouter: {data}') from exc
 
     result = _parse_model_response(text, raw_lyrics)
-    result['debug'] = {
-        'stub': False, 'request': debug_request, 'response': data, 'missing_markers': _LYRICS_MARKER not in text,
-    }
     u = data.get('usage') or {}
     units = {
         'input_tokens': u.get('prompt_tokens'),
@@ -162,9 +203,13 @@ async def _generate_via_openrouter(
         'cached_input_tokens': (u.get('prompt_tokens_details') or {}).get('cached_tokens'),
         'reasoning_tokens': (u.get('completion_tokens_details') or {}).get('reasoning_tokens'),
     }
-    # OpenRouter reports the exact USD cost when `usage: {include: true}` is
-    # set on the request - it wins over the catalog estimate (see
-    # usage.record's provider_cost handling).
+    result['debug'] = {
+        'stub': False, 'request': debug_request, 'response': data, 'missing_markers': _LYRICS_MARKER not in text,
+        # OpenRouter reports the exact USD cost when `usage: {include: true}`
+        # is set on the request - it wins over the catalog estimate, same
+        # priority as usage.record's provider_cost handling below.
+        'usage': _usage_summary(model, units, u.get('cost'), settings.get('pricing_overrides'), duration_ms),
+    }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
                  units=units, prompt=raw_lyrics, response=text, provider_cost=u.get('cost'))
     return result
@@ -180,8 +225,15 @@ async def _generate_via_deepseek(
     debug_request = {'url': _DEEPSEEK_URL, 'model': model_id, 'body': request_body}
 
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=60) as http_client:
-        resp = await http_client.post(_DEEPSEEK_URL, headers={'Authorization': f'Bearer {api_key}'}, json=request_body)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http_client:
+            resp = await http_client.post(_DEEPSEEK_URL, headers={'Authorization': f'Bearer {api_key}'}, json=request_body)
+    except httpx.TimeoutException:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        error = f'Таймаут: модель {model} не ответила за {_TIMEOUT_SECONDS} секунд.'
+        usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
+                      prompt=raw_lyrics, error=error)
+        raise RuntimeError(error) from None
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code != 200:
@@ -198,15 +250,20 @@ async def _generate_via_deepseek(
         raise RuntimeError(f'Неожиданный ответ DeepSeek: {data}') from exc
 
     result = _parse_model_response(text, raw_lyrics)
-    result['debug'] = {
-        'stub': False, 'request': debug_request, 'response': data, 'missing_markers': _LYRICS_MARKER not in text,
-    }
     u = data.get('usage') or {}
     units = {
         'input_tokens': u.get('prompt_tokens'),
         'output_tokens': u.get('completion_tokens'),
         'total_tokens': u.get('total_tokens'),
         'cached_input_tokens': u.get('prompt_cache_hit_tokens'),
+    }
+    result['debug'] = {
+        'stub': False, 'request': debug_request, 'response': data, 'missing_markers': _LYRICS_MARKER not in text,
+        # DeepSeek's own API never reports a USD cost, unlike OpenRouter -
+        # this is always a catalog estimate (or unknown if the model has no
+        # price row), which _usage_summary/pricing.compute_cost reflect via
+        # cost.source.
+        'usage': _usage_summary(model, units, None, settings.get('pricing_overrides'), duration_ms),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
                  units=units, prompt=raw_lyrics, response=text)

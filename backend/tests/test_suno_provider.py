@@ -264,6 +264,77 @@ def test_generate_records_error_on_non_200_and_still_raises(monkeypatch, usage_l
     assert rec['cost']['amount'] is None
 
 
+def test_generate_via_gemini_includes_usage_summary_with_catalog_cost(monkeypatch):
+    payload = {
+        'candidates': [{'content': {'parts': [{'text': (
+            f'{suno._STYLE_MARKER}\nSynthpop\n{suno._LYRICS_MARKER}\n[Verse]\nAdapted'
+        )}]}}],
+        'usageMetadata': {'promptTokenCount': 500, 'candidatesTokenCount': 120, 'totalTokenCount': 620},
+    }
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'google': 'test-key'}}
+
+    import asyncio
+    result = asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings=settings))
+
+    usage_summary = result['debug']['usage']
+    assert usage_summary['input_tokens'] == 500
+    assert usage_summary['output_tokens'] == 120
+    # No cost field in Gemini's response - priced from BUILTIN_PRICING instead.
+    assert usage_summary['cost']['source'] == 'catalog'
+    assert usage_summary['cost']['amount'] is not None
+    assert usage_summary['duration_ms'] >= 0
+
+
+def test_generate_via_openrouter_usage_summary_uses_provider_cost(monkeypatch):
+    payload = {
+        'choices': [{'message': {'content': (
+            f'{suno._STYLE_MARKER}\nSynthpop\n{suno._LYRICS_MARKER}\n[Verse]\nAdapted'
+        )}}],
+        'usage': {'prompt_tokens': 400, 'completion_tokens': 90, 'total_tokens': 490, 'cost': 0.002},
+    }
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'openrouter': 'or-key'}}
+
+    import asyncio
+    result = asyncio.run(suno.generate(project, model='openrouter:google/gemini-3.6-flash', settings=settings))
+
+    # OpenRouter's exact reported cost wins over the catalog estimate.
+    assert result['debug']['usage']['cost'] == {'amount': 0.002, 'currency': 'USD', 'source': 'provider'}
+
+
+def test_generate_raises_clear_timeout_error_and_records_it(monkeypatch, usage_ledger):
+    class _TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise suno.httpx.ReadTimeout('timed out')
+
+    monkeypatch.setattr(suno.httpx, 'AsyncClient', lambda **kwargs: _TimeoutClient())
+
+    project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Raw line'}]}
+    settings = {'api_keys': {'google': 'test-key'}}
+    ctx = usage_ledger.context('suno_generate', 'my-poem', settings)
+
+    import asyncio
+    with pytest.raises(RuntimeError, match='Таймаут'):
+        asyncio.run(suno.generate(project, model='google:gemini-2.5-flash', settings=settings, usage_ctx=ctx))
+
+    rec = usage_ledger.query()['records'][0]
+    assert rec['status'] == 'error'
+    assert 'Таймаут' in rec['error']
+
+
 def test_stub_fallback_records_nothing_because_no_call_was_made(usage_ledger):
     project = {'blocks': [{'id': 'b1', 'type': 'verse', 'content': 'Line one'}]}
     settings = {'api_keys': {'google': ''}}
