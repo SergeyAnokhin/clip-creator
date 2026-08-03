@@ -68,6 +68,7 @@ export const api = {
   addSceneWish: (id, text) => request(`${projectPath(id)}/scenes/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getSceneImageJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/jobs/${encodeURIComponent(jobId)}`),
+  deleteSceneImage: (id, sceneIndex, imageId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/${encodeURIComponent(imageId)}`, { method: 'DELETE' }),
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),

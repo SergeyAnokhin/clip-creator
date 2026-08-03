@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Film, ImagePlus, Image as ImageIcon, Loader2, Mic, MicOff } from 'lucide-react';
+import { Film, ImagePlus, Image as ImageIcon, Loader2, Mic, MicOff, Trash2 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import TranslateButton from './TranslateButton.jsx';
+import CopyButton from './CopyButton.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
 
 /** Scenes (text) stage's per-scene card - lyric segment + editable
@@ -32,6 +33,7 @@ export default function SceneTextCard({
                 <ImageIcon size={12} />
                 {L.staticPrompt}
                 <TranslateButton L={L} text={scene.static_prompt} />
+                <CopyButton L={L} text={scene.static_prompt} />
               </div>
               <textarea
                 className="scene-textarea"
@@ -45,6 +47,7 @@ export default function SceneTextCard({
                   <Film size={12} />
                   {L.motionPrompt}
                   <TranslateButton L={L} text={scene.motion_prompt} />
+                  <CopyButton L={L} text={scene.motion_prompt} />
                 </div>
                 <textarea
                   className="scene-textarea"
@@ -93,12 +96,18 @@ export default function SceneTextCard({
                 alt=""
                 style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12 }}
               />
+              <button
+                className="image-thumb-delete"
+                onClick={(e) => { e.stopPropagation(); actions.onDeleteImage(index, scene.images.length - 1); }}
+              >
+                <Trash2 size={11} />
+              </button>
             </div>
           )}
         </div>
       </div>
 
-      <ImageLightbox projectId={projectId} image={lightboxImage} onClose={() => setLightboxImage(null)} />
+      <ImageLightbox L={L} projectId={projectId} image={lightboxImage} onClose={() => setLightboxImage(null)} />
     </div>
   );
 }

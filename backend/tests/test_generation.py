@@ -255,6 +255,21 @@ def test_generate_scene_images_out_of_range_returns_404(client):
     assert client.post(f'/api/projects/{pid}/scenes/99/images', json={}).status_code == 404
 
 
+def test_generate_scene_images_forwards_aspect_ratio(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    captured = {}
+
+    def fake_start_jobs(*args, **kwargs):
+        captured.update(kwargs)
+        return ['job_1']
+
+    monkeypatch.setattr(generation_router.images, 'start_jobs', fake_start_jobs)
+
+    client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'krea:krea/krea-2/medium', 'aspect_ratio': '9:16'})
+
+    assert captured['aspect_ratio'] == '9:16'
+
+
 def test_get_scene_image_job_returns_status(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     image = {'image_id': 'img_x', 'file_path': 'images/x.png', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}
@@ -373,3 +388,44 @@ def test_delete_reference_image_removes_file_and_entry(client):
     assert not file_path.is_file()
     saved = client.get(f'/api/projects/{pid}').json()
     assert saved['reference_images'] == []
+
+
+def test_delete_scene_image_removes_file_and_entry(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['scenes'][2]['static_prompt'] = 'a cinematic frame'
+    settings = client.get('/api/settings').json()
+    settings['api_keys']['google'] = 'test-key'
+    client.patch(f'/api/projects/{pid}', json=project)
+    client.put('/api/settings', json=settings)
+
+    import base64
+    payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
+    fake_client = _FakeImagesAsyncClient([_FakeImagesResponse(200, payload)])
+    monkeypatch.setattr(generation_router.images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    job_id = client.post(
+        f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'google:imagen-4.0-generate-001'},
+    ).json()['job_ids'][0]
+    image = _poll_until_done(client, pid, 2, job_id)['image']
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    file_path = data_root / 'projects' / pid / image['file_path']
+    assert file_path.is_file()
+
+    resp = client.delete(f'/api/projects/{pid}/scenes/2/images/{image["image_id"]}')
+
+    assert resp.status_code == 200
+    assert resp.json()['images'] == []
+    assert not file_path.is_file()
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['scenes'][2]['images'] == []
+
+
+def test_delete_scene_image_missing_image_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.delete(f'/api/projects/{pid}/scenes/2/images/does-not-exist').status_code == 404
+
+
+def test_delete_scene_image_out_of_range_scene_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.delete(f'/api/projects/{pid}/scenes/99/images/x').status_code == 404

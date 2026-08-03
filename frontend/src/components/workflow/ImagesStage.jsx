@@ -1,15 +1,19 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Minus, Plus, Upload, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import SceneCard from './SceneCard.jsx';
 import ModelPicker from './ModelPicker.jsx';
+import ImageLightbox from './ImageLightbox.jsx';
+
+const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16'];
 
 export default function ImagesStage({
   L, project, isMobile, imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
-  variantCount, referenceUploading, hideMotionPrompt,
+  variantCount, referenceUploading, hideMotionPrompt, aspectRatio,
   sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, voiceSupported, actions,
 }) {
   const fileInputRef = useRef(null);
+  const [lightboxImage, setLightboxImage] = useState(null);
   const tierFavorites = imageModelTier === 'simple' ? imageModelSimpleFavorites : imageModelFavorites;
 
   return (
@@ -25,16 +29,17 @@ export default function ImagesStage({
         <div className="scene-prompt-label">{L.referenceImagesLabel}</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {(project.reference_images || []).map((path) => (
-            <div key={path} style={{ position: 'relative', width: 64, height: 64 }}>
+            <div key={path} style={{ position: 'relative', width: 64, height: 64, cursor: 'pointer' }}>
               <img
                 src={mediaUrl(`projects/${project.id}/${path}`)}
                 alt=""
                 style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }}
+                onClick={() => setLightboxImage({ file_path: path })}
               />
               <button
                 className="icon-btn"
                 style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20 }}
-                onClick={() => actions.removeReference(path)}
+                onClick={(e) => { e.stopPropagation(); actions.removeReference(path); }}
               >
                 <X size={11} />
               </button>
@@ -99,6 +104,19 @@ export default function ImagesStage({
         </button>
       </div>
 
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.aspectRatioLabel}:</span>
+        {ASPECT_RATIOS.map((ratio) => (
+          <button
+            key={ratio}
+            className={`chip${aspectRatio === ratio ? ' is-active' : ''}`}
+            onClick={() => actions.setAspectRatio(ratio)}
+          >
+            {L[`aspectRatio_${ratio === 'auto' ? 'auto' : ratio.replace(':', '_')}`]}
+          </button>
+        ))}
+      </div>
+
       {project.scenes.length === 0 ? (
         <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>
           {L.noScenesYet}
@@ -123,6 +141,8 @@ export default function ImagesStage({
           ))}
         </div>
       )}
+
+      <ImageLightbox L={L} projectId={project.id} image={lightboxImage} onClose={() => setLightboxImage(null)} />
     </>
   );
 }

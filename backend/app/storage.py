@@ -1,8 +1,11 @@
+import asyncio
 import json
 import os
 import shutil
 from pathlib import Path
 from typing import Optional
+
+_project_locks: dict[str, asyncio.Lock] = {}
 
 
 def get_data_root() -> Path:
@@ -60,6 +63,29 @@ def load_project(slug: str) -> Optional[dict]:
 def save_project(slug: str, data: dict) -> None:
     project_dir(slug).mkdir(parents=True, exist_ok=True)
     project_file(slug).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def project_lock(slug: str) -> asyncio.Lock:
+    """Per-project lock for the load-mutate-save sequence every project
+    mutation follows (`load_project` -> change a field -> `save_project`).
+    Without it, two of these sequences overlapping - e.g. two background
+    scene-image generation jobs finishing around the same moment, each for a
+    different scene of the same project - can silently lose an update: job B
+    loads its snapshot before job A's save lands, so B's later save
+    overwrites A's change with B's own stale copy of the project (confirmed
+    against a real project on disk, 2026-08, where 8 of 9 just-generated
+    scene images vanished from `config.json` this way despite their files
+    surviving untouched in `images/`). `async with project_lock(slug):`
+    around the whole load-mutate-save block serializes those sequences per
+    project - unrelated projects still save fully concurrently since each
+    slug gets its own lock. One lock per slug is enough because
+    `load_project`/`save_project` are synchronous (no `await` inside), so
+    once a coroutine acquires the lock nothing else can interleave with its
+    critical section until it releases."""
+    lock = _project_locks.get(slug)
+    if lock is None:
+        lock = _project_locks[slug] = asyncio.Lock()
+    return lock
 
 
 def delete_project(slug: str) -> None:

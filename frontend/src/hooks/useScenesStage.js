@@ -163,6 +163,21 @@ export function useScenesStage({
     }
   }
 
+  async function deleteSceneImage(idx, imgIdx) {
+    if (!activeProject) return;
+    const image = activeProject.scenes[idx]?.images[imgIdx];
+    if (!image) return;
+    try {
+      await api.deleteSceneImage(activeProject.id, idx, image.image_id);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i !== idx ? s : { ...s, images: s.images.filter((_, j) => j !== imgIdx) })),
+      }));
+    } catch {
+      showToast('Не удалось удалить изображение');
+    }
+  }
+
   return {
     state: {
       sceneTextModel, sceneImageModel, sceneImageLoadingIdx, sceneMode, sceneCount, styleDescription, sceneWishText,
@@ -174,7 +189,7 @@ export function useScenesStage({
       setSceneMode, setSceneCount, setSceneWishText,
       onStyleDescriptionChange, generateStoryboard, addSceneWish, toggleSceneWish,
       onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
-      onGenerateImage: generateSceneImage,
+      onGenerateImage: generateSceneImage, onDeleteImage: deleteSceneImage,
     },
   };
 }

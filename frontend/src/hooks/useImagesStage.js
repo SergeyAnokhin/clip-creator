@@ -25,6 +25,7 @@ export function useImagesStage({
   const [sceneLoadingIdx, setSceneLoadingIdx] = useState(null);
   const [variantCount, setVariantCount] = useState(1);
   const [referenceUploading, setReferenceUploading] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState('auto');
 
   function resetForProject() {
     setImageModelMain(imageModels.default || '');
@@ -72,7 +73,9 @@ export function useImagesStage({
     setSceneLoadingIdx(idx);
     try {
       await flushPendingSave();
-      const { job_ids: jobIds } = await api.generateSceneImages(activeProject.id, idx, { count: variantCount, model: imageModel });
+      const { job_ids: jobIds } = await api.generateSceneImages(activeProject.id, idx, {
+        count: variantCount, model: imageModel, aspect_ratio: aspectRatio === 'auto' ? undefined : aspectRatio,
+      });
       const jobs = await Promise.all(jobIds.map((jobId) => pollImageJob(activeProject.id, idx, jobId)));
       const newImages = jobs.filter((j) => j.status === 'completed').map((j) => j.image);
       if (newImages.length) {
@@ -104,6 +107,20 @@ export function useImagesStage({
       }),
     }));
   }
+  async function deleteImage(sceneIdx, imgIdx) {
+    if (!activeProject) return;
+    const image = activeProject.scenes[sceneIdx]?.images[imgIdx];
+    if (!image) return;
+    try {
+      await api.deleteSceneImage(activeProject.id, sceneIdx, image.image_id);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i !== sceneIdx ? s : { ...s, images: s.images.filter((_, j) => j !== imgIdx) })),
+      }));
+    } catch {
+      showToast('Не удалось удалить изображение');
+    }
+  }
   function selectMainImage(sceneIdx, imgIdx) {
     updateProject((p) => ({
       ...p,
@@ -128,15 +145,15 @@ export function useImagesStage({
 
   return {
     state: {
-      imageModel, imageModelTier, variantCount, referenceUploading, sceneLoadingIdx,
+      imageModel, imageModelTier, variantCount, referenceUploading, sceneLoadingIdx, aspectRatio,
     },
     resetForProject,
     actions: {
-      setImageModelTier, selectImageModel, setVariantCount,
+      setImageModelTier, selectImageModel, setVariantCount, setAspectRatio,
       uploadReference, removeReference,
       onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
       onGenerate: generateSceneImages,
-      onSelectMain: selectMainImage, onRate: rateImage,
+      onSelectMain: selectMainImage, onRate: rateImage, onDelete: deleteImage,
     },
   };
 }

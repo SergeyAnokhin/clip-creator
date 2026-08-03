@@ -158,9 +158,13 @@ async def generate_scene_images(project_id: str, scene_index: int, body: dict = 
     scene = scene_list[scene_index]
     count = body.get('count', 1)
     model = body.get('model', '')
+    aspect_ratio = body.get('aspect_ratio')
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
     usage_ctx = usage.context('scene_image', project_id, settings, scene_index=scene_index, count=count)
-    job_ids = images.start_jobs(project_id, scene_index, scene.get('static_prompt', ''), count, model, settings, usage_ctx=usage_ctx)
+    job_ids = images.start_jobs(
+        project_id, scene_index, scene.get('static_prompt', ''), count, model, settings,
+        usage_ctx=usage_ctx, aspect_ratio=aspect_ratio,
+    )
     return {'job_ids': job_ids}
 
 
@@ -172,40 +176,69 @@ async def get_scene_image_job(project_id: str, scene_index: int, job_id: str):
     return job
 
 
+@router.delete('/{project_id}/scenes/{scene_index}/images/{image_id}')
+async def delete_scene_image(project_id: str, scene_index: int, image_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        scene_list = project.get('scenes', [])
+        if scene_index < 0 or scene_index >= len(scene_list):
+            raise HTTPException(404, 'Scene not found')
+
+        scene_images = scene_list[scene_index].get('images', [])
+        target = next((img for img in scene_images if img.get('image_id') == image_id), None)
+        if target is None:
+            raise HTTPException(404, 'Image not found')
+
+        remaining = [img for img in scene_images if img.get('image_id') != image_id]
+        scene_list[scene_index]['images'] = remaining
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'images': remaining}
+
+
 @router.post('/{project_id}/reference-images')
 async def upload_reference_image(project_id: str, file: UploadFile = File(...)):
-    project = storage.load_project(project_id)
-    if project is None:
-        raise HTTPException(404, 'Project not found')
-
     suffix = ('.' + file.filename.rsplit('.', 1)[-1].lower()) if file.filename and '.' in file.filename else ''
     if suffix not in _ALLOWED_REFERENCE_EXTENSIONS:
         raise HTTPException(415, 'Unsupported image type')
-
-    references_dir = storage.project_dir(project_id) / 'references'
-    references_dir.mkdir(parents=True, exist_ok=True)
-    filename = f'ref_{uuid4().hex[:8]}{suffix}'
     contents = await file.read()
-    (references_dir / filename).write_bytes(contents)
 
-    reference_images = [*project.get('reference_images', []), f'references/{filename}']
-    project['reference_images'] = reference_images
-    project['updated_at'] = _now()
-    storage.save_project(project_id, project)
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+
+        references_dir = storage.project_dir(project_id) / 'references'
+        references_dir.mkdir(parents=True, exist_ok=True)
+        filename = f'ref_{uuid4().hex[:8]}{suffix}'
+        (references_dir / filename).write_bytes(contents)
+
+        reference_images = [*project.get('reference_images', []), f'references/{filename}']
+        project['reference_images'] = reference_images
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
     return {'reference_images': reference_images}
 
 
 @router.delete('/{project_id}/reference-images/{filename}')
 async def delete_reference_image(project_id: str, filename: str):
-    project = storage.load_project(project_id)
-    if project is None:
-        raise HTTPException(404, 'Project not found')
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
 
-    path = f'references/{filename}'
-    reference_images = [p for p in project.get('reference_images', []) if p != path]
-    project['reference_images'] = reference_images
-    project['updated_at'] = _now()
-    storage.save_project(project_id, project)
+        path = f'references/{filename}'
+        reference_images = [p for p in project.get('reference_images', []) if p != path]
+        project['reference_images'] = reference_images
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
 
     file_path = storage.project_dir(project_id) / 'references' / filename
     if file_path.is_file():

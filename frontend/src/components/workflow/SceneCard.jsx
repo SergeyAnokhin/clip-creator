@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Film, Image as ImageIcon, ImagePlus, Mic, MicOff } from 'lucide-react';
 import ImageThumb from './ImageThumb.jsx';
 import TranslateButton from './TranslateButton.jsx';
+import CopyButton from './CopyButton.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
 
 export default function SceneCard({
@@ -24,6 +25,7 @@ export default function SceneCard({
                 <ImageIcon size={12} />
                 {L.staticPrompt}
                 <TranslateButton L={L} text={scene.static_prompt} />
+                <CopyButton L={L} text={scene.static_prompt} />
               </div>
               <textarea
                 className="scene-textarea"
@@ -37,6 +39,7 @@ export default function SceneCard({
                   <Film size={12} />
                   {L.motionPrompt}
                   <TranslateButton L={L} text={scene.motion_prompt} />
+                  <CopyButton L={L} text={scene.motion_prompt} />
                 </div>
                 <textarea
                   className="scene-textarea"
@@ -77,18 +80,20 @@ export default function SceneCard({
             {scene.images.map((img, imgIdx) => (
               <ImageThumb
                 key={imgIdx}
+                L={L}
                 projectId={projectId}
                 image={img}
                 onSelectMain={() => actions.onSelectMain(index, imgIdx)}
                 onRate={(rating) => actions.onRate(index, imgIdx, rating)}
                 onExpand={() => setLightboxImage(img)}
+                onDelete={() => actions.onDelete(index, imgIdx)}
               />
             ))}
           </div>
         )}
       </div>
 
-      <ImageLightbox projectId={projectId} image={lightboxImage} onClose={() => setLightboxImage(null)} />
+      <ImageLightbox L={L} projectId={projectId} image={lightboxImage} onClose={() => setLightboxImage(null)} />
     </div>
   );
 }

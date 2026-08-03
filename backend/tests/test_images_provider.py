@@ -90,6 +90,18 @@ def test_generate_krea_success(monkeypatch):
     assert first_call['json'] == {'prompt': 'a prompt'}
 
 
+def test_generate_krea_aspect_ratio_passed_through(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'job_id': 'j1', 'status': 'queued'}),
+        _FakeResponse(200, {'status': 'completed', 'result': {'urls': ['https://cdn.example/img.png']}}),
+        _FakeResponse(200, content=b'PNGDATA', headers={'content-type': 'image/png'}),
+    ])
+
+    asyncio.run(images._generate_krea('krea/krea-2/medium', 'a prompt', 'test-key', aspect_ratio='9:16'))
+
+    assert fake_client.calls[0]['json'] == {'prompt': 'a prompt', 'aspect_ratio': '9:16'}
+
+
 def test_generate_krea_missing_key_raises():
     with pytest.raises(RuntimeError, match='Krea'):
         asyncio.run(images._generate_krea('krea/krea-2/medium', 'p', ''))
@@ -120,6 +132,28 @@ def test_generate_replicate_success(monkeypatch):
     assert first_call['url'] == 'https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions'
     assert first_call['headers']['Authorization'] == 'Bearer test-key'
     assert first_call['json'] == {'input': {'prompt': 'a prompt'}}
+
+
+def test_generate_replicate_aspect_ratio_passed_through(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'p1', 'status': 'succeeded', 'output': ['https://cdn.example/img.jpg'], 'urls': {'get': 'https://x'}}),
+        _FakeResponse(200, content=b'JPGDATA', headers={'content-type': 'image/jpeg'}),
+    ])
+
+    asyncio.run(images._generate_replicate('black-forest-labs/flux-schnell', 'a prompt', 'test-key', aspect_ratio='16:9'))
+
+    assert fake_client.calls[0]['json'] == {'input': {'prompt': 'a prompt', 'aspect_ratio': '16:9'}}
+
+
+def test_generate_replicate_sdxl_aspect_ratio_maps_to_width_height(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'p1', 'status': 'succeeded', 'output': ['https://cdn.example/img.jpg'], 'urls': {'get': 'https://x'}}),
+        _FakeResponse(200, content=b'JPGDATA', headers={'content-type': 'image/jpeg'}),
+    ])
+
+    asyncio.run(images._generate_replicate('stability-ai/sdxl', 'a prompt', 'test-key', aspect_ratio='9:16'))
+
+    assert fake_client.calls[0]['json'] == {'input': {'prompt': 'a prompt', 'width': 768, 'height': 1344}}
 
 
 def test_generate_replicate_missing_key_raises():
@@ -159,6 +193,21 @@ def test_generate_fal_success(monkeypatch):
     assert first_call['json'] == {'prompt': 'a prompt'}
 
 
+def test_generate_fal_aspect_ratio_maps_to_image_size(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {
+            'status': 'COMPLETED', 'request_id': 'r1',
+            'status_url': 'https://x/status', 'response_url': 'https://x',
+        }),
+        _FakeResponse(200, {'images': [{'url': 'https://cdn.example/img.webp'}]}),
+        _FakeResponse(200, content=b'WEBPDATA', headers={'content-type': 'image/webp'}),
+    ])
+
+    asyncio.run(images._generate_fal('fal-ai/flux/dev', 'a prompt', 'test-key', aspect_ratio='1:1'))
+
+    assert fake_client.calls[0]['json'] == {'prompt': 'a prompt', 'image_size': 'square_hd'}
+
+
 def test_generate_fal_missing_key_raises():
     with pytest.raises(RuntimeError, match='FAL'):
         asyncio.run(images._generate_fal('fal-ai/flux/dev', 'p', ''))
@@ -170,6 +219,42 @@ def test_generate_fal_failed_raises(monkeypatch):
         _FakeResponse(200, {'status': 'FAILED'}),
     ])
     with pytest.raises(RuntimeError, match='FAL'):
+        asyncio.run(images._generate_fal('fal-ai/flux/dev', 'p', 'key'))
+
+
+def test_generate_fal_poll_202_in_progress_keeps_polling(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {
+            'status': 'IN_QUEUE', 'request_id': 'r1',
+            'status_url': 'https://queue.fal.run/fal-ai/flux-pro/req/r1/status',
+            'response_url': 'https://queue.fal.run/fal-ai/flux-pro/req/r1',
+        }),
+        _FakeResponse(202, {'status': 'IN_PROGRESS'}),
+        _FakeResponse(202, {'status': 'IN_PROGRESS'}),
+        _FakeResponse(200, {'status': 'COMPLETED'}),
+        _FakeResponse(200, {'images': [{'url': 'https://cdn.example/img.webp'}]}),
+        _FakeResponse(200, content=b'WEBPDATA', headers={'content-type': 'image/webp'}),
+    ])
+
+    content, ext = asyncio.run(images._generate_fal('fal-ai/flux-pro/v1.1', 'a prompt', 'test-key'))
+
+    assert content == b'WEBPDATA'
+    assert ext == 'webp'
+    assert len(fake_client.calls) == 6
+
+
+def test_generate_fal_nsfw_flagged_raises(monkeypatch):
+    _install(monkeypatch, [
+        _FakeResponse(200, {
+            'status': 'COMPLETED', 'request_id': 'r1',
+            'status_url': 'https://x/status', 'response_url': 'https://x',
+        }),
+        _FakeResponse(200, {
+            'images': [{'url': 'https://cdn.example/img.png'}],
+            'has_nsfw_concepts': [True],
+        }),
+    ])
+    with pytest.raises(RuntimeError, match='NSFW'):
         asyncio.run(images._generate_fal('fal-ai/flux/dev', 'p', 'key'))
 
 
@@ -185,6 +270,17 @@ def test_generate_google_success(monkeypatch):
     assert call['url'] == 'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict'
     assert call['params'] == {'key': 'test-key'}
     assert call['json'] == {'instances': [{'prompt': 'a prompt'}], 'parameters': {'sampleCount': 1}}
+
+
+def test_generate_google_aspect_ratio_passed_through(monkeypatch):
+    payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
+    fake_client = _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    asyncio.run(images._generate_google('imagen-4.0-generate-001', 'a prompt', 'test-key', aspect_ratio='16:9'))
+
+    assert fake_client.calls[0]['json'] == {
+        'instances': [{'prompt': 'a prompt'}], 'parameters': {'sampleCount': 1, 'aspectRatio': '16:9'},
+    }
 
 
 def test_generate_google_missing_key_raises():
@@ -221,6 +317,15 @@ def test_generate_openrouter_success(monkeypatch):
     assert call['url'] == 'https://openrouter.ai/api/v1/images'
     assert call['headers']['Authorization'] == 'Bearer test-key'
     assert call['json'] == {'model': 'google/gemini-2.5-flash-image', 'prompt': 'a prompt', 'n': 1}
+
+
+def test_generate_openrouter_aspect_ratio_passed_through(monkeypatch):
+    payload = {'data': [{'b64_json': base64.b64encode(b'PNGDATA').decode(), 'media_type': 'image/png'}]}
+    fake_client = _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    asyncio.run(images._generate_openrouter('google/gemini-2.5-flash-image', 'a prompt', 'test-key', aspect_ratio='9:16'))
+
+    assert fake_client.calls[0]['json'] == {'model': 'google/gemini-2.5-flash-image', 'prompt': 'a prompt', 'n': 1, 'aspect_ratio': '9:16'}
 
 
 def test_generate_openrouter_missing_key_raises():
@@ -353,6 +458,50 @@ def test_start_jobs_records_openrouter_provider_reported_cost(monkeypatch, usage
     assert rec['cost']['source'] == 'provider'
     assert rec['cost']['amount'] == pytest.approx(0.04)
     assert 'cost' not in rec['units']
+
+
+def test_start_jobs_stores_model_aspect_ratio_and_cost_on_image(monkeypatch, usage_ledger):
+    payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
+    _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    async def scenario():
+        ctx = usage_ledger.context('scene_image', 'poem-a', {}, scene_index=0, count=1)
+        job_ids = images.start_jobs(
+            'poem-a', 0, 'p', 1, 'google:imagen-4.0-generate-001', {'api_keys': {'google': 'k'}},
+            usage_ctx=ctx, aspect_ratio='9:16',
+        )
+        for _ in range(200):
+            job = images.get_job(job_ids[0])
+            if job['status'] != 'pending':
+                return job
+            await asyncio.sleep(0)
+        raise AssertionError('job did not resolve')
+
+    job = asyncio.run(scenario())
+    image = job['image']
+    assert image['model'] == 'google:imagen-4.0-generate-001'
+    assert image['aspect_ratio'] == '9:16'
+    assert image['cost'] == pytest.approx(0.04)
+
+
+def test_start_jobs_rejects_unknown_aspect_ratio(monkeypatch, usage_ledger):
+    payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
+    fake_client = _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    async def scenario():
+        job_ids = images.start_jobs(
+            'poem-a', 0, 'p', 1, 'google:imagen-4.0-generate-001', {'api_keys': {'google': 'k'}},
+            aspect_ratio='not-a-ratio',
+        )
+        for _ in range(200):
+            job = images.get_job(job_ids[0])
+            if job['status'] != 'pending':
+                return job
+            await asyncio.sleep(0)
+        raise AssertionError('job did not resolve')
+
+    asyncio.run(scenario())
+    assert 'aspectRatio' not in fake_client.calls[0]['json']['parameters']
 
 
 def test_start_jobs_records_error_status_on_failure(usage_ledger):

@@ -240,7 +240,15 @@ without knowing whether the result is canned or real. Keys come from
     poll `urls.get` until `status == 'succeeded'`, image(s) in `output`.
     **FAL** `POST https://queue.fal.run/{model_id}` → `{status_url,
     response_url}`, poll `status_url` until `status == 'COMPLETED'`, then
-    `GET response_url` for `images[].url`. **Google Imagen**
+    `GET response_url` for `images[].url` — FAL's `status_url` poll can reply
+    HTTP `202 Accepted` (not 200) while the job is still `IN_QUEUE`/
+    `IN_PROGRESS`, so only HTTP `>=400` is treated as a transport error there;
+    the JSON `status` field (not the HTTP status code) drives the poll loop.
+    FAL's moderation also doesn't fail the request on flagged content (still
+    a 2xx with a blank/blurred image URL), it only surfaces via the sibling
+    `has_nsfw_concepts: [bool, ...]` array, so that's checked explicitly and
+    turned into a `failed` job rather than silently saving the placeholder.
+    **Google Imagen**
     `POST .../v1beta/models/{model_id}:predict` (same host as `suno.py`'s
     Gemini call) → `{predictions: [{bytesBase64Encoded, mimeType}]}` — no
     job/polling, it's a single synchronous call. **OpenRouter**
@@ -251,13 +259,37 @@ without knowing whether the result is canned or real. Keys come from
     `text_models.py`'s `_complete_openrouter` for text) and is threaded
     through as the usage ledger's `provider_cost`, winning over the price
     catalog the same way.
+  - `POST .../images` also accepts an optional `aspect_ratio` (one of `1:1`,
+    `16:9`, `9:16` — `ImagesStage.jsx`'s picker; anything else, including
+    omitted/`auto`, means "don't send it, use the provider/model's own
+    default"). Threaded to each provider in the shape it actually accepts
+    (confirmed against each one's docs, 2026-08): Krea, Replicate
+    (FLUX/SD3.5 models) and OpenRouter take it verbatim as `aspect_ratio`;
+    Google Imagen takes it as `aspectRatio`; FAL takes an `image_size` enum
+    instead (`1:1`→`square_hd`, `16:9`→`landscape_16_9`,
+    `9:16`→`portrait_16_9`) since its models don't have an aspect-ratio
+    field. One exception: `stability-ai/sdxl` on Replicate has no
+    `aspect_ratio` input at all (unlike the FLUX/SD3.5 models on the same
+    platform), so it's special-cased to explicit `width`/`height` at one of
+    SDXL's documented "optimal" resolutions instead.
   - A job's background task, on success, downloads/decodes the image bytes,
     writes them to `images/scene_{n}_{shorthex}.{png|jpg|webp}` (extension
     from the URL or the response's content-type/mimeType), and **persists
     directly onto the project** (fresh `load_project`/`save_project`, same as
     every other generation route) — the image is on disk and in
     `project.scenes[n].images` by the time a poll first reports `completed`,
-    independent of whether the frontend is still polling.
+    independent of whether the frontend is still polling. Each saved image
+    record also carries `model` (the composite `provider:model_id` used),
+    `aspect_ratio` (what was requested, or `null`) and `cost` (same
+    provider-reported-or-catalog number as the usage ledger row for that
+    call) — `ImageLightbox.jsx` shows these plus the actual pixel resolution
+    (read client-side off the loaded `<img>`, not stored server-side — no
+    Pillow dependency here) when a thumbnail is expanded.
+  - `DELETE /api/projects/{id}/scenes/{n}/images/{image_id}` removes one
+    generated image: drops it from `project.scenes[n].images` and deletes its
+    file from disk (same load/mutate/save-then-unlink shape as
+    `POST`/`DELETE .../reference-images` in `routers/generation.py`, which
+    upload/remove `project.reference_images` the same way).
   - A job's background task, on failure (missing API key, non-2xx response,
     unexpected shape, provider-reported failure/timeout), sets `status:
     'failed'` with a Russian `error` string — no silent fallback, matching
@@ -533,6 +565,21 @@ state, not in any hook.
   could land afterwards and revert them. `flushPendingSave()` in `useProjects`
   cancels the debounce and saves synchronously first — call it before any
   action that rewrites project state on the server.
+- **Concurrent-save race (fixed).** Every project mutation follows
+  `load_project` → change a field → `save_project`; two of those sequences
+  overlapping — e.g. several background scene-image jobs (`images.py`'s
+  `_run_job`) finishing around the same moment for different scenes of the
+  same project — used to silently lose an update: whichever save landed
+  second was built from a snapshot taken before the first save, so it
+  overwrote the first job's change instead of merging with it (confirmed on a
+  real project, 2026-08: 8 of 9 just-generated scene images vanished from
+  `config.json` despite their files surviving untouched in `images/`).
+  `storage.project_lock(slug)` is an `asyncio.Lock` per project slug — every
+  load-mutate-save site that can run concurrently (`_run_job`, and
+  `routers/generation.py`'s scene-image delete and reference-image
+  upload/delete) now holds it for the whole sequence, so a second job's
+  `load_project` can't start until the first one's `save_project` has landed.
+  Unrelated projects still save fully concurrently, one lock per slug.
 - **Uploaded filenames are never trusted.** Reference images are stored as
   `ref_{uuid}.{ext}`, so there's no path-traversal surface.
 - **i18n parity.** Every user-facing string goes in both `DICT.ru` and
