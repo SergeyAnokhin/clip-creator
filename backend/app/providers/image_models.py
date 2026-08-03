@@ -10,10 +10,14 @@ why); Krea (krea.ai) has no discovery endpoint either - each of its models
 is its own fixed REST path (`POST /generate/image/{id}` against
 `https://api.krea.ai`, e.g. `/generate/image/bfl/flux-1-dev`) rather than
 one endpoint with a model parameter, confirmed against
-https://www.krea.ai/docs/api-reference/ (2026-07). So those three, plus
-OpenRouter and DeepSeek (neither of which route image models), fall back to
-a small curated constant. The user can still add any model id manually in
-the UI.
+https://www.krea.ai/docs/api-reference/ (2026-07). OpenRouter now routes
+image generation too (its Unified Image API, launched 2026-06 - see
+`providers/images.py`'s `_generate_openrouter`), but still has no
+list-models-filtered-to-image-capable endpoint, so it's a curated list here
+same as the others, sourced from openrouter.ai/collections/image-models
+(2026-08). DeepSeek doesn't route image models at all. So Replicate, FAL,
+OpenRouter and Krea all fall back to a small curated constant (DeepSeek's
+list stays empty). The user can still add any model id manually in the UI.
 
 Krea is image/video-only (no text/LLM models), so it's deliberately absent
 from text_models.py's provider set - see settings.py's
@@ -37,7 +41,13 @@ CURATED_IMAGE_MODELS = {
         {'id': 'fal-ai/fast-sdxl', 'name': 'Fast SDXL'},
         {'id': 'fal-ai/aura-flow', 'name': 'AuraFlow'},
     ],
-    'openrouter': [],
+    'openrouter': [
+        {'id': 'google/gemini-2.5-flash-image', 'name': 'Gemini 2.5 Flash Image (via OpenRouter)'},
+        {'id': 'openai/gpt-image-1', 'name': 'GPT Image 1 (via OpenRouter)'},
+        {'id': 'openai/gpt-image-2', 'name': 'GPT Image 2 (via OpenRouter)'},
+        {'id': 'black-forest-labs/flux.2-pro', 'name': 'FLUX.2 [pro] (via OpenRouter)'},
+        {'id': 'bytedance-seed/seedream-4.5', 'name': 'Seedream 4.5 (via OpenRouter)'},
+    ],
     'deepseek': [],
     'krea': [
         {'id': 'krea/krea-2/medium', 'name': 'Krea 2 (Medium)'},

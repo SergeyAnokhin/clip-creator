@@ -195,7 +195,7 @@ def test_generate_suno_falls_back_to_projects_active_wish_ids_when_not_sent(clie
 def test_generate_scenes_calls_provider_seam_and_persists(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     canned = [{'lyric_segment': 'X', 'static_prompt': 'sp', 'motion_prompt': 'mp', 'images': []}]
-    monkeypatch.setattr(generation_router.scenes, 'generate', AsyncMock(return_value=canned))
+    monkeypatch.setattr(generation_router.scenes, 'generate', AsyncMock(return_value={'scenes': canned, 'debug': {'stub': True}}))
 
     resp = client.post(
         f'/api/projects/{pid}/scenes/generate',
@@ -203,7 +203,10 @@ def test_generate_scenes_calls_provider_seam_and_persists(client, monkeypatch):
     )
 
     assert resp.status_code == 200
-    assert resp.json() == {'scenes': canned, 'style_description': 'Neon noir'}
+    body = resp.json()
+    assert body['scenes'] == canned
+    assert body['style_description'] == 'Neon noir'
+    assert body['scene_mode'] == 'narrative'
     saved = client.get(f'/api/projects/{pid}').json()
     assert saved['scenes'] == canned
     assert saved['style_description'] == 'Neon noir'
@@ -217,7 +220,7 @@ def test_generate_scenes_forwards_model_to_provider(client, monkeypatch):
     """The scene-text model picker sends `model`; the router must forward it
     to the provider seam even though the stub itself ignores it."""
     pid = client.get('/api/projects').json()[0]['id']
-    fake_generate = AsyncMock(return_value=[])
+    fake_generate = AsyncMock(return_value={'scenes': [], 'debug': {'stub': True}})
     monkeypatch.setattr(generation_router.scenes, 'generate', fake_generate)
 
     client.post(f'/api/projects/{pid}/scenes/generate', json={'model': 'google:gemini-2.5-flash'})

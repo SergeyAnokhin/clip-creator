@@ -106,6 +106,8 @@ async def create_project(body: ProjectCreate):
         'track_url': '',
         'scenes': [],
         'style_description': '',
+        'scene_mode': 'narrative',
+        'active_scene_wish_ids': [],
         'reference_images': [],
         'source_url': body.url,
     }

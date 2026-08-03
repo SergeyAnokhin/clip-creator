@@ -30,9 +30,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from . import pricing, storage
+from . import console_log, pricing, storage
 
-TASKS = ('suno_generate', 'wish_refine', 'wish_title', 'scene_storyboard', 'scene_image')
+TASKS = ('suno_generate', 'wish_refine', 'wish_title', 'scene_storyboard', 'scene_image', 'translate')
 GROUP_KEYS = ('project', 'task', 'model', 'provider', 'day')
 PREVIEW_LIMIT = 300
 
@@ -131,6 +131,7 @@ def _write(ctx: dict, *, model: str, kind: str, status: str, duration_ms: int,
     # to other concurrently-running provider calls (see module docstring).
     with path.open('a', encoding='utf-8', newline='\n') as f:
         f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    console_log.log_result(rec)
 
 
 def _shard_path(year_month: str) -> Path:

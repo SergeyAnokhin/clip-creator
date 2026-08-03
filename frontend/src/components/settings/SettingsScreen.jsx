@@ -16,6 +16,7 @@ const API_KEY_ROWS = [
   { key: 'openrouter', name: 'OpenRouter' },
   { key: 'deepseek', name: 'DeepSeek' },
   { key: 'krea', name: 'Krea AI' },
+  { key: 'google_translate', name: 'Google Translate' },
 ];
 
 const MODEL_PROVIDERS = [
@@ -33,8 +34,9 @@ const IMAGE_MODEL_PROVIDERS = [...MODEL_PROVIDERS, { id: 'krea', name: 'Krea AI'
 const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes'];
 
 export default function SettingsScreen({
-  L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, specialTags,
-  sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary,
+  L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
+  sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
+  sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
   pricing, usageToday, usagePeriodTotals,
   onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
@@ -47,6 +49,10 @@ export default function SettingsScreen({
   const [editingWishId, setEditingWishId] = useState(null);
   const [editWishTitle, setEditWishTitle] = useState('');
   const [editWishText, setEditWishText] = useState('');
+  const [newSceneWishDraft, setNewSceneWishDraft] = useState('');
+  const [editingSceneWishId, setEditingSceneWishId] = useState(null);
+  const [editSceneWishTitle, setEditSceneWishTitle] = useState('');
+  const [editSceneWishText, setEditSceneWishText] = useState('');
   const wishVoice = useFieldVoice({ showToast, L, lang });
   const [catalog, setCatalog] = useState({});
   const [refreshingModels, setRefreshingModels] = useState(false);
@@ -72,8 +78,12 @@ export default function SettingsScreen({
   function exportGeneralFile() {
     downloadJSON('versecraft-settings.json', {
       lang, text_models: textModels, simple_models: simpleModels, image_models: imageModels,
+      image_models_simple: imageModelsSimple,
       special_tags: specialTags, suno_base_prompt: sunoBasePrompt,
       suno_reference_examples: referenceExamples, suno_wish_library: wishLibrary,
+      request_timeout_seconds: requestTimeoutSeconds,
+      scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
+      scene_wish_library: sceneWishLibrary,
     });
   }
   function handleApiKeysFile(e) {
@@ -137,6 +147,22 @@ export default function SettingsScreen({
     if (!title || !text) return;
     actions.updateWishSnippet(editingWishId, { title, text });
     setEditingWishId(null);
+  }
+
+  function startEditSceneWish(wish) {
+    setEditingSceneWishId(wish.id);
+    setEditSceneWishTitle(wish.title);
+    setEditSceneWishText(wish.text);
+  }
+  function cancelEditSceneWish() {
+    setEditingSceneWishId(null);
+  }
+  function saveEditSceneWish() {
+    const title = editSceneWishTitle.trim();
+    const text = editSceneWishText.trim();
+    if (!title || !text) return;
+    actions.updateSceneWishSnippet(editingSceneWishId, { title, text });
+    setEditingSceneWishId(null);
   }
 
   const tabLabels = {
@@ -218,6 +244,21 @@ export default function SettingsScreen({
                   English
                 </button>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'general' && (
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.settings_requestTimeout}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_requestTimeoutHint}</div>
+              <input
+                className="field"
+                type="number"
+                min="5"
+                style={{ maxWidth: 120 }}
+                value={requestTimeoutSeconds}
+                onChange={(e) => actions.setRequestTimeoutSeconds(Math.max(5, Number(e.target.value) || 60))}
+              />
             </div>
           )}
 
@@ -326,6 +367,20 @@ export default function SettingsScreen({
                   onSetDefault={actions.setImageModelDefault}
                 />
               </div>
+
+              <div className="settings-panel">
+                <div className="settings-panel-label">{L.settings_imageModelsSimple}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_imageModelsSimpleHint}</div>
+                <ModelFavorites
+                  L={L} providers={IMAGE_MODEL_PROVIDERS}
+                  favorites={imageModelsSimple.favorites} defaultValue={imageModelsSimple.default}
+                  catalog={imageCatalog} refreshing={refreshingImageModels} onRefresh={refreshImageModels}
+                  prices={priceMap}
+                  onAddFavorite={actions.addImageModelSimpleFavorite}
+                  onRemoveFavorite={actions.removeImageModelSimpleFavorite}
+                  onSetDefault={actions.setImageModelSimpleDefault}
+                />
+              </div>
             </>
           )}
 
@@ -419,6 +474,28 @@ export default function SettingsScreen({
               </div>
 
               <div className="settings-panel">
+                <div className="settings-panel-label">{L.settings_sceneBasePromptNarrative}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{L.settings_sceneBasePromptNarrativeHint}</div>
+                <textarea
+                  className="suno-textarea"
+                  style={{ minHeight: 180 }}
+                  value={sceneBasePromptNarrative}
+                  onChange={(e) => actions.updateSceneBasePromptNarrative(e.target.value)}
+                />
+              </div>
+
+              <div className="settings-panel">
+                <div className="settings-panel-label">{L.settings_sceneBasePromptAbstract}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{L.settings_sceneBasePromptAbstractHint}</div>
+                <textarea
+                  className="suno-textarea"
+                  style={{ minHeight: 180 }}
+                  value={sceneBasePromptAbstract}
+                  onChange={(e) => actions.updateSceneBasePromptAbstract(e.target.value)}
+                />
+              </div>
+
+              <div className="settings-panel">
                 <div className="settings-panel-label">{L.settings_referenceExamples}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {referenceExamples.map((example, i) => (
@@ -465,6 +542,7 @@ export default function SettingsScreen({
           )}
 
           {activeTab === 'wishes' && (
+            <>
             <div className="settings-panel">
               <div className="settings-panel-label">{L.settings_wishLibrary}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -554,6 +632,65 @@ export default function SettingsScreen({
                 </button>
               </div>
             </div>
+
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.scene_wishesTitle}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {sceneWishLibrary.map((wish) => (
+                  editingSceneWishId === wish.id ? (
+                    <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                        <input
+                          className="field"
+                          value={editSceneWishTitle}
+                          onChange={(e) => setEditSceneWishTitle(e.target.value)}
+                          placeholder={L.settings_wishLibraryTitleLabel}
+                          autoFocus
+                        />
+                      </div>
+                      <textarea
+                        className="suno-textarea"
+                        style={{ minHeight: 70 }}
+                        value={editSceneWishText}
+                        onChange={(e) => setEditSceneWishText(e.target.value)}
+                        placeholder={L.settings_wishLibraryTextLabel}
+                      />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={saveEditSceneWish}>{L.save}</button>
+                        <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditSceneWish}>{L.cancel}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="settings-row" key={wish.id} title={wish.text}>
+                      <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {wish.title}
+                      </span>
+                      <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.settings_wishLibraryEdit} onClick={() => startEditSceneWish(wish)}>
+                        <Pencil size={13} />
+                      </button>
+                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeSceneWishSnippet(wish.id)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <input
+                  className="field"
+                  value={newSceneWishDraft}
+                  onChange={(e) => setNewSceneWishDraft(e.target.value)}
+                  placeholder={L.scene_wishPlaceholder}
+                />
+                <button
+                  className="btn btn-accent-soft"
+                  onClick={() => { actions.saveSceneWishToLibrary(newSceneWishDraft); setNewSceneWishDraft(''); }}
+                >
+                  {L.add}
+                </button>
+              </div>
+            </div>
+            </>
           )}
 
           <button className="btn btn-gradient" style={{ justifyContent: 'center', padding: 12, fontSize: 14 }} onClick={actions.onSave}>

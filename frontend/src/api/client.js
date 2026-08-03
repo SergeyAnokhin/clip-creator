@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8020';
 
 async function request(path, options) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -58,11 +58,14 @@ export const api = {
   getSunoPromptPresets: () => request('/api/settings/suno-prompt-presets'),
   saveWishToLibrary: (text) => request('/api/settings/wish-library', { method: 'POST', body: JSON.stringify({ text }) }),
   updateWishSnippet: (id, patch) => request(`/api/settings/wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  saveSceneWishToLibrary: (text) => request('/api/settings/scene-wish-library', { method: 'POST', body: JSON.stringify({ text }) }),
+  updateSceneWishSnippet: (id, patch) => request(`/api/settings/scene-wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   generateSuno: (id, body) => request(`${projectPath(id)}/suno/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   addSunoWish: (id, text) => request(`${projectPath(id)}/suno/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
 
   generateSceneStoryboard: (id, body) => request(`${projectPath(id)}/scenes/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  addSceneWish: (id, text) => request(`${projectPath(id)}/scenes/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getSceneImageJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/jobs/${encodeURIComponent(jobId)}`),
 
@@ -72,6 +75,8 @@ export const api = {
   usagePeriodTotals: (tzOffset) => request(`/api/usage/period-totals${qs({ tz_offset: tzOffset })}`),
   getPricing: () => request('/api/usage/pricing'),
   putPricingOverrides: (overrides) => request('/api/usage/pricing', { method: 'PUT', body: JSON.stringify({ pricing_overrides: overrides }) }),
+
+  translateText: (text, targetLang) => request('/api/translate', { method: 'POST', body: JSON.stringify({ text, target_lang: targetLang }) }),
 
   uploadReferenceImage: (id, file) => {
     const form = new FormData();

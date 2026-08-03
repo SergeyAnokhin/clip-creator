@@ -15,10 +15,10 @@ def test_list_models_returns_curated_for_fal():
     assert result['models'] == image_models.CURATED_IMAGE_MODELS['fal']
 
 
-def test_list_models_returns_empty_curated_for_openrouter():
+def test_list_models_returns_curated_for_openrouter():
     result = asyncio.run(image_models.list_models('openrouter', ''))
     assert result['source'] == 'curated'
-    assert result['models'] == []
+    assert result['models'] == image_models.CURATED_IMAGE_MODELS['openrouter']
 
 
 def test_list_models_returns_empty_curated_for_deepseek():

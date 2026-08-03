@@ -14,7 +14,9 @@ import time
 
 import httpx
 
-from .. import usage
+from .. import console_log, usage
+
+_DEFAULT_TIMEOUT_SECONDS = 60
 
 _GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 _GEMINI_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
@@ -150,14 +152,15 @@ async def generate_wish_title(text: str, settings: dict, usage_ctx: dict | None 
     default = ((settings.get('simple_models') or {}).get('default') or '').strip()
     provider, _, model_id = default.partition(':')
     api_key = (settings.get('api_keys') or {}).get(provider, '')
+    timeout = int(settings.get('request_timeout_seconds') or _DEFAULT_TIMEOUT_SECONDS)
 
     try:
         if provider == 'google' and model_id and api_key:
-            title = await _complete_google(model_id, api_key, text, usage_ctx)
+            title = await _complete_google(model_id, api_key, text, usage_ctx, timeout=timeout)
         elif provider == 'openrouter' and model_id and api_key:
-            title = await _complete_openrouter(model_id, api_key, text, usage_ctx)
+            title = await _complete_openrouter(model_id, api_key, text, usage_ctx, timeout=timeout)
         elif provider == 'deepseek' and model_id and api_key:
-            title = await _complete_deepseek(model_id, api_key, text, usage_ctx)
+            title = await _complete_deepseek(model_id, api_key, text, usage_ctx, timeout=timeout)
         else:
             return truncate_title(text)
         return title.strip().strip('"').strip() or truncate_title(text)
@@ -184,14 +187,15 @@ async def clean_wish_and_title(text: str, settings: dict, usage_ctx: dict | None
     default = ((settings.get('simple_models') or {}).get('default') or '').strip()
     provider, _, model_id = default.partition(':')
     api_key = (settings.get('api_keys') or {}).get(provider, '')
+    timeout = int(settings.get('request_timeout_seconds') or _DEFAULT_TIMEOUT_SECONDS)
 
     try:
         if provider == 'google' and model_id and api_key:
-            raw = await _complete_google(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT)
+            raw = await _complete_google(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT, timeout=timeout)
         elif provider == 'openrouter' and model_id and api_key:
-            raw = await _complete_openrouter(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT)
+            raw = await _complete_openrouter(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT, timeout=timeout)
         elif provider == 'deepseek' and model_id and api_key:
-            raw = await _complete_deepseek(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT)
+            raw = await _complete_deepseek(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT, timeout=timeout)
         else:
             return {'clean_text': text, 'title': truncate_title(text)}
         return _parse_wish_response(raw, text)
@@ -200,13 +204,15 @@ async def clean_wish_and_title(text: str, settings: dict, usage_ctx: dict | None
 
 
 async def _complete_google(
-    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *, prompt_template: str = _TITLE_PROMPT,
+    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *,
+    prompt_template: str = _TITLE_PROMPT, timeout: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     model = f'google:{model_id}'
     prompt = prompt_template.format(text=text)
     started = time.monotonic()
+    console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
     url = _GEMINI_GENERATE_URL.format(model=model_id)
-    async with httpx.AsyncClient(timeout=20) as http_client:
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
         resp = await http_client.post(
             url,
             params={'key': api_key},
@@ -233,11 +239,13 @@ async def _complete_google(
 
 
 async def _complete_openrouter(
-    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *, prompt_template: str = _TITLE_PROMPT,
+    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *,
+    prompt_template: str = _TITLE_PROMPT, timeout: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     model = f'openrouter:{model_id}'
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=20) as http_client:
+    console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
         resp = await http_client.post(
             _OPENROUTER_CHAT_URL,
             headers={'Authorization': f'Bearer {api_key}'},
@@ -271,11 +279,13 @@ async def _complete_openrouter(
 
 
 async def _complete_deepseek(
-    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *, prompt_template: str = _TITLE_PROMPT,
+    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *,
+    prompt_template: str = _TITLE_PROMPT, timeout: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     model = f'deepseek:{model_id}'
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=20) as http_client:
+    console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
         resp = await http_client.post(
             _DEEPSEEK_CHAT_URL,
             headers={'Authorization': f'Bearer {api_key}'},

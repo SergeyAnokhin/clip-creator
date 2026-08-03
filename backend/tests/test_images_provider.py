@@ -204,6 +204,36 @@ def test_generate_google_empty_predictions_raises(monkeypatch):
         asyncio.run(images._generate_google('imagen-4.0-generate-001', 'p', 'key'))
 
 
+def test_generate_openrouter_success(monkeypatch):
+    payload = {
+        'data': [{'b64_json': base64.b64encode(b'PNGDATA').decode(), 'media_type': 'image/png'}],
+        'usage': {'cost': 0.04},
+    }
+    fake_client = _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    usage_out = {}
+    content, ext = asyncio.run(images._generate_openrouter('google/gemini-2.5-flash-image', 'a prompt', 'test-key', usage_out=usage_out))
+
+    assert content == b'PNGDATA'
+    assert ext == 'png'
+    assert usage_out['cost'] == 0.04
+    call = fake_client.calls[0]
+    assert call['url'] == 'https://openrouter.ai/api/v1/images'
+    assert call['headers']['Authorization'] == 'Bearer test-key'
+    assert call['json'] == {'model': 'google/gemini-2.5-flash-image', 'prompt': 'a prompt', 'n': 1}
+
+
+def test_generate_openrouter_missing_key_raises():
+    with pytest.raises(RuntimeError, match='OpenRouter'):
+        asyncio.run(images._generate_openrouter('google/gemini-2.5-flash-image', 'p', ''))
+
+
+def test_generate_openrouter_empty_data_raises(monkeypatch):
+    _install(monkeypatch, [_FakeResponse(200, {'data': []})])
+    with pytest.raises(RuntimeError, match='OpenRouter'):
+        asyncio.run(images._generate_openrouter('google/gemini-2.5-flash-image', 'p', 'key'))
+
+
 def test_start_jobs_unknown_provider_fails_job():
     async def scenario():
         job_ids = images.start_jobs('does-not-matter-slug', 0, 'prompt', 1, 'unknownprovider:x', {'api_keys': {}})
@@ -296,6 +326,33 @@ def test_start_jobs_records_replicate_compute_seconds(monkeypatch, usage_ledger)
     asyncio.run(scenario())
     rec = usage_ledger.query()['records'][0]
     assert rec['units']['compute_seconds'] == pytest.approx(1.87)
+
+
+def test_start_jobs_records_openrouter_provider_reported_cost(monkeypatch, usage_ledger):
+    payload = {
+        'data': [{'b64_json': base64.b64encode(b'PNGDATA').decode(), 'media_type': 'image/png'}],
+        'usage': {'cost': 0.04},
+    }
+    _install(monkeypatch, [_FakeResponse(200, payload)])
+
+    async def scenario():
+        ctx = usage_ledger.context('scene_image', 'poem-a', {}, scene_index=0, count=1)
+        job_ids = images.start_jobs(
+            'poem-a', 0, 'p', 1, 'openrouter:google/gemini-2.5-flash-image', {'api_keys': {'openrouter': 'k'}},
+            usage_ctx=ctx,
+        )
+        for _ in range(200):
+            job = images.get_job(job_ids[0])
+            if job['status'] != 'pending':
+                return job
+            await asyncio.sleep(0)
+        raise AssertionError('job did not resolve')
+
+    asyncio.run(scenario())
+    rec = usage_ledger.query()['records'][0]
+    assert rec['cost']['source'] == 'provider'
+    assert rec['cost']['amount'] == pytest.approx(0.04)
+    assert 'cost' not in rec['units']
 
 
 def test_start_jobs_records_error_status_on_failure(usage_ledger):

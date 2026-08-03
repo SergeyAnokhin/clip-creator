@@ -32,7 +32,9 @@ app_data/
 | `style`, `lyrics` | str | Suno output; `style` non-empty ⇒ `suno_done` in the list view |
 | `model_used` | str | Text model used for the last generation |
 | `track_url` | str | User-pasted Suno track link |
-| `style_description` | str | Free-text visual style for the storyboard |
+| `style_description` | str | Free-text visual style, sent to `scenes.generate` (edited on the Scenes stage) |
+| `scene_mode` | str | `narrative`\|`abstract` — which `scene_base_prompt_*` the last `scenes/generate` call used; defaults to `narrative` |
+| `active_scene_wish_ids` | str[] | Ids of `settings.scene_wish_library` entries toggled on for this project — same idea as `active_wish_ids`, separate library (scene/imagery wishes vs. music/lyrics ones) |
 | `reference_images` | str[] | Paths relative to `app_data/`, e.g. `projects/<slug>/references/ref_ab12cd34.png` |
 | `scenes` | Scene[] | `[]` until the storyboard is generated |
 | `source_url` | str | Original URL, if the project came from one |
@@ -65,15 +67,17 @@ call site are in [usage-tracking.md](usage-tracking.md); summary:
 
 `{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
 
-`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image`.
+`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image|translate`.
 `cost.amount` is `null` (never `0`) when the price or usage units needed to
 compute it are unknown; `cost.source` is `provider|catalog|unknown`.
 
 ## Settings (`settings.json`)
 
-`{lang, api_keys{replicate,google,fal,openrouter,deepseek,krea}, text_models{favorites[],default},
-simple_models{favorites[],default}, image_models{favorites[],default}, special_tags[],
-suno_base_prompt, suno_reference_examples[], suno_wish_library[], pricing_overrides{}}`. Reads and
+`{lang, api_keys{replicate,google,fal,openrouter,deepseek,krea,google_translate}, text_models{favorites[],default},
+simple_models{favorites[],default}, image_models{favorites[],default}, image_models_simple{favorites[],default},
+special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[],
+scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
+request_timeout_seconds, hide_motion_prompt}`. Reads and
 writes merge over `DEFAULT_SETTINGS` in
 [`routers/settings.py`](../backend/app/routers/settings.py) (seed text for
 `suno_base_prompt`/`suno_reference_examples` comes from
@@ -82,27 +86,29 @@ so adding a key there is enough — existing files keep loading. `PUT` is a
 partial merge server-side, so the frontend can persist e.g. just
 `{suno_wish_library}` without resending the whole settings object.
 
-- `text_models` / `simple_models` / `image_models` — same shape: `favorites`
-  is `{provider, id, label}[]`; `default` is a composite `"{provider}:{id}"`
-  string (e.g. `"google:gemini-2.5-flash"`). `text_models`/`simple_models`
-  only accept `provider` `google|openrouter|deepseek|replicate|fal`;
-  `image_models` additionally accepts `krea` (Krea AI is image/video-only, so
-  it's excluded from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
+- `text_models` / `simple_models` / `image_models` / `image_models_simple` —
+  same shape: `favorites` is `{provider, id, label}[]`; `default` is a
+  composite `"{provider}:{id}"` string (e.g. `"google:gemini-2.5-flash"`).
+  `text_models`/`simple_models` only accept `provider`
+  `google|openrouter|deepseek|replicate|fal`; `image_models`/`image_models_simple`
+  additionally accept `krea` (Krea AI is image/video-only, so it's excluded
+  from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
   `_MODEL_PROVIDERS` in `routers/settings.py`). `text_models.default` is
-  what `suno.generate` parses to decide whether to call the real Gemini API
-  (see below); `simple_models.default` is used for lightweight tasks — in one
-  call, tidying up the user's free-text "AI-wish" and generating its
-  emoji-prefixed title when it's saved to `suno_wish_library`
+  what `suno.generate`/`scenes.generate` parse to decide whether to call a
+  real chat API (see below); `simple_models.default` is used for lightweight
+  tasks — in one call, tidying up the user's free-text "AI-wish" and
+  generating its emoji-prefixed title when it's saved to `suno_wish_library`
   ([`providers/text_models.py`](../backend/app/providers/text_models.py)
   `clean_wish_and_title`, wrapped by
   [`providers/wish_library.py`](../backend/app/providers/wish_library.py)
   `add_or_get_wish`) — there is deliberately **no** per-call model picker for
   this on the Suno stage, only the one global default in Settings;
-  `image_models.default`/`.favorites` populate the
-  image-model picker in Settings ([`providers/image_models.py`](../backend/app/providers/image_models.py))
-  and the per-generation `ModelPicker` in `ScenesStage.jsx`, whose composite
-  is what `providers/images.py` actually dispatches to a real provider call
-  (see `architecture.md`).
+  `image_models`/`image_models_simple` are a quality/cheap tier pair — both
+  populate their own favorites panel in Settings
+  ([`providers/image_models.py`](../backend/app/providers/image_models.py))
+  and the per-generation `ModelPicker` in `ImagesStage.jsx` (a tier toggle
+  picks which list feeds it), whose composite is what `providers/images.py`
+  actually dispatches to a real provider call (see `architecture.md`).
 - `suno_base_prompt` — the general "how to adapt for this music service"
   instructions, sent on every real (non-stub) `suno/generate` call.
   `GET /api/settings/suno-prompt-presets` (not part of `settings.json` — a
@@ -127,6 +133,31 @@ partial merge server-side, so the frontend can persist e.g. just
   project independently toggles a subset of these cards on via its own
   `active_wish_ids` (see above) — the same card can be active for one song
   and inactive for another.
+- `scene_base_prompt_narrative` / `scene_base_prompt_abstract` — the general
+  "how to turn this text into a scene image prompt" instructions, one per
+  `scene_mode`, sent on every real (non-stub) `scenes/generate` call (see
+  "The scene prompt" in `architecture.md`). Seeded from
+  [`providers/scenes_prompt_defaults.py`](../backend/app/providers/scenes_prompt_defaults.py).
+  No presets-to-load endpoint like Suno's — each is directly edited in
+  Settings or in the compact panel on the Scenes stage itself.
+- `scene_wish_library` — global, reusable scene/imagery wish "cards", same
+  `{id, title, text, created_at}` shape and `clean_wish_and_title` flow as
+  `suno_wish_library`, but a **separate** list (`wish_library.add_or_get_wish`'s
+  `library_key` parameter picks which one) — scene wishes ("больше драмы",
+  "зимняя атмосфера") are a different domain from music/lyrics wishes. Each
+  project toggles a subset on via its own `active_scene_wish_ids` (see above).
+- `request_timeout_seconds` — how long (seconds) a single outbound call to a
+  text-model provider may run before being treated as a timeout; read by
+  `suno.py`'s `_generate_via_*`, `scenes.py`'s `_generate_via_*` and
+  `text_models.py`'s `_complete_*`. Defaults to `60` when unset. Edited from
+  Settings → General.
+- `hide_motion_prompt` — UI-only preference shared by the Scenes and Images
+  stages: hides every `motion_prompt` field/label (and its translate button)
+  when set, leaving only the static image prompt. Doesn't touch any scene's
+  actual `motion_prompt` value — purely what's rendered. Toggled from a chip
+  on either stage (`ScenesStage.jsx`/`ImagesStage.jsx`), autosaves immediately
+  via `useSettings.js`'s `setHideMotionPrompt` (same one-boolean-flip pattern
+  as everything else that isn't a debounced text field).
 - `pricing_overrides` — user-supplied AI price corrections, keyed by
   `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
   wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
@@ -158,7 +189,7 @@ so the "Prices" tab lists every known model even before it has a price).
 
 ## API
 
-Base `http://localhost:8000`. All request/response bodies are JSON except the
+Base `http://localhost:8020`. All request/response bodies are JSON except the
 reference-image upload (multipart).
 
 | Route | Body → Response |
@@ -174,13 +205,16 @@ reference-image upload (multipart).
 | `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
 | `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit of an existing wish's title and/or text (either field, or both); no LLM call, so no usage tracking; `404` if `id` is unknown, `422` if a given field is blank |
+| `POST /api/settings/scene-wish-library` / `PATCH .../{id}` | Same shape and behaviour as `/settings/wish-library`, against `scene_wish_library` instead — a separate library for scene/imagery wishes |
 | `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model, active_wish_ids?}` → `{style, lyrics, skill_id, model_used, debug}`. `model` is the `"{provider}:{model_id}"` composite — the Suno stage seeds it from `settings.text_models.default` but lets the user override it per-call via the `ModelPicker` next to "Сгенерировать промпт"/"Generate prompt"; `active_wish_ids` (falls back to the project's own field if omitted) is resolved against `settings.suno_wish_library` and sent as an emphasized, numbered "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" block right after the base prompt; `provider ∈ google\|openrouter\|deepseek` + a matching key calls that provider's real chat API; a failed call returns `502` instead of falling back. `debug` is either `{stub: false, request, response, missing_markers}` (real call — `missing_markers` true if the reply didn't follow the `===STYLE===`/`===LYRICS===` format) or `{stub: true, reason: no_model_selected\|unsupported_provider\|no_api_key, requested_model}` — shown in the Suno stage's debug panel, which auto-expands whenever either flag needs attention |
 | `POST /api/projects/{id}/suno/wishes` | `{text}` → `{wish, suno_wish_library, active_wish_ids}`. Cleans+titles `text` via `wish_library.add_or_get_wish` (reuses an existing card with the same text instead of duplicating it), then immediately activates that wish's id for this project — the "Применить" button on the Suno stage's "Доработка через AI-пожелание" section. Replaces the old `suno/refine`, which instead folded the wish into `skill_prompt` and only kept a read-only history |
-| `POST /api/projects/{id}/scenes/generate` | `{style_description, model?}` → `{scenes, style_description}` — **replaces all scenes**, clearing their images. `model` (from `settings.text_models`) is accepted and forwarded to the provider seam but not yet used - `scenes.py` is still a non-AI stub (see `architecture.md`) |
-| `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background generation job per requested variant (`model` = `"{provider}:{model_id}"` from `settings.image_models`, provider ∈ `krea\|replicate\|fal\|google`) and returns immediately; poll each job below. A finished job appends its image to `scenes[n].images` on its own, independent of polling |
-| `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useScenesStage.js`); job state is in-memory only (see `architecture.md`) |
+| `POST /api/projects/{id}/scenes/generate` | `{style_description, scene_count?, model?, scene_mode?, active_scene_wish_ids?}` → `{scenes, style_description, scene_mode, debug}` — **replaces all scenes**, clearing their images. `scene_mode ∈ narrative\|abstract` picks `scene_base_prompt_narrative`/`_abstract`; `active_scene_wish_ids` (falls back to the project's own field) resolves against `scene_wish_library` the same way Suno's wishes do; `provider ∈ google\|openrouter\|deepseek` + a matching key calls that provider's real chat API asking for a JSON scene array; a failed call returns `502`. `debug` shape mirrors `suno/generate`'s exactly (`{stub, request, response, missing_markers, usage}` or `{stub: true, reason, requested_model}`) |
+| `POST /api/projects/{id}/scenes/wishes` | `{text}` → `{wish, scene_wish_library, active_scene_wish_ids}`. Scene-imagery equivalent of `suno/wishes` — cleans+titles then activates for this project |
+| `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background generation job per requested variant (`model` = `"{provider}:{model_id}"` from `settings.image_models`/`image_models_simple`, provider ∈ `krea\|replicate\|fal\|google\|openrouter`) and returns immediately; poll each job below. A finished job appends its image to `scenes[n].images` on its own, independent of polling. Also called from the Scenes stage itself (`useScenesStage.js`'s `generateSceneImage`, always `count: 1` against the cheap-tier `sceneImageModel`) for a quick single-image preview without leaving that stage — same endpoint, same `scenes[n].images` array, just a different caller |
+| `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useImagesStage.js`); job state is in-memory only (see `architecture.md`) |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
+| `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |
 | `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |
 | `GET /api/usage/summary` | Same filters + `group_by ∈ project\|task\|model\|provider\|day`, `tz_offset` → `{group_by, currency, groups[], totals}` |

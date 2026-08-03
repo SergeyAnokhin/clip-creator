@@ -7,6 +7,7 @@ import { useProjects } from './hooks/useProjects.js';
 import { useLyricsStage } from './hooks/useLyricsStage.js';
 import { useSunoStage } from './hooks/useSunoStage.js';
 import { useScenesStage } from './hooks/useScenesStage.js';
+import { useImagesStage } from './hooks/useImagesStage.js';
 import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
@@ -44,7 +45,13 @@ function App() {
   });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
-    imageModels: settings.imageModels, textModels: settings.textModels,
+    textModels: settings.textModels, imageModelsSimple: settings.imageModelsSimple,
+    onAiCall: usage.actions.refreshToday,
+    onSceneWishLibraryChange: settings.actions.setSceneWishLibrary,
+  });
+  const images = useImagesStage({
+    activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+    imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
   });
   // Depends on suno's refinement box, so it must be created after it.
@@ -58,6 +65,7 @@ function App() {
     view.resetSidebar();
     suno.resetForProject(project);
     scenes.resetForProject(project);
+    images.resetForProject(project);
     setScreen('workflow');
   }
 
@@ -109,10 +117,34 @@ function App() {
     sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
     recordingSeconds: voice.recordingSeconds,
     voiceSupported: voice.isSupported,
-    imageModelFavorites: settings.imageModels.favorites,
     textModelFavorites: settings.textModels.favorites,
     modelPrices: usage.priceMap,
-    actions: { ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx) },
+    sceneWishLibrary: settings.sceneWishLibrary,
+    sceneBasePromptNarrative: settings.sceneBasePromptNarrative,
+    sceneBasePromptAbstract: settings.sceneBasePromptAbstract,
+    sceneImageModelFavorites: settings.imageModelsSimple.favorites,
+    hideMotionPrompt: settings.hideMotionPrompt,
+    actions: {
+      ...scenes.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx),
+      updateSceneBasePromptNarrative: settings.actions.updateSceneBasePromptNarrative,
+      updateSceneBasePromptAbstract: settings.actions.updateSceneBasePromptAbstract,
+      setHideMotionPrompt: settings.actions.setHideMotionPrompt,
+    },
+  };
+
+  const imagesState = {
+    ...images.state,
+    sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
+    recordingSeconds: voice.recordingSeconds,
+    voiceSupported: voice.isSupported,
+    imageModelFavorites: settings.imageModels.favorites,
+    imageModelSimpleFavorites: settings.imageModelsSimple.favorites,
+    modelPrices: usage.priceMap,
+    hideMotionPrompt: settings.hideMotionPrompt,
+    actions: {
+      ...images.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx),
+      setHideMotionPrompt: settings.actions.setHideMotionPrompt,
+    },
   };
 
   return (
@@ -140,7 +172,7 @@ function App() {
         <WorkflowScreen
           L={L} langLabel={settings.langLabel} viewport={view.viewport}
           project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
-          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} updateProject={updateProject}
+          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} imagesState={imagesState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
@@ -152,10 +184,13 @@ function App() {
         <SettingsScreen
           L={L} lang={settings.lang} showToast={showToast} apiKeys={settings.apiKeys}
           textModels={settings.textModels} simpleModels={settings.simpleModels}
-          imageModels={settings.imageModels}
+          imageModels={settings.imageModels} imageModelsSimple={settings.imageModelsSimple}
           specialTags={settings.specialTags}
           sunoBasePrompt={settings.sunoBasePrompt} sunoPromptPresets={settings.sunoPromptPresets}
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
+          requestTimeoutSeconds={settings.requestTimeoutSeconds}
+          sceneBasePromptNarrative={settings.sceneBasePromptNarrative} sceneBasePromptAbstract={settings.sceneBasePromptAbstract}
+          sceneWishLibrary={settings.sceneWishLibrary}
           pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           onClose={closeSettings} onOpenUsage={openUsage}

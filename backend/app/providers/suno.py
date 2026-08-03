@@ -3,7 +3,7 @@ import time
 
 import httpx
 
-from .. import pricing, usage
+from .. import console_log, pricing, usage
 
 # Real seam: `model` is a composite "{provider}:{model_id}" string (see
 # settings.text_models). When the provider is one of google/openrouter/deepseek
@@ -24,11 +24,15 @@ _DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
 _SUPPORTED_PROVIDERS = ('google', 'openrouter', 'deepseek')
 _STYLE_MARKER = '===STYLE==='
 _LYRICS_MARKER = '===LYRICS==='
-# How long we'll wait on a single provider call before giving up. Suno-style
-# generation prompts are long and some models (esp. reasoning models) take a
-# while, but an unbounded wait leaves the UI's "waiting" spinner stuck forever
-# on a hung connection - 2 minutes is generous without being indefinite.
-_TIMEOUT_SECONDS = 120
+# How long we'll wait on a single provider call before giving up. Falls back
+# to this when settings.request_timeout_seconds (Settings -> General, see
+# routers/settings.py's DEFAULT_SETTINGS) isn't set - an unbounded wait would
+# leave the UI's "waiting" spinner stuck forever on a hung connection.
+_DEFAULT_TIMEOUT_SECONDS = 60
+
+
+def _timeout_seconds(settings: dict) -> int:
+    return int(settings.get('request_timeout_seconds') or _DEFAULT_TIMEOUT_SECONDS)
 
 
 def _format_lyrics(blocks: list[dict]) -> str:
@@ -114,14 +118,16 @@ async def _generate_via_gemini(
     # `url` never carries the API key (that's passed via `params=` below), so
     # it's safe to hand back verbatim for the debug panel.
     debug_request = {'url': url, 'model': model_id, 'body': request_body}
+    timeout_seconds = _timeout_seconds(settings)
 
     started = time.monotonic()
+    console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http_client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
             resp = await http_client.post(url, params={'key': api_key}, json=request_body)
     except httpx.TimeoutException:
         duration_ms = int((time.monotonic() - started) * 1000)
-        error = f'Таймаут: модель {model} не ответила за {_TIMEOUT_SECONDS} секунд.'
+        error = f'Таймаут: модель {model} не ответила за {timeout_seconds} секунд.'
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
                       prompt=raw_lyrics, error=error)
         raise RuntimeError(error) from None
@@ -168,14 +174,16 @@ async def _generate_via_openrouter(
         'model': model_id, 'messages': [{'role': 'user', 'content': prompt}], 'usage': {'include': True},
     }
     debug_request = {'url': _OPENROUTER_URL, 'model': model_id, 'body': request_body}
+    timeout_seconds = _timeout_seconds(settings)
 
     started = time.monotonic()
+    console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http_client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
             resp = await http_client.post(_OPENROUTER_URL, headers={'Authorization': f'Bearer {api_key}'}, json=request_body)
     except httpx.TimeoutException:
         duration_ms = int((time.monotonic() - started) * 1000)
-        error = f'Таймаут: модель {model} не ответила за {_TIMEOUT_SECONDS} секунд.'
+        error = f'Таймаут: модель {model} не ответила за {timeout_seconds} секунд.'
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
                       prompt=raw_lyrics, error=error)
         raise RuntimeError(error) from None
@@ -223,14 +231,16 @@ async def _generate_via_deepseek(
     model = f'deepseek:{model_id}'
     request_body = {'model': model_id, 'messages': [{'role': 'user', 'content': prompt}]}
     debug_request = {'url': _DEEPSEEK_URL, 'model': model_id, 'body': request_body}
+    timeout_seconds = _timeout_seconds(settings)
 
     started = time.monotonic()
+    console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http_client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
             resp = await http_client.post(_DEEPSEEK_URL, headers={'Authorization': f'Bearer {api_key}'}, json=request_body)
     except httpx.TimeoutException:
         duration_ms = int((time.monotonic() - started) * 1000)
-        error = f'Таймаут: модель {model} не ответила за {_TIMEOUT_SECONDS} секунд.'
+        error = f'Таймаут: модель {model} не ответила за {timeout_seconds} секунд.'
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
                       prompt=raw_lyrics, error=error)
         raise RuntimeError(error) from None

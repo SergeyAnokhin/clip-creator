@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Star } from 'lucide-react';
+import { Check, Maximize2, Star } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 
 function variantLabel(image) {
@@ -7,7 +7,7 @@ function variantLabel(image) {
   return match ? `Вариант ${match[1]}` : image.image_id || '';
 }
 
-export default function ImageThumb({ projectId, image, onSelectMain, onRate }) {
+export default function ImageThumb({ projectId, image, onSelectMain, onRate, onExpand }) {
   const [broken, setBroken] = useState(false);
   const showImage = Boolean(image.file_path) && !broken;
 
@@ -23,6 +23,14 @@ export default function ImageThumb({ projectId, image, onSelectMain, onRate }) {
           />
         ) : (
           variantLabel(image)
+        )}
+        {showImage && (
+          <button
+            className="image-thumb-expand"
+            onClick={(e) => { e.stopPropagation(); onExpand(); }}
+          >
+            <Maximize2 size={11} />
+          </button>
         )}
         {image.is_selected && (
           <span className="image-thumb-check">

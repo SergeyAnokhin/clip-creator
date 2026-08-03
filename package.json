@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -k -n FRONTEND,BACKEND -c blue,green \"npm:dev:frontend\" \"npm:dev:backend\"",
     "dev:frontend": "npm run dev --prefix frontend",
-    "dev:backend": "uvicorn app.main:app --reload --port 8000 --app-dir backend",
+    "dev:backend": "uvicorn app.main:app --reload --port 8020 --app-dir backend",
     "test": "npm run test --prefix frontend -- --run && npm run test:backend",
     "test:backend": "pytest backend/tests"
   },

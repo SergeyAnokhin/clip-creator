@@ -3,10 +3,11 @@ import Sidebar from './Sidebar.jsx';
 import LyricsStage from './LyricsStage.jsx';
 import SunoStage from './SunoStage.jsx';
 import ScenesStage from './ScenesStage.jsx';
+import ImagesStage from './ImagesStage.jsx';
 
 export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
-  lyricsState, sunoState, scenesState, updateProject,
+  lyricsState, sunoState, scenesState, imagesState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
 }) {
@@ -45,6 +46,7 @@ export default function WorkflowScreen({
             {activeStage === 'lyrics' && <LyricsStage L={L} project={project} viewport={viewport} {...lyricsState} />}
             {activeStage === 'suno' && <SunoStage L={L} project={project} isMobile={isMobile} {...sunoState} />}
             {activeStage === 'scenes' && <ScenesStage L={L} project={project} isMobile={isMobile} {...scenesState} />}
+            {activeStage === 'images' && <ImagesStage L={L} project={project} isMobile={isMobile} {...imagesState} />}
           </div>
         </div>
       </div>

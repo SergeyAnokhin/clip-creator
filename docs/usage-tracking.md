@@ -1,10 +1,14 @@
 # AI usage & cost tracking
 
 Every paid AI call the backend makes (Suno text generation, wish-title
-completion, scene image generation) is recorded to a local ledger with
-tokens/images, a computed cost, and short previews of the prompt/response.
+completion, scene storyboard generation, scene image generation, prompt
+translation) is recorded to a local ledger with
+tokens/images/characters, a computed cost, and short previews of the prompt/response.
 The frontend reads that ledger for a "Расходы"/"Usage" screen, a
 today's-spend pill in every header, and price hints in the model pickers.
+The same calls also print a colored, emoji-tagged line to the backend's dev
+console (see "Console logging" below) - a lightweight way to see what's
+actually happening without opening the Usage screen.
 
 ```text
 provider call (suno.py / text_models.py / images.py)
@@ -39,12 +43,12 @@ bounds how much has to be read for a "today" or date-ranged query.
 | --- | --- | --- |
 | `id` | str | `u_` + 12 hex chars |
 | `ts` | str | UTC ISO-8601, `…Z` |
-| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` |
-| `project_id` | str \| null | The project slug (= "стих"); `null` for `wish_title` calls made from the Settings → Wishes tab (library-only, no project); set for `wish_title` calls made from a project's Suno stage ("Применить") |
+| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `translate` |
+| `project_id` | str \| null | The project slug (= "стих"); `null` for `wish_title` calls made from the Settings → Wishes tab (library-only, no project); set for `wish_title` calls made from a project's Suno stage ("Применить"). Always `null` for `translate` — the "translate" button isn't tied to any one project's stored state |
 | `provider`, `model_id`, `model` | str | `model` is the `"{provider}:{model_id}"` composite, denormalized for grouping |
 | `status` | str | `ok` \| `error` |
 | `duration_ms` | int | Wall-clock around the provider call |
-| `units` | dict | `{kind, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, total_tokens, images, compute_seconds}` — fields the provider didn't report are `null`/absent, not `0` |
+| `units` | dict | `{kind, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, total_tokens, images, compute_seconds, characters}` — fields the provider didn't report are `null`/absent, not `0`; `characters` is `translate`-only (input length) |
 | `cost` | dict | `{amount, currency, source, pricing_version}` — see below |
 | `prompt_preview`, `response_preview` | str | First 300 chars (see "Preview convention") |
 | `prompt_chars`, `response_chars` | int | True length of what was actually sent/received |
@@ -55,7 +59,8 @@ bounds how much has to be read for a "today" or date-ranged query.
 or the units needed to compute it are missing; `cost.source` is one of:
 
 - `provider` — the API itself reported an exact cost (currently only
-  OpenRouter, via `usage: {include: true}` on the request). Never
+  OpenRouter, for both text via `usage: {include: true}` on the request and
+  image generation via its Unified Image API's `usage.cost`). Never
   recomputed.
 - `catalog` — computed from `pricing.BUILTIN_PRICING`/overrides. **Recomputed
   on every read** against the *current* catalog (see `usage._resolved_cost`),
@@ -202,6 +207,8 @@ ones someone has already priced.
 | Replicate (`images.py`) | `data.metrics.predict_time` | Seconds, not cost — stored in `units.compute_seconds`, priced from the catalog's `per_image` |
 | FAL (`images.py`) | `payload.timings.inference` | Same treatment as Replicate |
 | Krea, Google Imagen (`images.py`) | none | `units: {images: 1}` only, catalog-priced |
+| OpenRouter images (`images.py`) | `data.usage.cost` | Exact USD, `source: 'provider'` — same treatment as OpenRouter text |
+| Google Translate (`providers/translate.py`) | none | `units: {characters: len(text)}` only — `pricing.py` has no per-character row shape, so cost always reads `unknown` unless a manual override is entered for `google_translate:v2` |
 
 `text_models.list_models` / `image_models.list_models` (the Settings
 "refresh models" catalog calls) are **not logged** — they're free/no-cost
@@ -209,10 +216,12 @@ catalog lookups, and the Settings refresh button fires several at once.
 
 **Suno generate: timeout + a usage summary in the response, not just the
 ledger.** `suno.py`'s three `_generate_via_*` functions cap the provider HTTP
-call at `_TIMEOUT_SECONDS` (120s, i.e. 2 minutes) via `httpx.AsyncClient`. A
-timeout is caught explicitly (not left to bubble up as a generic
+call at `settings.request_timeout_seconds` (Settings → General; defaults to
+60s when unset, see `suno._DEFAULT_TIMEOUT_SECONDS`) via `httpx.AsyncClient`.
+`text_models.py`'s `_complete_*` functions (wish title/clean-up) use the same
+setting. A timeout is caught explicitly (not left to bubble up as a generic
 `httpx.TimeoutException`), recorded to the ledger as an error with a
-human-readable message (`"Таймаут: модель {model} не ответила за 120
+human-readable message (`"Таймаут: модель {model} не ответила за {N}
 секунд."`), and re-raised as a `RuntimeError` carrying that same message —
 `routers/generation.py` wraps it into an HTTP 502 whose `detail` the frontend
 surfaces verbatim (see below), instead of a generic "failed" toast.
@@ -286,11 +295,31 @@ Shared file-IO helpers (`downloadJSON`/`readJSONFile`) live in
 [`lib/download.js`](../frontend/src/lib/download.js), also used by the
 Settings "Backup" panel's API-keys/general-settings export/import.
 
+## Console logging: `backend/app/console_log.py`
+
+A dev-visibility aid, separate from the ledger (never raises, never affects
+request behaviour). Two lines per real provider call, printed to whichever
+console is running `uvicorn` (in `npm run dev`, that's the green-labeled
+`BACKEND` pane):
+
+- `console_log.log_request_start(model, kind, task)` — printed right before
+  the outbound HTTP call, at the same spot each provider function already
+  starts its `time.monotonic()` timer (`suno.py`'s three `_generate_via_*`,
+  `text_models.py`'s three `_complete_*`, `images.py`'s `_run_job`). Cyan,
+  e.g. `🚀 [suno_generate] → google:gemini-2.5-flash (text)`.
+- `console_log.log_result(rec)` — called once from `usage._write()`, so it
+  fires for every call that reaches the ledger and never disagrees with it.
+  Green on success (`✅ [suno_generate] google:gemini-2.5-flash · 🔤
+  812→340 · ⏱ 1.8s · 💰 $0.0041`, cost bolded/yellow so it stands out) or red
+  on error (`❌ [scene_image] replicate:… · Timeout: … · ⏱ 60.0s`).
+
+Stub/no-network fallbacks (`suno.generate`'s and `scenes.generate`'s
+no-model/no-key branch) call neither function - nothing is printed for a
+request that never actually went out, matching the ledger's own "don't bill
+what didn't happen" rule.
+
 ## Known gaps / not implemented
 
-- `providers/scenes.py` is still a non-AI stub; it accepts `usage_ctx` (so
-  the router wiring is already in place) but records nothing yet, matching
-  the "no network call, nothing to bill" rule.
 - OpenRouter's `/models` `pricing` field is not yet auto-imported into the
   catalog — it's fetched by `text_models._list_openrouter` for the model list
   but the price isn't picked up from there. Doing so would save having to

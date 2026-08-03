@@ -20,6 +20,14 @@ docs in this session:
 - Google Imagen: POST .../v1beta/models/{model_id}:predict (same host as
   suno.py's Gemini call) -> {predictions: [{bytesBase64Encoded, mimeType}]},
   no job/polling - it's a single synchronous call (ai.google.dev, 2026-07).
+- OpenRouter: POST https://openrouter.ai/api/v1/images (OpenRouter's Unified
+  Image API, launched 2026-06) -> {data: [{b64_json, media_type}], usage:
+  {..., cost}}, no job/polling - a single synchronous call like Google Imagen,
+  confirmed against openrouter.ai/docs/guides/overview/multimodal/image-generation
+  (2026-08). `usage.cost` is OpenRouter's own exact USD price for the call
+  (all-or-nothing billing - a failed generation is never charged), so it's
+  threaded through as `usage_out['cost']` and wins over the price catalog the
+  same way `text_models.py`'s `_complete_openrouter` already does for text.
 
 Every provider call happens inside a background asyncio task tracked in
 `_jobs` (in-memory - lost on server restart, acceptable for this single-user
@@ -37,12 +45,13 @@ from uuid import uuid4
 
 import httpx
 
-from .. import storage, usage
+from .. import console_log, storage, usage
 
 _KREA_BASE = 'https://api.krea.ai'
 _REPLICATE_BASE = 'https://api.replicate.com/v1'
 _FAL_BASE = 'https://queue.fal.run'
 _GOOGLE_PREDICT_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:predict'
+_OPENROUTER_IMAGES_URL = 'https://openrouter.ai/api/v1/images'
 
 _POLL_INTERVAL = 2.0
 _JOB_TIMEOUT = 300.0
@@ -201,11 +210,38 @@ async def _generate_google(model_id: str, prompt: str, api_key: str, usage_out: 
     return base64.b64decode(b64), ext
 
 
+async def _generate_openrouter(model_id: str, prompt: str, api_key: str, usage_out: dict | None = None) -> tuple[bytes, str]:
+    if not api_key:
+        raise RuntimeError('Нет API-ключа OpenRouter')
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+
+    async with httpx.AsyncClient(timeout=90) as http_client:
+        resp = await http_client.post(
+            _OPENROUTER_IMAGES_URL, headers=headers, json={'model': model_id, 'prompt': prompt, 'n': 1},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:300]}')
+    data = resp.json()
+    items = data.get('data') or []
+    if not items:
+        raise RuntimeError('OpenRouter: результат не содержит изображений')
+    b64 = items[0].get('b64_json')
+    if not b64:
+        raise RuntimeError('OpenRouter: неожиданный формат ответа')
+    if usage_out is not None:
+        cost = (data.get('usage') or {}).get('cost')
+        if cost is not None:
+            usage_out['cost'] = cost
+    ext = _MIME_EXT.get(items[0].get('media_type', 'image/png'), 'png')
+    return base64.b64decode(b64), ext
+
+
 _GENERATORS = {
     'krea': _generate_krea,
     'replicate': _generate_replicate,
     'fal': _generate_fal,
     'google': _generate_google,
+    'openrouter': _generate_openrouter,
 }
 
 
@@ -218,6 +254,8 @@ async def _run_job(
     generator = _GENERATORS.get(provider)
     provider_usage: dict = {}
     try:
+        if generator is not None:
+            console_log.log_request_start(model, 'image', usage_ctx.get('task') if usage_ctx else None)
         if generator is None:
             raise RuntimeError(f'Неизвестный провайдер изображений: {provider or "(не выбран)"}')
         content, ext = await generator(model_id, prompt, api_key, usage_out=provider_usage)
@@ -246,9 +284,11 @@ async def _run_job(
             project['updated_at'] = _now()
             storage.save_project(slug, project)
 
+    provider_cost = provider_usage.pop('cost', None)
     usage.record(usage_ctx, model=model, kind='image', status='ok',
                  duration_ms=int((time.monotonic() - started) * 1000),
-                 units={'images': 1, **provider_usage}, prompt=prompt, response=image['file_path'])
+                 units={'images': 1, **provider_usage}, prompt=prompt, response=image['file_path'],
+                 provider_cost=provider_cost)
     _jobs[job_id] = {'status': 'completed', 'image': image, 'error': None}
 
 

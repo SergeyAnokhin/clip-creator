@@ -27,16 +27,23 @@ def normalize_wish_library(wishes: list) -> list:
 
 async def add_or_get_wish(
     text: str, settings: dict, usage_ctx: dict | None = None, *, model: str = '',
+    library_key: str = 'suno_wish_library',
 ) -> dict:
     """Cleans+titles `text` via clean_wish_and_title and appends it to
-    settings.suno_wish_library (persisting settings), or reuses an existing
-    wish with the exact same text. Returns {'wish': {...}, 'wish_library': [...]}.
+    settings[library_key] (persisting settings), or reuses an existing wish
+    with the exact same text. Returns {'wish': {...}, 'wish_library': [...]}.
+
+    `library_key` picks which library this wish belongs to - `suno_wish_library`
+    (music/lyrics wishes) or `scene_wish_library` (scene/imagery wishes,
+    see routers/settings.py's scene-wish-library endpoints) - kept as two
+    separate lists since they're about different domains and are toggled
+    per-project independently (`active_wish_ids` vs `active_scene_wish_ids`).
 
     `model`, if given, only overrides which model titles *this* wish - it
     must not get persisted as the new settings.simple_models.default, so
     it's applied to a throwaway settings copy."""
     text = text.strip()
-    wish_library = normalize_wish_library(settings.get('suno_wish_library', []))
+    wish_library = normalize_wish_library(settings.get(library_key, []))
     existing = next((w for w in wish_library if w['text'] == text), None)
     if existing:
         return {'wish': existing, 'wish_library': wish_library}
@@ -50,6 +57,6 @@ async def add_or_get_wish(
         'created_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
     }
     wish_library = [*wish_library, wish]
-    settings['suno_wish_library'] = wish_library
+    settings[library_key] = wish_library
     storage.save_settings(settings)
     return {'wish': wish, 'wish_library': wish_library}

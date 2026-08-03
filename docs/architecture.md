@@ -2,17 +2,18 @@
 
 Versecraft is a two-process local app: a React (Vite) frontend talks over HTTP
 to a FastAPI backend, which persists everything as JSON files on disk. There is
-no database and no auth — it's single-user. Scene-text generation (the
-storyboard split into scenes) is still **stubbed**; the music-prompt
-generation (`suno.generate`) and scene *image* generation both make **real**
-provider calls (see below). "Suno" in identifiers, routes, and settings keys
-is a legacy name kept for backward compatibility — the feature itself targets
-any lyrics-to-music service (Suno, Mureka, ...); the UI calls it "Музыка/Music".
+no database and no auth — it's single-user. The music-prompt generation
+(`suno.generate`), scene-text/storyboard generation (`scenes.generate`) and
+scene *image* generation (`images.py`) all make **real** provider calls when a
+model + API key are configured, falling back to a deterministic stub
+otherwise (see below). "Suno" in identifiers, routes, and settings keys is a
+legacy name kept for backward compatibility — the feature itself targets any
+lyrics-to-music service (Suno, Mureka, ...); the UI calls it "Музыка/Music".
 
 ```text
 ┌───────────────┐   fetch /api/*   ┌─────────────────┐   read/write JSON   ┌───────────────┐
 │ frontend/src  │ ───────────────► │ backend/app     │ ──────────────────► │ app_data/     │
-│ (Vite, :5174) │ ◄─────────────── │ (FastAPI, :8000)│ ◄────────────────── │ (git-ignored) │
+│ (Vite, :5174) │ ◄─────────────── │ (FastAPI, :8020)│ ◄────────────────── │ (git-ignored) │
 └───────────────┘      JSON        └─────────────────┘                     └───────────────┘
 ```
 
@@ -32,12 +33,12 @@ value) so it doesn't need editing when the frontend's port changes.
 
 ## The workflow
 
-A project moves through three stages, all inside one workflow screen:
+A project moves through four stages, all inside one workflow screen:
 
 ```text
-Lyrics  →  Music  →  Scenes
-blocks     style +   storyboard +
-           lyrics    images per scene
+Lyrics  →  Music  →  Scenes        →  Images
+blocks     style +   storyboard        images per scene,
+           lyrics    (text only)       rated, top pick = main
 ```
 
 1. **Lyrics** — a poem (pasted text or a parsed URL) is split into blocks on
@@ -50,14 +51,40 @@ blocks     style +   storyboard +
    reusable "AI-wish" cards (or dictate a new one), then generate a `style` +
    `lyrics` pair to paste into whichever music service (Suno, Mureka, ...)
    the user is targeting.
-3. **Scenes** — turn the lyrics into a storyboard (default 5 scenes), generate
-   image variants per scene, and rate them; the top-rated variant becomes the
-   scene's main frame.
+3. **Scenes** (`stage: 'scenes'`) — turn the lyrics into `scene_count` scenes
+   (default 10), each `{lyric_segment, static_prompt, motion_prompt}`, in one
+   of two `scene_mode`s (`narrative`: scenes follow the lyrics in order and
+   read as one continuous story; `abstract`: scenes vary one mood/atmosphere
+   with no forced plot) — see "The scene prompt" below. Purely text; no image
+   is generated here.
+4. **Images** (`stage: 'images'`) — for each scene from the Scenes stage,
+   generate one or more image variants (with a cheap/quality model-tier
+   toggle) and rate them; the top-rated variant becomes the scene's main
+   frame. Also owns the style-reference image upload. The Scenes stage
+   (previous step) also has a lightweight version of this: one global cheap
+   model + a "generate"/"regenerate" button per scene for a quick single-image
+   preview next to the prompts, sharing the same `scenes[n].images` array and
+   backend endpoint - the full multi-variant/rating workflow still only lives
+   here.
+
+Both stages also share a `hideMotionPrompt` toggle (a `settings.json`
+preference, not per-project) that hides every `motion_prompt` field when a
+project only needs the static image prompt right now, and a "translate"
+button next to every static/motion prompt that shows a one-off Russian
+translation in a modal (`POST /api/translate`, never written back into the
+project) - see "Prompt translation" below.
+
+Splitting Scenes and Images into two stages (rather than one combined
+"raskadrovka" screen, which is what this used to be) mirrors the fact that
+they're now two independent AI calls with independent model choices — text
+generation for the scene list, image generation per scene — and lets you
+regenerate one without touching the other (e.g. reroll a scene's images
+without re-running the LLM call that wrote its prompt).
 
 ## Frontend state
 
 State lives in [`src/hooks/`](../frontend/src/hooks/), one hook per domain
-(toast, viewport, settings, projects, the three stages, voice).
+(toast, viewport, settings, projects, the four stages, voice).
 [`App.jsx`](../frontend/src/App.jsx) is just the composition root: it owns
 navigation, calls the hooks in dependency order, and assembles each stage's
 `{...state, actions}` prop bundle. No state library and no context — every
@@ -159,31 +186,47 @@ without knowing whether the result is canned or real. Keys come from
     so it's a valid `provider` for `/settings/image-models/{provider}` but
     not for `/settings/models/{provider}` (text models) — see
     `_IMAGE_MODEL_PROVIDERS` in `routers/settings.py`.
-  - `settings.image_models.favorites` back a real per-generation `ModelPicker`
-    in `ScenesStage.jsx` (seeded from `.default`, overridable per screen -
-    see `code-map.md`'s `ModelPicker.jsx` row), and the chosen composite is
-    what actually reaches `images.start_jobs` as `model` today.
-- `scenes.generate` chunks the non-`interlude` lines into `scene_count` even,
-  ordered pieces and derives canned prompts from each chunk's first line. It
-  also accepts a `model` composite (from `settings.text_models`, via another
-  `ModelPicker` next to "Generate storyboard" in `ScenesStage.jsx`) - but
-  unlike the image one, it does nothing with it yet, since there's no real
-  LLM call here to route it to. It's threaded through router → provider
-  anyway (same seam pattern as `images.py`) so the frontend already has a
-  working picker once a real scene-text LLM call is wired in.
+  - `settings.image_models`/`.image_models_simple` favorites back a real
+    per-generation `ModelPicker` in `ImagesStage.jsx` (a cheap/quality tier
+    toggle picks which of the two favorites lists feeds the picker - see
+    `useImagesStage.js`'s `imageModelTier`), and the chosen composite is what
+    actually reaches `images.start_jobs` as `model`.
+- `scenes.generate` mirrors `suno.generate`'s shape closely on purpose (same
+  provider dispatch, timeout/usage/console-log wiring, debug+usage summary in
+  the response) — see "The scene prompt" below for the full prompt layering:
+  - `model` is the composite `"{provider}:{model_id}"` from `settings.text_models`
+    (`ModelPicker` next to "Сгенерировать сцены" in `ScenesStage.jsx`). If
+    `provider` is one of `google`/`openrouter`/`deepseek` **and** the matching
+    `settings.api_keys.<provider>` is set, it calls that provider's chat API
+    with a prompt built from `settings.scene_base_prompt_{scene_mode}` + the
+    project's active scene wishes + `style_description` + a reference-image
+    count note + the raw lyric lines, asking for a ```` ```json ```` array of
+    exactly `scene_count` `{lyric_segment, static_prompt, motion_prompt}`
+    objects (`scenes._parse_model_response`).
+  - Parsing is tolerant, same philosophy as `suno.py`'s missing-marker
+    handling: a response with the wrong item count or that isn't valid JSON
+    at all falls back to the deterministic stub scenes (chunked lyric lines,
+    canned prompts) rather than failing the request, with `debug.missing_markers
+    = true` so the UI can flag it.
+  - Otherwise (no model, unsupported provider, or missing key) it falls back
+    to the same deterministic stub, `debug.reason` set the same way
+    `suno.generate` sets it.
 - `images.start_jobs`/`get_job` is the **real seam** for scene images —
-  Krea, Replicate, FAL and Google Imagen, dispatched from the `provider` half
-  of the `model` composite. It's structured as background jobs rather than a
-  single blocking call because Krea/Replicate/FAL are all async-job APIs
-  (submit → poll until done), unlike `suno.py`'s single request/response
-  Gemini call:
+  Krea, Replicate, FAL, Google Imagen and OpenRouter, dispatched from the
+  `provider` half of the `model` composite. It's structured as background
+  jobs rather than a single blocking call because Krea/Replicate/FAL are all
+  async-job APIs (submit → poll until done), unlike `suno.py`'s single
+  request/response Gemini call - Google Imagen and OpenRouter are both single
+  synchronous calls too, but still run through the same background-job
+  wrapper so the frontend has one uniform poll contract regardless of
+  provider:
   - `POST /api/projects/{id}/scenes/{n}/images` (`{count, model}`) calls
     `images.start_jobs`, which fires one `asyncio.create_task` per requested
     variant and returns their `job_id`s **immediately** (`{job_ids: [...]}`)
     instead of blocking the request for the whole generation.
   - `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` (backed by
     `images.get_job`) is polled by the frontend (`pollImageJob` in
-    `useScenesStage.js`, every 1.5s) until `status` is `completed` or
+    `useImagesStage.js`, every 1.5s) until `status` is `completed` or
     `failed`. Job state lives in an **in-memory dict** (`images._jobs`) — not
     persisted, so an in-flight job is lost if the backend restarts; acceptable
     for this single-user local tool.
@@ -200,9 +243,14 @@ without knowing whether the result is canned or real. Keys come from
     `GET response_url` for `images[].url`. **Google Imagen**
     `POST .../v1beta/models/{model_id}:predict` (same host as `suno.py`'s
     Gemini call) → `{predictions: [{bytesBase64Encoded, mimeType}]}` — no
-    job/polling, it's a single synchronous call, but it still runs through
-    the same background-job wrapper as the other three so the frontend has
-    one uniform poll contract regardless of provider.
+    job/polling, it's a single synchronous call. **OpenRouter**
+    `POST https://openrouter.ai/api/v1/images` (its Unified Image API,
+    launched 2026-06) → `{data: [{b64_json, media_type}], usage: {..., cost}}`
+    — also a single synchronous call; `usage.cost` is OpenRouter's own exact
+    USD price for the generation (all-or-nothing billing, matching
+    `text_models.py`'s `_complete_openrouter` for text) and is threaded
+    through as the usage ledger's `provider_cost`, winning over the price
+    catalog the same way.
   - A job's background task, on success, downloads/decodes the image bytes,
     writes them to `images/scene_{n}_{shorthex}.{png|jpg|webp}` (extension
     from the URL or the response's content-type/mimeType), and **persists
@@ -230,7 +278,7 @@ Not implemented at all: image-to-image conditioning from `reference_images`.
 ## AI usage & cost tracking
 
 Every provider call above (Suno generation, wish-title completion, scene
-image generation) is recorded to an append-only ledger at
+image generation, prompt translation) is recorded to an append-only ledger at
 `app_data/usage/YYYY-MM.jsonl`, with token/image counts and a computed cost
 (from a price catalog, or the provider's own reported cost when it has one).
 A "Расходы"/Usage screen and a spend-today pill in every header read it back
@@ -259,6 +307,7 @@ last (it writes into the Suno refinement box, so it depends on `suno`).
   ([`BlockCard.jsx`](../frontend/src/components/workflow/BlockCard.jsx),
   [`SunoStage.jsx`](../frontend/src/components/workflow/SunoStage.jsx)'s
   refinement box,
+  [`SceneTextCard.jsx`](../frontend/src/components/workflow/SceneTextCard.jsx)/
   [`SceneCard.jsx`](../frontend/src/components/workflow/SceneCard.jsx)'s
   static-prompt edit) only render when it's `true`. No error message, no
   fallback UI — the button simply isn't there in unsupported browsers.
@@ -403,6 +452,68 @@ against, and that "Generate for Suno" actually uses, is a `ModelPicker` over
 `text_models.default`, same pattern the wish-model picker used before it was
 replaced by the always-global `simple_models.default` (see above).
 
+## The scene prompt: base instructions per mode, active wishes, style, scene count
+
+Mirrors "The music prompt" above closely, adapted for the Scenes stage
+(`scenes._build_prompt`):
+
+1. `settings.scene_base_prompt_narrative` / `scene_base_prompt_abstract` — one
+   editable base prompt per `scene_mode`, picked by the toggle on the Scenes
+   stage. Both seeded from
+   [`providers/scenes_prompt_defaults.py`](../backend/app/providers/scenes_prompt_defaults.py),
+   adapted from a cover-art image-prompt instruction set the user already used
+   manually (weighted `((main objects))`/`(secondary objects)` English
+   phrasing, chorus-first focus, ~700-1000+ char density) - `narrative` adds a
+   constraint the source didn't have: scenes must follow the lyrics' own order
+   and carry a visible thread (character/setting/light) from first scene to
+   last, instead of just re-varying one mood (`abstract`, which keeps the
+   source's own "same mood, new composition" logic close to verbatim). Editable
+   in Settings → "Музыкальные промпты" (each with its own autosave, same
+   pattern as `updateSunoBasePrompt`) or in the compact panel on the Scenes
+   stage itself.
+2. The project's **active scene wishes** — `settings.scene_wish_library`
+   entries whose id is in `project.active_scene_wish_ids`, rendered the same
+   "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" block as the music prompt's wishes. A
+   **separate** library from `suno_wish_library` on purpose - scene/imagery
+   wishes ("больше драмы", "зимняя атмосфера") are a different domain from
+   music/lyrics wishes, and are toggled per-project independently. Both share
+   the same underlying `wish_library.add_or_get_wish`/`normalize_wish_library`
+   helpers, parameterized by which settings key to read/write
+   (`library_key='scene_wish_library'`).
+3. `style_description` and a reference-image count note - the same
+   `styleDescriptionLabel` field from the old combined stage, now living on
+   the Scenes (text) stage since it feeds the LLM call; the reference images
+   themselves are uploaded from the Images stage but still read from
+   `project.reference_images` regardless of which stage's UI manages them.
+4. The raw lyric lines (one per line, non-`interlude` blocks only - same
+   `_lyric_lines` helper the old stub used) and a strict, code-appended
+   instruction asking for exactly `scene_count` scenes as a ```` ```json ````
+   array - this part is never user-editable, so a creative base prompt can
+   never break parsing (mirrors `suno.py`'s appended `===STYLE===`/`===LYRICS===`
+   footer being separate from the editable `suno_base_prompt`).
+
+`scene_count` defaults to 10 (`scenes.DEFAULT_SCENE_COUNT`) and is a per-call
+number picker on the Scenes stage, not a setting.
+
+## Prompt translation
+
+Every static/motion prompt (Scenes and Images stage) has a small "translate"
+button (`TranslateButton.jsx`) next to its label. Clicking it opens a modal
+and calls `POST /api/translate` (`routers/translate.py` → `providers/
+translate.py`), which translates the prompt to Russian via the **Google
+Cloud Translation API v2 (Basic)** - a plain `key`-authenticated REST
+endpoint (same auth shape as the Gemini calls elsewhere in this app), picked
+over reusing the already-configured Gemini/OpenRouter/DeepSeek chat models
+because it's cheap-to-free at this app's volume (permanently free 500k
+characters/month, then a well-known $20/1M) and dedicated - no prompt
+engineering needed to get a clean translation back. It needs its own
+`settings.api_keys.google_translate` (Settings → Providers): a plain Gemini
+key usually isn't enabled for Cloud Translation, a separate GCP product/API.
+The translation is a one-off preview only - never written back into the
+project or fed into any generation prompt - so `POST /api/translate` is
+project-independent and the result lives in the button's own component
+state, not in any hook.
+
 ## Conventions and gotchas
 
 - **Two implementations of lyrics formatting must stay in sync.**
@@ -435,6 +546,17 @@ replaced by the always-global `simple_models.default` (see above).
   full assembled prompt (which is mostly boilerplate) — see
   [usage-tracking.md](usage-tracking.md). Don't treat the ledger as a full
   audit log of exact request/response bodies.
+- **Every real provider call is timeout-bounded and console-logged.**
+  `settings.request_timeout_seconds` (default 60, Settings → General) caps
+  every outbound call in `suno.py`/`text_models.py` (a timeout is caught
+  explicitly and surfaces as a clear "Таймаут: модель ... не ответила за N
+  секунд" error, not a generic exception). Separately,
+  [`console_log.py`](../backend/app/console_log.py) prints a colored,
+  emoji-tagged start/result line for every real call to the backend's dev
+  console (provider/model/kind on start; tokens/cost/duration on result,
+  mirroring the usage-ledger row exactly) - purely cosmetic, never affects
+  request behaviour or what gets billed. See
+  [usage-tracking.md](usage-tracking.md) for both.
 - **Most AI prices are not set by default.** `pricing.BUILTIN_PRICING`
   (`pricing.py`) only holds source-cited rows that were actually looked up
   (Google and OpenRouter are well covered since their full pricing/model
@@ -442,7 +564,11 @@ replaced by the always-global `simple_models.default` (see above).
   — anything else has a cost total of `null`/"unknown" until a price is
   entered in Settings → Prices (by hand, or via the Prices tab's
   Export/Import round trip through an external pricing lookup); see
-  [usage-tracking.md](usage-tracking.md).
+  [usage-tracking.md](usage-tracking.md). Translation calls are one instance
+  of this by design: `pricing.py`'s row shapes only cover per-token (`text`)
+  and per-image (`image`) billing, not Google Translate's per-character
+  pricing, so a translate record's cost always reads "unknown" unless a
+  manual override is entered for `google_translate:v2` in Settings → Prices.
 
 ## Testing
 

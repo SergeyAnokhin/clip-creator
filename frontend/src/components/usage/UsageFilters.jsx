@@ -1,5 +1,5 @@
-const TASKS = ['suno_generate', 'wish_title', 'scene_storyboard', 'scene_image'];
-const PROVIDERS = ['google', 'openrouter', 'deepseek', 'replicate', 'fal', 'krea'];
+const TASKS = ['suno_generate', 'wish_title', 'scene_storyboard', 'scene_image', 'translate'];
+const PROVIDERS = ['google', 'openrouter', 'deepseek', 'replicate', 'fal', 'krea', 'google_translate'];
 const STATUSES = ['ok', 'error'];
 
 export default function UsageFilters({ L, filters, onChange, onReset }) {

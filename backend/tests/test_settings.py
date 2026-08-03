@@ -25,11 +25,14 @@ def test_get_settings_returns_defaults(client):
     resp = client.get('/api/settings')
     assert resp.status_code == 200
     body = resp.json()
-    assert body['api_keys'] == {'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'deepseek': '', 'krea': ''}
+    assert body['api_keys'] == {
+        'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'deepseek': '', 'krea': '', 'google_translate': '',
+    }
     assert body['text_models'] == {'favorites': [], 'default': 'google:gemini-2.5-flash'}
     assert body['simple_models'] == {'favorites': [], 'default': ''}
     assert body['image_models'] == {'favorites': [], 'default': ''}
     assert body['suno_wish_library'] == []
+    assert body['hide_motion_prompt'] is False
 
 
 def test_get_settings_normalizes_legacy_string_wishes(client):

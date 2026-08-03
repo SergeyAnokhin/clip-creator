@@ -90,22 +90,60 @@ async def generate_scenes(project_id: str, body: dict = Body(default={})):
     style_description = body.get('style_description', project.get('style_description', ''))
     scene_count = body.get('scene_count', scenes.DEFAULT_SCENE_COUNT)
     model = body.get('model', '')
+    scene_mode = body.get('scene_mode', project.get('scene_mode', 'narrative'))
+    active_scene_wish_ids = body.get('active_scene_wish_ids', project.get('active_scene_wish_ids', []))
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
-    usage_ctx = usage.context('scene_storyboard', project_id, settings)
+    scene_wish_lookup = {w['id']: w['text'] for w in wish_library.normalize_wish_library(settings.get('scene_wish_library', []))}
+    active_wishes = [scene_wish_lookup[wid] for wid in active_scene_wish_ids if wid in scene_wish_lookup]
+    usage_ctx = usage.context('scene_storyboard', project_id, settings, scene_mode=scene_mode)
 
-    result = await scenes.generate(
-        project,
-        style_description=style_description,
-        reference_images=project.get('reference_images', []),
-        scene_count=scene_count,
-        model=model,
-        usage_ctx=usage_ctx,
-    )
-    project['scenes'] = result
+    try:
+        result = await scenes.generate(
+            project,
+            style_description=style_description,
+            reference_images=project.get('reference_images', []),
+            scene_count=scene_count,
+            model=model,
+            scene_mode=scene_mode,
+            settings=settings,
+            usage_ctx=usage_ctx,
+            active_wishes=active_wishes,
+        )
+    except Exception as exc:
+        raise HTTPException(502, f'Не удалось сгенерировать через {model or "провайдер"}: {exc}') from exc
+    project['scenes'] = result['scenes']
     project['style_description'] = style_description
+    project['scene_mode'] = scene_mode
+    project['active_scene_wish_ids'] = active_scene_wish_ids
     project['updated_at'] = _now()
     storage.save_project(project_id, project)
-    return {'scenes': result, 'style_description': style_description}
+    return {'scenes': result['scenes'], 'style_description': style_description, 'scene_mode': scene_mode, 'debug': result.get('debug')}
+
+
+@router.post('/{project_id}/scenes/wishes')
+async def add_scene_wish(project_id: str, body: dict = Body(...)):
+    """Scene-imagery equivalent of /suno/wishes - see wish_library.add_or_get_wish's
+    docstring for why this is a separate library from suno_wish_library."""
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+
+    text = (body.get('text') or '').strip()
+    if not text:
+        raise HTTPException(422, 'text is required')
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('wish_title', project_id, settings)
+    result = await wish_library.add_or_get_wish(text, settings, usage_ctx=usage_ctx, library_key='scene_wish_library')
+    wish = result['wish']
+
+    active_scene_wish_ids = project.get('active_scene_wish_ids', [])
+    if wish['id'] not in active_scene_wish_ids:
+        active_scene_wish_ids = [*active_scene_wish_ids, wish['id']]
+    project['active_scene_wish_ids'] = active_scene_wish_ids
+    project['updated_at'] = _now()
+    storage.save_project(project_id, project)
+    return {'wish': wish, 'scene_wish_library': result['wish_library'], 'active_scene_wish_ids': active_scene_wish_ids}
 
 
 @router.post('/{project_id}/scenes/{scene_index}/images')
