@@ -3,7 +3,7 @@ import { api } from '../api/client.js';
 import { pickMainByRating } from '../lib/scenes.js';
 import { pickTopReferenceImages } from '../lib/titleCard.js';
 
-const EMPTY_TITLE_CARD = { title_text: '', author_text: '', reference_image_paths: [], variants: [] };
+const EMPTY_TITLE_CARD = { reference_image_paths: [], variants: [] };
 const REFERENCE_SLOTS = 4;
 
 /** Title Card stage: picks up to 4 already-generated (or uploaded) scene
@@ -22,6 +22,7 @@ const REFERENCE_SLOTS = 4;
  * reload (text fields, chosen reference paths, variant ratings). */
 export function useTitleCardStage({
   activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, imageModelsSimple, onAiCall,
+  onTitleCardWishLibraryChange,
 }) {
   const [imageModelTier, setImageModelTier] = useState('simple');
   const [imageModelMain, setImageModelMain] = useState(imageModels.default || '');
@@ -30,6 +31,9 @@ export function useTitleCardStage({
   const [aspectRatio, setAspectRatio] = useState('16:9');
   const [generating, setGenerating] = useState(false);
   const [presetNameDraft, setPresetNameDraft] = useState('');
+  const [titleCardWishText, setTitleCardWishText] = useState('');
+  const [wishLoading, setWishLoading] = useState(false);
+  const [lastDebug, setLastDebug] = useState(null);
 
   function resetForProject(project) {
     setImageModelMain(imageModels.default || '');
@@ -37,12 +41,19 @@ export function useTitleCardStage({
     setImageModelTier('simple');
     setVariantCount(1);
     setAspectRatio('16:9');
+    setTitleCardWishText('');
+    setLastDebug(null);
     const titleCard = project?.title_card || EMPTY_TITLE_CARD;
     if (!titleCard.reference_image_paths?.length && project?.scenes?.length) {
       const picked = pickTopReferenceImages(project.scenes, REFERENCE_SLOTS);
       if (picked.length) {
         setActiveProject((p) => ({ ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), reference_image_paths: picked } }));
       }
+    }
+    if (titleCard.text_block === undefined) {
+      setActiveProject((p) => ({
+        ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), text_block: L.titleCard_defaultTextBlock },
+      }));
     }
   }
 
@@ -55,11 +66,8 @@ export function useTitleCardStage({
   const titleCard = activeProject?.title_card || EMPTY_TITLE_CARD;
   const referenceSlots = [...titleCard.reference_image_paths, ...Array(REFERENCE_SLOTS).fill(null)].slice(0, REFERENCE_SLOTS);
 
-  function setTitleText(value) {
-    updateProject((p) => ({ ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), title_text: value } }), { immediate: false });
-  }
-  function setAuthorText(value) {
-    updateProject((p) => ({ ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), author_text: value } }), { immediate: false });
+  function setTextBlock(value) {
+    updateProject((p) => ({ ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), text_block: value } }), { immediate: false });
   }
   function setReferenceSlot(slotIndex, path) {
     updateProject((p) => {
@@ -94,6 +102,30 @@ export function useTitleCardStage({
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   }
+  async function addTitleCardWish() {
+    if (!titleCardWishText.trim() || !activeProject) return;
+    setWishLoading(true);
+    try {
+      const result = await api.addTitleCardWish(activeProject.id, titleCardWishText);
+      setActiveProject((p) => ({ ...p, active_title_card_wish_ids: result.active_title_card_wish_ids }));
+      onTitleCardWishLibraryChange?.(result.title_card_wish_library);
+      setTitleCardWishText('');
+      showToast(L.toast_saved);
+    } catch {
+      showToast('Не удалось сохранить пожелание');
+    } finally {
+      setWishLoading(false);
+      onAiCall?.();
+    }
+  }
+  function toggleTitleCardWish(wishId) {
+    updateProject((p) => {
+      const active = p.active_title_card_wish_ids || [];
+      const next = active.includes(wishId) ? active.filter((id) => id !== wishId) : [...active, wishId];
+      return { ...p, active_title_card_wish_ids: next };
+    });
+  }
+
   async function generate(basePrompt) {
     if (!activeProject) return;
     const referencePaths = titleCard.reference_image_paths;
@@ -105,8 +137,9 @@ export function useTitleCardStage({
     try {
       await flushPendingSave();
       const { job_ids: jobIds } = await api.generateTitleCard(activeProject.id, {
-        title_text: titleCard.title_text, author_text: titleCard.author_text, base_prompt: basePrompt,
+        text_block: titleCard.text_block, base_prompt: basePrompt,
         reference_image_paths: referencePaths, model: imageModel, aspect_ratio: aspectRatio, count: variantCount,
+        active_title_card_wish_ids: activeProject.active_title_card_wish_ids,
       });
       const jobs = await Promise.all(jobIds.map((jobId) => pollJob(activeProject.id, jobId)));
       const newVariants = jobs.filter((j) => j.status === 'completed').map((j) => j.variant);
@@ -116,6 +149,8 @@ export function useTitleCardStage({
           title_card: { ...(p.title_card || EMPTY_TITLE_CARD), variants: [...(p.title_card?.variants || []), ...newVariants] },
         }));
       }
+      const lastJobDebug = jobs[jobs.length - 1]?.debug;
+      setLastDebug(lastJobDebug ? { ...lastJobDebug, completedAt: new Date().toISOString() } : null);
       const failedJob = jobs.find((j) => j.status === 'failed');
       if (failedJob) {
         showToast(failedJob.error || 'Не удалось сгенерировать часть вариантов');
@@ -162,15 +197,16 @@ export function useTitleCardStage({
   return {
     state: {
       imageModel, imageModelTier, variantCount, aspectRatio, generating,
-      titleText: titleCard.title_text, authorText: titleCard.author_text,
+      textBlock: titleCard.text_block ?? '',
       referenceSlots, variants: titleCard.variants, presetNameDraft,
+      titleCardWishText, wishLoading, lastDebug,
     },
     resetForProject,
     actions: {
       setImageModelTier, selectImageModel, setVariantCount, setAspectRatio,
-      setTitleText, setAuthorText, setReferenceSlot, removeReferenceSlot, uploadReferenceForSlot,
+      setTextBlock, setReferenceSlot, removeReferenceSlot, uploadReferenceForSlot,
       onGenerate: generate, onRate: rateVariant, onSelectMain: selectMainVariant, onDelete: deleteVariant,
-      setPresetNameDraft,
+      setPresetNameDraft, setTitleCardWishText, addTitleCardWish, toggleTitleCardWish,
     },
   };
 }

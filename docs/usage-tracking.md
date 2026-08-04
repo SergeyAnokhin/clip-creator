@@ -155,7 +155,14 @@ Resolution order in `pricing.get_price(model, overrides)`:
 3. Provider-wide wildcard override — `settings.pricing_overrides["provider:*"]`
    (an escape hatch for pricing a whole provider at once; built-ins never use
    wildcards).
-4. `None` — cost is unknown, not zero.
+4. Provider alias — steps 1-3 again under the model's aliased provider, per
+   `pricing._PROVIDER_PRICE_ALIAS` (currently just `google_free -> google`:
+   same Gemini models/prices, a separate provider id only so a free-tier API
+   key is billed/tracked apart from the paid one). `google_free:<model_id>`
+   rows aren't listed separately in the Prices tab's catalog view (`catalog()`
+   only iterates `BUILTIN_PRICING`/`overrides` keys) — the alias only affects
+   cost *lookups*, not what the catalog table lists.
+5. `None` — cost is unknown, not zero.
 
 A partially-filled override row (e.g. `input` without `output`) is treated as
 **invalid**, not partial — it falls through to the next step rather than

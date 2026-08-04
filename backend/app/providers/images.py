@@ -381,6 +381,11 @@ _GENERATORS = {
     'replicate': _generate_replicate,
     'fal': _generate_fal,
     'google': _generate_google,
+    # Same Gemini/Imagen call as 'google' - a separate provider id only so
+    # its own API key (a free-tier Gemini token) is billed/tracked apart
+    # from the paid 'google' key. See pricing.py's provider alias for cost
+    # lookups.
+    'google_free': _generate_google,
     'openrouter': _generate_openrouter,
 }
 

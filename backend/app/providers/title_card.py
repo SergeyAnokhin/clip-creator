@@ -8,8 +8,8 @@ its own module rather than folded into `images.py` for both reasons: the
 provider call shape is different (multi-image input) and the persistence
 target is different (no `scene_index`).
 
-Only two providers currently confirmed (2026-08) to accept multiple
-reference images the way this feature needs:
+Four providers confirmed (2026-08) to accept multiple reference images the
+way this feature needs:
 - **Google Gemini `generateContent`** ("Nano Banana" family, `gemini-*-image`
   ids - see `image_models.py`'s `is_gemini_image_model`): reference images go
   in as `inline_data` parts ahead of the text part in `contents[0].parts`;
@@ -23,13 +23,27 @@ reference images the way this feature needs:
   `style_images: [{url, strength}]` where `url` may be a base64 data URI (no
   need to host references publicly), same job+poll shape as `images.py`'s
   other Krea calls (confirmed against krea.ai/docs/api-reference, 2026-08).
+- **FAL's `fal-ai/nano-banana/edit`** (a fal-hosted proxy of the same Gemini
+  image model, supports up to ~14 references per fal's own docs): `POST
+  https://queue.fal.run/fal-ai/nano-banana/edit` with `{prompt, image_urls}`,
+  where each entry in `image_urls` may be a `data:image/...;base64,...` URI
+  (fal.ai model API reference, 2026-08) - same queue/poll shape as `images.py`'s
+  `_generate_fal`. Only this specific fal model id supports references; the
+  rest of the FAL catalog (`fal-ai/flux/dev` etc.) is text-to-image only.
+- **OpenRouter's Unified Image API**: `POST https://openrouter.ai/api/v1/images`
+  with `input_references: [{type: 'image_url', image_url: {url}}]`, where
+  `url` may be a base64 data URL (confirmed against
+  openrouter.ai/docs/guides/overview/multimodal/image-generation, 2026-08) -
+  same single-call shape as `images.py`'s `_generate_openrouter`, just with
+  the extra field. Whether a given OpenRouter-routed model actually honors
+  references depends on the underlying model; unsupported ones should just
+  ignore the field or error, same as any other OpenRouter parameter mismatch.
 
-OpenRouter's Unified Image API also documents reference-image support
-(`input_references`), but its exact request-body field shape couldn't be
-confirmed from public docs in this session, so it's deliberately not wired
-here - `_GENERATORS` is a dict precisely so a third provider is a one-line
-addition once that's confirmed. Replicate/FAL have no reference-capable
-models in the current curated catalog (`image_models.CURATED_IMAGE_MODELS`).
+Replicate has no *multi*-reference model in the current curated catalog -
+`black-forest-labs/flux-kontext-pro` supports exactly one `input_image`
+(confirmed against replicate.com/blog/flux-kontext, 2026-08), which doesn't
+fit this stage's "up to 4 references" shape, so it's deliberately left
+unwired here rather than silently dropping 3 of 4 references.
 
 Job/persistence pattern mirrors `images.py`'s `_jobs`/`start_jobs`/`_run_job`/
 `get_job` exactly, but as its own in-memory dict - a title-card job id and a
@@ -39,6 +53,7 @@ scene-image job id are unrelated and must never collide.
 import asyncio
 import base64
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -49,6 +64,9 @@ from .. import console_log, pricing, storage, usage
 _GOOGLE_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
 _KREA_BASE = 'https://api.krea.ai'
 _KREA_NANO_BANANA_PRO_ID = 'google/nano-banana-pro'
+_FAL_BASE = 'https://queue.fal.run'
+_FAL_NANO_BANANA_EDIT_ID = 'fal-ai/nano-banana/edit'
+_OPENROUTER_IMAGES_URL = 'https://openrouter.ai/api/v1/images'
 
 _POLL_INTERVAL = 2.0
 _JOB_TIMEOUT = 300.0
@@ -77,6 +95,22 @@ async def _download(url: str) -> tuple[bytes, str]:
     return resp.content, ext
 
 
+def _redact_inline_data(data: dict) -> dict:
+    """Deep-copies `data` (a Gemini generateContent response) with every
+    `inlineData.data` base64 payload replaced by a short placeholder - used
+    for the debug panel, which shows the raw request/response JSON but must
+    not dump megabytes of base64 image bytes into the UI."""
+    redacted = deepcopy(data)
+    candidates = redacted.get('candidates') or []
+    for candidate in candidates:
+        parts = (candidate.get('content') or {}).get('parts') or []
+        for part in parts:
+            inline = part.get('inlineData')
+            if inline and inline.get('data'):
+                inline['data'] = f'<image data omitted, {len(inline["data"])} base64 chars>'
+    return redacted
+
+
 async def _generate_google(
     model_id: str, prompt: str, reference_images: list[tuple[bytes, str]], api_key: str,
     usage_out: dict | None = None, aspect_ratio: str | None = None,
@@ -93,15 +127,25 @@ async def _generate_google(
     if aspect_ratio:
         generation_config['imageConfig'] = {'aspectRatio': aspect_ratio}
 
+    url = _GOOGLE_GENERATE_URL.format(model=model_id)
+    debug_request = {
+        'url': url, 'model': model_id, 'prompt': prompt,
+        'reference_images': [f'<{ext} image, {len(content)} bytes>' for content, ext in reference_images],
+        'generationConfig': generation_config,
+    }
+
     async with httpx.AsyncClient(timeout=90) as http_client:
         resp = await http_client.post(
-            _GOOGLE_GENERATE_URL.format(model=model_id),
-            params={'key': api_key},
+            url, params={'key': api_key},
             json={'contents': [{'parts': parts}], 'generationConfig': generation_config},
         )
     if resp.status_code != 200:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'Google Gemini API вернул {resp.status_code}: {resp.text[:300]}')
     data = resp.json()
+    if usage_out is not None:
+        usage_out['debug'] = {'request': debug_request, 'response': _redact_inline_data(data)}
     candidates = data.get('candidates') or []
     response_parts = (candidates[0].get('content') or {}).get('parts') if candidates else None
     inline = next((p.get('inlineData') for p in (response_parts or []) if p.get('inlineData')), None)
@@ -126,10 +170,17 @@ async def _generate_krea(
     body: dict = {'prompt': prompt, 'style_images': style_images}
     if aspect_ratio:
         body['aspect_ratio'] = aspect_ratio
+    debug_request = {
+        'url': f'{_KREA_BASE}/generate/image/{model_id}', 'model': model_id, 'prompt': prompt,
+        'style_images': [f'<{ext} image, {len(content)} bytes>' for content, ext in reference_images],
+        'aspect_ratio': aspect_ratio,
+    }
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         resp = await http_client.post(f'{_KREA_BASE}/generate/image/{model_id}', headers=headers, json=body)
     if resp.status_code not in (200, 201, 202):
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'Krea API вернул {resp.status_code}: {resp.text[:300]}')
     job_id = resp.json()['job_id']
 
@@ -139,42 +190,167 @@ async def _generate_krea(
         async with httpx.AsyncClient(timeout=30) as http_client:
             poll = await http_client.get(f'{_KREA_BASE}/jobs/{job_id}', headers=headers)
         if poll.status_code != 200:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
             raise RuntimeError(f'Krea API (poll) вернул {poll.status_code}: {poll.text[:300]}')
         data = poll.json()
         status = data.get('status')
         if status == 'completed':
             urls = (data.get('result') or {}).get('urls') or []
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': data}
             if not urls:
                 raise RuntimeError('Krea: задание завершено, но URL изображения не найден')
             return await _download(urls[0])
         if status in ('failed', 'cancelled'):
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': data}
             raise RuntimeError(f'Krea: задание завершилось со статусом {status}')
         if time.monotonic() > deadline:
             raise RuntimeError('Krea: превышено время ожидания генерации')
 
 
+async def _generate_fal(
+    model_id: str, prompt: str, reference_images: list[tuple[bytes, str]], api_key: str,
+    usage_out: dict | None = None, aspect_ratio: str | None = None,
+) -> tuple[bytes, str]:
+    if not api_key:
+        raise RuntimeError('Нет API-ключа FAL')
+    if model_id != _FAL_NANO_BANANA_EDIT_ID:
+        raise RuntimeError(f'FAL: модель {model_id} не поддерживает референсные изображения')
+    headers = {'Authorization': f'Key {api_key}', 'Content-Type': 'application/json'}
+    image_urls = [
+        f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(content).decode()}'
+        for content, ext in reference_images
+    ]
+    body: dict = {'prompt': prompt, 'image_urls': image_urls}
+    debug_request = {
+        'url': f'{_FAL_BASE}/{model_id}', 'model': model_id, 'prompt': prompt,
+        'image_urls': [f'<{ext} image, {len(content)} bytes>' for content, ext in reference_images],
+    }
+
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        resp = await http_client.post(f'{_FAL_BASE}/{model_id}', headers=headers, json=body)
+    if resp.status_code >= 400:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
+        raise RuntimeError(f'FAL API вернул {resp.status_code}: {resp.text[:300]}')
+    submitted = resp.json()
+    status_url = submitted['status_url']
+    response_url = submitted['response_url']
+
+    deadline = time.monotonic() + _JOB_TIMEOUT
+    status = submitted.get('status')
+    while status != 'COMPLETED':
+        if status == 'FAILED':
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': 'FAILED'}}
+            raise RuntimeError('FAL: задание завершилось с ошибкой')
+        if time.monotonic() > deadline:
+            raise RuntimeError('FAL: превышено время ожидания генерации')
+        await asyncio.sleep(_POLL_INTERVAL)
+        async with httpx.AsyncClient(timeout=30) as http_client:
+            poll = await http_client.get(status_url, headers=headers)
+        if poll.status_code >= 400:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
+            raise RuntimeError(f'FAL API (poll) вернул {poll.status_code}: {poll.text[:300]}')
+        status = poll.json().get('status')
+
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        result = await http_client.get(response_url, headers=headers)
+    if result.status_code >= 400:
+        raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
+    payload = result.json()
+    images = payload.get('images') or []
+    if usage_out is not None:
+        redacted_response = {**payload, 'images': [{'url': img.get('url')} for img in images]}
+        usage_out['debug'] = {'request': debug_request, 'response': redacted_response}
+    if not images:
+        raise RuntimeError('FAL: результат не содержит изображений')
+    if (payload.get('has_nsfw_concepts') or [False])[0]:
+        raise RuntimeError(
+            'FAL: изображение заблокировано модерацией (обнаружен NSFW-контент). Измените промпт и попробуйте снова.'
+        )
+    return await _download(images[0]['url'])
+
+
+async def _generate_openrouter(
+    model_id: str, prompt: str, reference_images: list[tuple[bytes, str]], api_key: str,
+    usage_out: dict | None = None, aspect_ratio: str | None = None,
+) -> tuple[bytes, str]:
+    if not api_key:
+        raise RuntimeError('Нет API-ключа OpenRouter')
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    input_references = [
+        {
+            'type': 'image_url',
+            'image_url': {'url': f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(content).decode()}'},
+        }
+        for content, ext in reference_images
+    ]
+    body: dict = {'model': model_id, 'prompt': prompt, 'n': 1, 'input_references': input_references}
+    if aspect_ratio:
+        body['aspect_ratio'] = aspect_ratio
+    debug_request = {
+        'url': _OPENROUTER_IMAGES_URL, 'model': model_id, 'prompt': prompt,
+        'input_references': [f'<{ext} image, {len(content)} bytes>' for content, ext in reference_images],
+        'aspect_ratio': aspect_ratio,
+    }
+
+    async with httpx.AsyncClient(timeout=90) as http_client:
+        resp = await http_client.post(_OPENROUTER_IMAGES_URL, headers=headers, json=body)
+    if resp.status_code != 200:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
+        raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:300]}')
+    data = resp.json()
+    items = data.get('data') or []
+    if usage_out is not None:
+        redacted_response = {**data, 'data': [{'media_type': it.get('media_type')} for it in items]}
+        usage_out['debug'] = {'request': debug_request, 'response': redacted_response}
+    if not items:
+        raise RuntimeError('OpenRouter: результат не содержит изображений')
+    b64 = items[0].get('b64_json')
+    if not b64:
+        raise RuntimeError('OpenRouter: неожиданный формат ответа')
+    if usage_out is not None:
+        cost = (data.get('usage') or {}).get('cost')
+        if cost is not None:
+            usage_out['cost'] = cost
+    ext = _MIME_EXT.get(items[0].get('media_type', 'image/png'), 'png')
+    return base64.b64decode(b64), ext
+
+
 _GENERATORS = {
     'google': _generate_google,
+    # Same Gemini call as 'google', billed against a separate (free-tier) API key.
+    'google_free': _generate_google,
     'krea': _generate_krea,
+    'fal': _generate_fal,
+    'openrouter': _generate_openrouter,
 }
 
 _jobs: dict[str, dict] = {}
 
 
-def _build_prompt(base_prompt: str, title_text: str, author_text: str) -> str:
-    lines = [f'"{title_text}"'] if title_text else []
-    if author_text:
-        lines.append(f'"{author_text}"')
-    return f'{base_prompt}\n' + '\n'.join(lines) if lines else base_prompt
+def _build_prompt(base_prompt: str, text_block: str, active_wishes: list[str] | None = None) -> str:
+    wishes_block = ''
+    if active_wishes:
+        items = '\n'.join(f'{i}. {w}' for i, w in enumerate(active_wishes, start=1))
+        wishes_block = 'ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ — обязательно учесть:\n' + items
+    instructions = '\n\n'.join(part for part in [base_prompt, wishes_block] if part.strip())
+    text_block = (text_block or '').strip()
+    return f'{instructions}\n{text_block}' if text_block else instructions
 
 
 async def _run_job(
     job_id: str, slug: str, reference_images: list[tuple[bytes, str]], reference_paths: list[str],
-    title_text: str, author_text: str, base_prompt: str, provider: str, model_id: str, api_key: str,
-    usage_ctx: dict | None = None, aspect_ratio: str | None = None,
+    text_block: str, base_prompt: str, provider: str, model_id: str, api_key: str,
+    usage_ctx: dict | None = None, aspect_ratio: str | None = None, active_wishes: list[str] | None = None,
 ) -> None:
     model = f'{provider}:{model_id}'
-    prompt = _build_prompt(base_prompt, title_text, author_text)
+    prompt = _build_prompt(base_prompt, text_block, active_wishes)
     started = time.monotonic()
     generator = _GENERATORS.get(provider)
     provider_usage: dict = {}
@@ -189,7 +365,7 @@ async def _run_job(
     except Exception as exc:
         usage.record(usage_ctx, model=model, kind='image', status='error',
                      duration_ms=int((time.monotonic() - started) * 1000), prompt=prompt, error=str(exc))
-        _jobs[job_id] = {'status': 'failed', 'variant': None, 'error': str(exc)}
+        _jobs[job_id] = {'status': 'failed', 'variant': None, 'error': str(exc), 'debug': provider_usage.get('debug')}
         return
 
     titlecard_dir = storage.project_dir(slug) / 'titlecard'
@@ -199,6 +375,7 @@ async def _run_job(
     (titlecard_dir / filename).write_bytes(content)
 
     provider_cost = provider_usage.pop('cost', None)
+    debug_info = provider_usage.pop('debug', None)
     units = {'images': 1, **provider_usage}
     if provider_cost is not None:
         cost = provider_cost
@@ -208,7 +385,7 @@ async def _run_job(
         'variant_id': variant_id, 'file_path': f'titlecard/{filename}',
         'rating': 0, 'is_selected': False, 'generated_at': _now(),
         'model': model, 'aspect_ratio': aspect_ratio, 'cost': cost,
-        'title_text': title_text, 'author_text': author_text, 'base_prompt': base_prompt,
+        'text_block': text_block, 'base_prompt': base_prompt,
         'reference_image_paths': reference_paths,
     }
 
@@ -225,12 +402,13 @@ async def _run_job(
                  duration_ms=int((time.monotonic() - started) * 1000),
                  units=units, prompt=prompt, response=variant['file_path'],
                  provider_cost=provider_cost)
-    _jobs[job_id] = {'status': 'completed', 'variant': variant, 'error': None}
+    _jobs[job_id] = {'status': 'completed', 'variant': variant, 'error': None, 'debug': debug_info}
 
 
 def start_jobs(
-    slug: str, reference_paths: list[str], title_text: str, author_text: str, base_prompt: str,
+    slug: str, reference_paths: list[str], text_block: str, base_prompt: str,
     count: int, model: str, settings: dict, usage_ctx: dict | None = None, aspect_ratio: str | None = None,
+    active_wishes: list[str] | None = None,
 ) -> list[str]:
     if count <= 0:
         return []
@@ -250,8 +428,8 @@ def start_jobs(
         _jobs[job_id] = {'status': 'pending', 'variant': None, 'error': None}
         asyncio.create_task(
             _run_job(
-                job_id, slug, reference_images, reference_paths, title_text, author_text, base_prompt,
-                provider, model_id, api_key, usage_ctx, aspect_ratio,
+                job_id, slug, reference_images, reference_paths, text_block, base_prompt,
+                provider, model_id, api_key, usage_ctx, aspect_ratio, active_wishes,
             ),
         )
         job_ids.append(job_id)

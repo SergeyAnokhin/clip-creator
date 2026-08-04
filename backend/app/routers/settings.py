@@ -9,18 +9,23 @@ from ..providers.scenes_prompt_defaults import (
 from ..providers.suno_prompt_defaults import (
     DEFAULT_REFERENCE_EXAMPLES, DEFAULT_SUNO_BASE_PROMPT, SUNO_BASE_PROMPT_PRESETS,
 )
-from ..providers.title_card_prompt_defaults import DEFAULT_TITLE_CARD_BASE_PROMPT
+from ..providers.title_card_prompt_defaults import (
+    DEFAULT_TITLE_CARD_BASE_PROMPT, TITLE_CARD_BASE_PROMPT_PRESETS,
+)
 
 router = APIRouter(prefix='/api/settings', tags=['settings'])
 
-_MODEL_PROVIDERS = {'google', 'openrouter', 'deepseek', 'replicate', 'fal'}
+_MODEL_PROVIDERS = {'google', 'google_free', 'openrouter', 'deepseek', 'replicate', 'fal'}
 # Krea (krea.ai) only does image/video generation, no text/LLM models, so it's
 # valid for the image-models endpoint but not the text one.
 _IMAGE_MODEL_PROVIDERS = _MODEL_PROVIDERS | {'krea'}
 
 DEFAULT_SETTINGS = {
     'lang': 'ru',
-    'api_keys': {'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'deepseek': '', 'krea': '', 'google_translate': ''},
+    'api_keys': {
+        'replicate': '', 'google': '', 'google_free': '', 'fal': '', 'openrouter': '', 'deepseek': '',
+        'krea': '', 'google_translate': '',
+    },
     'text_models': {'favorites': [], 'default': 'google:gemini-2.5-flash'},
     'simple_models': {'favorites': [], 'default': ''},
     'image_models': {'favorites': [], 'default': ''},
@@ -32,13 +37,14 @@ DEFAULT_SETTINGS = {
     'scene_base_prompt_narrative': DEFAULT_SCENE_BASE_PROMPT_NARRATIVE,
     'scene_base_prompt_abstract': DEFAULT_SCENE_BASE_PROMPT_ABSTRACT,
     'scene_wish_library': [],
+    'title_card_wish_library': [],
     # Title Card stage (poster-text generation) - see providers/title_card.py.
     # `title_card_base_prompt` is directly edited (same pattern as the scene
     # base prompts above); `_presets` is a user-managed list of named
     # variants {id, name, prompt} the stage can save/load, CRUD'd entirely
     # via this partial-merge PUT (no dedicated endpoints needed).
     'title_card_base_prompt': DEFAULT_TITLE_CARD_BASE_PROMPT,
-    'title_card_base_prompt_presets': [],
+    'title_card_base_prompt_presets': TITLE_CARD_BASE_PROMPT_PRESETS,
     'pricing_overrides': {},
     'request_timeout_seconds': 60,
     # UI-only preference (Scenes/Images stage): hides every motion_prompt
@@ -53,6 +59,7 @@ def get_settings():
     merged = {**DEFAULT_SETTINGS, **storage.load_settings()}
     merged['suno_wish_library'] = wish_library.normalize_wish_library(merged.get('suno_wish_library', []))
     merged['scene_wish_library'] = wish_library.normalize_wish_library(merged.get('scene_wish_library', []))
+    merged['title_card_wish_library'] = wish_library.normalize_wish_library(merged.get('title_card_wish_library', []))
     return merged
 
 

@@ -194,11 +194,19 @@ def _is_valid_row(row) -> bool:
     return True
 
 
+# 'google_free' is the same Gemini API as 'google', just billed against a
+# separate (free-tier) API key - it has no rows of its own in BUILTIN_PRICING
+# or overrides, so price lookups fall back to the 'google:' row for the same
+# model_id.
+_PROVIDER_PRICE_ALIAS = {'google_free': 'google'}
+
+
 def get_price(model: str, overrides: dict | None = None) -> dict | None:
     """Resolution order: user override -> built-in catalog -> provider-wide
     `"{provider}:*"` override (an escape hatch for pricing a whole provider at
-    once; built-ins never use wildcards). Returns None when nothing valid
-    matches."""
+    once; built-ins never use wildcards) -> the same lookups again under the
+    model's aliased provider (see `_PROVIDER_PRICE_ALIAS`). Returns None when
+    nothing valid matches."""
     model = (model or '').strip()
     if not model:
         return None
@@ -212,10 +220,14 @@ def get_price(model: str, overrides: dict | None = None) -> dict | None:
     if _is_valid_row(row):
         return dict(row)
 
-    provider, _, _ = model.partition(':')
+    provider, _, model_id = model.partition(':')
     row = overrides.get(f'{provider}:*')
     if _is_valid_row(row):
         return dict(row)
+
+    alias = _PROVIDER_PRICE_ALIAS.get(provider)
+    if alias:
+        return get_price(f'{alias}:{model_id}', overrides)
 
     return None
 

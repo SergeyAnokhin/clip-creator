@@ -21,7 +21,7 @@ _TYPE_LABELS = {
 _GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
 _OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 _DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
-_SUPPORTED_PROVIDERS = ('google', 'openrouter', 'deepseek')
+_SUPPORTED_PROVIDERS = ('google', 'google_free', 'openrouter', 'deepseek')
 _STYLE_MARKER = '===STYLE==='
 _LYRICS_MARKER = '===LYRICS==='
 # How long we'll wait on a single provider call before giving up. Falls back
@@ -109,11 +109,11 @@ def _usage_summary(model: str, units: dict, provider_cost: float | None,
 
 async def _generate_via_gemini(
     raw_lyrics: str, skill_prompt: str, settings: dict, api_key: str, model_id: str,
-    usage_ctx: dict | None = None, active_wishes: list[str] | None = None,
+    usage_ctx: dict | None = None, active_wishes: list[str] | None = None, provider: str = 'google',
 ) -> dict:
     prompt = _build_prompt(raw_lyrics, skill_prompt, settings, active_wishes)
     url = _GEMINI_URL.format(model=model_id)
-    model = f'google:{model_id}'
+    model = f'{provider}:{model_id}'
     request_body = {'contents': [{'parts': [{'text': prompt}]}]}
     # `url` never carries the API key (that's passed via `params=` below), so
     # it's safe to hand back verbatim for the debug panel.
@@ -291,8 +291,8 @@ async def generate(
     api_key = (settings.get('api_keys') or {}).get(provider, '')
 
     if model_id and api_key and provider in _SUPPORTED_PROVIDERS:
-        if provider == 'google':
-            return await _generate_via_gemini(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx, active_wishes)
+        if provider in ('google', 'google_free'):
+            return await _generate_via_gemini(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx, active_wishes, provider)
         if provider == 'openrouter':
             return await _generate_via_openrouter(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx, active_wishes)
         return await _generate_via_deepseek(raw_lyrics, skill_prompt, settings, api_key, model_id, usage_ctx, active_wishes)

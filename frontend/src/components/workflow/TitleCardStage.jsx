@@ -1,11 +1,57 @@
 import { useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, ImagePlus, Loader2, Minus, Plus, Upload, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ImagePlus, Loader2, Mic, MicOff, Minus, Plus, Sparkles, Upload, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import ModelPicker from './ModelPicker.jsx';
 import ImageCarousel from './ImageCarousel.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
 
 const ASPECT_RATIOS = ['1:1', '16:9', '9:16'];
+
+function DebugPanel({ L, lastDebug }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="glass-card" style={{ marginBottom: 16 }}>
+      <div
+        className="suno-panel-title"
+        style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          {L.titleCard_debugTitle}
+        </span>
+      </div>
+      {open && (
+        !lastDebug ? (
+          <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.titleCard_debugNoData}</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 6 }}>{L.scene_debugRequestLabel}</div>
+            <pre
+              style={{
+                margin: 0, marginBottom: 12, fontFamily: "'SF Mono',monospace", fontSize: 11.5,
+                color: 'rgba(255,255,255,0.75)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                lineHeight: 1.6, maxHeight: 320, overflowY: 'auto',
+              }}
+            >
+              {JSON.stringify(lastDebug.request, null, 2)}
+            </pre>
+            <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 6 }}>{L.scene_debugResponseLabel}</div>
+            <pre
+              style={{
+                margin: 0, fontFamily: "'SF Mono',monospace", fontSize: 11.5,
+                color: 'rgba(255,255,255,0.75)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                lineHeight: 1.6, maxHeight: 320, overflowY: 'auto',
+              }}
+            >
+              {JSON.stringify(lastDebug.response, null, 2)}
+            </pre>
+          </>
+        )
+      )}
+    </div>
+  );
+}
 
 function BasePromptPanel({ L, basePrompt, presets, presetNameDraft, actions }) {
   const [open, setOpen] = useState(false);
@@ -94,13 +140,16 @@ function ReferencePicker({ L, projectId, candidates, onPick, onUpload, onClose }
           {candidates.map((path) => (
             <button
               key={path}
-              style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', width: 56, height: 56, flexShrink: 0 }}
+              style={{
+                padding: 0, border: 'none', background: 'rgba(255,255,255,0.04)', cursor: 'pointer',
+                width: 84, height: 84, flexShrink: 0,
+              }}
               onClick={() => onPick(path)}
             >
               <img
                 src={mediaUrl(`projects/${projectId}/${path}`)}
                 alt=""
-                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 6 }}
+                style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 6 }}
               />
             </button>
           ))}
@@ -114,8 +163,10 @@ export default function TitleCardStage({
   L, project, isMobile,
   imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
   variantCount, aspectRatio, generating,
-  titleText, authorText, referenceSlots, variants, presetNameDraft,
+  textBlock, referenceSlots, variants, presetNameDraft,
   titleCardBasePrompt, titleCardBasePromptPresets,
+  titleCardWishText, wishLoading, titleCardWishLibrary, lastDebug,
+  isRecordingTitleCardWish, recordingSeconds, voiceSupported,
   actions,
 }) {
   const [pickerSlot, setPickerSlot] = useState(null);
@@ -123,6 +174,7 @@ export default function TitleCardStage({
   const [carouselIndex, setCarouselIndex] = useState(Math.max(0, variants.length - 1));
   const boundedIndex = Math.min(carouselIndex, Math.max(0, variants.length - 1));
   const tierFavorites = imageModelTier === 'simple' ? imageModelSimpleFavorites : imageModelFavorites;
+  const activeWishIds = project.active_title_card_wish_ids || [];
 
   const candidates = [...new Set([
     ...project.scenes.flatMap((s) => (s.images || []).map((img) => img.file_path)),
@@ -144,18 +196,67 @@ export default function TitleCardStage({
       />
 
       <div className="glass-card" style={{ marginBottom: 16 }}>
-        <div className="scene-prompt-label">{L.titleCard_titleLabel}</div>
-        <input
-          className="field" style={{ marginBottom: 10 }}
-          value={titleText} onChange={(e) => actions.setTitleText(e.target.value)}
-          placeholder={L.titleCard_titlePlaceholder}
+        <div className="scene-prompt-label">{L.titleCard_textLabel}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 10 }}>{L.titleCard_textHint}</div>
+        <textarea
+          className="field" rows={4} style={{ resize: 'vertical' }}
+          value={textBlock} onChange={(e) => actions.setTextBlock(e.target.value)}
         />
-        <div className="scene-prompt-label">{L.titleCard_authorLabel}</div>
-        <input
-          className="field"
-          value={authorText} onChange={(e) => actions.setAuthorText(e.target.value)}
-          placeholder={L.titleCard_authorPlaceholder}
-        />
+      </div>
+
+      <div className="glass-card" style={{ marginBottom: 16 }}>
+        <div className="suno-panel-title">
+          <Sparkles size={16} color="#ff9d5c" />
+          {L.titleCard_wishesTitle}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <input
+            className="field"
+            value={titleCardWishText}
+            onChange={(e) => actions.setTitleCardWishText(e.target.value)}
+            placeholder={isRecordingTitleCardWish ? L.listening : L.titleCard_wishPlaceholder}
+          />
+          {voiceSupported && (
+            <button
+              className={`icon-btn${isRecordingTitleCardWish ? ' icon-btn-recording' : ''}`}
+              style={{ width: 38, height: 38 }}
+              onClick={() => actions.startVoice('titleCardWish')}
+            >
+              {isRecordingTitleCardWish ? <MicOff size={15} /> : <Mic size={15} />}
+            </button>
+          )}
+          <button
+            className="btn btn-accent-soft" style={{ flexShrink: 0 }}
+            onClick={actions.addTitleCardWish}
+            disabled={wishLoading}
+          >
+            {wishLoading ? <Loader2 size={14} className="spin" /> : null}
+            {L.apply}
+          </button>
+        </div>
+        {wishLoading && (
+          <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 8 }}>⏳ {L.titleCard_wishLoading}</div>
+        )}
+        {isRecordingTitleCardWish && (
+          <div className="recording-banner" style={{ marginTop: 10 }}>
+            <span className="recording-dot" />
+            {L.recording} · {recordingSeconds}s
+          </div>
+        )}
+        {!!titleCardWishLibrary?.length && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            {titleCardWishLibrary.map((wish) => (
+              <button
+                key={wish.id}
+                className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
+                title={wish.text}
+                onClick={() => actions.toggleTitleCardWish(wish.id)}
+              >
+                {wish.title}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="glass-card" style={{ marginBottom: 16 }}>
@@ -163,10 +264,10 @@ export default function TitleCardStage({
         <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 10 }}>{L.titleCard_referencesHint}</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {referenceSlots.map((path, i) => (
-            <div key={i} style={{ width: 84 }}>
+            <div key={i} style={{ width: 126 }}>
               <div
                 style={{
-                  position: 'relative', width: 84, height: 84, borderRadius: 8, overflow: 'hidden',
+                  position: 'relative', width: 126, height: 126, borderRadius: 8, overflow: 'hidden',
                   background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
                 }}
               >
@@ -174,7 +275,7 @@ export default function TitleCardStage({
                   <>
                     <img
                       src={mediaUrl(`projects/${project.id}/${path}`)} alt=""
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
                     <button
                       className="icon-btn" style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20 }}
@@ -186,7 +287,7 @@ export default function TitleCardStage({
                   </>
                 ) : (
                   <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)' }}>
-                    <Plus size={18} />
+                    <Plus size={26} />
                   </div>
                 )}
               </div>
@@ -277,6 +378,8 @@ export default function TitleCardStage({
         initialIndex={lightboxIndex || 0}
         onClose={() => setLightboxIndex(null)}
       />
+
+      <DebugPanel L={L} lastDebug={lastDebug} />
     </>
   );
 }

@@ -25,7 +25,7 @@ from .. import console_log, pricing, usage
 _GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
 _OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 _DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
-_SUPPORTED_PROVIDERS = ('google', 'openrouter', 'deepseek')
+_SUPPORTED_PROVIDERS = ('google', 'google_free', 'openrouter', 'deepseek')
 
 DEFAULT_SCENE_COUNT = 10
 DEFAULT_STYLE = 'Cinematic, atmospheric lighting, highly detailed, 8k'
@@ -166,10 +166,10 @@ def _usage_summary(model: str, units: dict, provider_cost: float | None, overrid
 
 async def _generate_via_gemini(
     prompt: str, lines: list[str], scene_count: int, style: str, reference_images: list[str],
-    settings: dict, api_key: str, model_id: str, usage_ctx: dict | None,
+    settings: dict, api_key: str, model_id: str, usage_ctx: dict | None, provider: str = 'google',
 ) -> dict:
     url = _GEMINI_URL.format(model=model_id)
-    model = f'google:{model_id}'
+    model = f'{provider}:{model_id}'
     request_body = {'contents': [{'parts': [{'text': prompt}]}]}
     debug_request = {'url': url, 'model': model_id, 'body': request_body}
     timeout_seconds = _timeout_seconds(settings)
@@ -345,8 +345,8 @@ async def generate(
     if model_id and api_key and provider in _SUPPORTED_PROVIDERS:
         base_prompt = settings.get(f'scene_base_prompt_{scene_mode}', '')
         prompt = _build_prompt(raw_lyrics, base_prompt, style_description, scene_count, len(reference_images), active_wishes)
-        if provider == 'google':
-            return await _generate_via_gemini(prompt, lines, scene_count, style, reference_images, settings, api_key, model_id, usage_ctx)
+        if provider in ('google', 'google_free'):
+            return await _generate_via_gemini(prompt, lines, scene_count, style, reference_images, settings, api_key, model_id, usage_ctx, provider)
         if provider == 'openrouter':
             return await _generate_via_openrouter(prompt, lines, scene_count, style, reference_images, settings, api_key, model_id, usage_ctx)
         return await _generate_via_deepseek(prompt, lines, scene_count, style, reference_images, settings, api_key, model_id, usage_ctx)

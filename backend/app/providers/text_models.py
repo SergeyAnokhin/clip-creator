@@ -80,8 +80,8 @@ def _parse_wish_response(raw: str, fallback_text: str) -> dict:
 
 async def list_models(provider: str, api_key: str) -> dict:
     try:
-        if provider == 'google':
-            return await _list_google(api_key)
+        if provider in ('google', 'google_free'):
+            return await _list_google(provider, api_key)
         if provider == 'openrouter':
             return await _list_openrouter(api_key)
         if provider == 'deepseek':
@@ -93,13 +93,13 @@ async def list_models(provider: str, api_key: str) -> dict:
         return {'provider': provider, 'source': 'error', 'models': [], 'error': str(exc)}
 
 
-async def _list_google(api_key: str) -> dict:
+async def _list_google(provider: str, api_key: str) -> dict:
     if not api_key:
-        return {'provider': 'google', 'source': 'error', 'models': [], 'error': 'Нет API-ключа Google'}
+        return {'provider': provider, 'source': 'error', 'models': [], 'error': 'Нет API-ключа Google'}
     async with httpx.AsyncClient(timeout=20) as http_client:
         resp = await http_client.get(_GEMINI_MODELS_URL, params={'key': api_key})
     if resp.status_code != 200:
-        return {'provider': 'google', 'source': 'error', 'models': [], 'error': f'{resp.status_code}: {resp.text[:200]}'}
+        return {'provider': provider, 'source': 'error', 'models': [], 'error': f'{resp.status_code}: {resp.text[:200]}'}
     data = resp.json()
     models = []
     for m in data.get('models', []):
@@ -115,7 +115,7 @@ async def _list_google(api_key: str) -> dict:
         if image_models.is_gemini_image_model(model_id):
             continue
         models.append({'id': model_id, 'name': m.get('displayName') or model_id})
-    return {'provider': 'google', 'source': 'live', 'models': models}
+    return {'provider': provider, 'source': 'live', 'models': models}
 
 
 async def _list_openrouter(api_key: str) -> dict:
@@ -173,8 +173,8 @@ async def generate_wish_title(text: str, settings: dict, usage_ctx: dict | None 
     timeout = int(settings.get('request_timeout_seconds') or _DEFAULT_TIMEOUT_SECONDS)
 
     try:
-        if provider == 'google' and model_id and api_key:
-            title = await _complete_google(model_id, api_key, text, usage_ctx, timeout=timeout)
+        if provider in ('google', 'google_free') and model_id and api_key:
+            title = await _complete_google(provider, model_id, api_key, text, usage_ctx, timeout=timeout)
         elif provider == 'openrouter' and model_id and api_key:
             title = await _complete_openrouter(model_id, api_key, text, usage_ctx, timeout=timeout)
         elif provider == 'deepseek' and model_id and api_key:
@@ -208,8 +208,8 @@ async def clean_wish_and_title(text: str, settings: dict, usage_ctx: dict | None
     timeout = int(settings.get('request_timeout_seconds') or _DEFAULT_TIMEOUT_SECONDS)
 
     try:
-        if provider == 'google' and model_id and api_key:
-            raw = await _complete_google(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT, timeout=timeout)
+        if provider in ('google', 'google_free') and model_id and api_key:
+            raw = await _complete_google(provider, model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT, timeout=timeout)
         elif provider == 'openrouter' and model_id and api_key:
             raw = await _complete_openrouter(model_id, api_key, text, usage_ctx, prompt_template=_WISH_CLEAN_AND_TITLE_PROMPT, timeout=timeout)
         elif provider == 'deepseek' and model_id and api_key:
@@ -222,10 +222,10 @@ async def clean_wish_and_title(text: str, settings: dict, usage_ctx: dict | None
 
 
 async def _complete_google(
-    model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *,
+    provider: str, model_id: str, api_key: str, text: str, usage_ctx: dict | None = None, *,
     prompt_template: str = _TITLE_PROMPT, timeout: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
-    model = f'google:{model_id}'
+    model = f'{provider}:{model_id}'
     prompt = prompt_template.format(text=text)
     started = time.monotonic()
     console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)

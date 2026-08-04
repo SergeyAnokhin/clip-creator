@@ -547,7 +547,7 @@ def test_generate_title_card_starts_jobs_and_forwards_fields(client, monkeypatch
     monkeypatch.setattr(generation_router.title_card, 'start_jobs', fake_start_jobs)
 
     resp = client.post(f'/api/projects/{pid}/title-card/generate', json={
-        'title_text': 'Зимнее утро', 'author_text': 'Пушкин', 'base_prompt': 'base',
+        'text_block': '"Зимнее утро"\n"Пушкин"', 'base_prompt': 'base',
         'reference_image_paths': [ref_path], 'model': 'google:gemini-3.1-flash-lite-image',
         'aspect_ratio': '16:9', 'count': 2,
     })
@@ -556,8 +556,7 @@ def test_generate_title_card_starts_jobs_and_forwards_fields(client, monkeypatch
     assert resp.json() == {'job_ids': ['job_1', 'job_2']}
     assert captured['args'][0] == pid
     assert captured['args'][1] == [ref_path]
-    assert captured['args'][2] == 'Зимнее утро'
-    assert captured['args'][3] == 'Пушкин'
+    assert captured['args'][2] == '"Зимнее утро"\n"Пушкин"'
     assert captured['kwargs']['aspect_ratio'] == '16:9'
 
 
@@ -642,7 +641,7 @@ def test_generate_title_card_end_to_end_with_google_writes_file_and_persists(cli
     monkeypatch.setattr(generation_router.title_card.httpx, 'AsyncClient', lambda **kwargs: fake_client)
 
     resp = client.post(f'/api/projects/{pid}/title-card/generate', json={
-        'title_text': 'Зимнее утро', 'author_text': 'Пушкин', 'base_prompt': 'base instructions',
+        'text_block': '"Зимнее утро"\n"Пушкин"', 'base_prompt': 'base instructions',
         'reference_image_paths': [ref_path], 'model': 'google:gemini-3.1-flash-lite-image',
     })
     assert resp.status_code == 200
@@ -653,8 +652,7 @@ def test_generate_title_card_end_to_end_with_google_writes_file_and_persists(cli
     assert job['status'] == 'completed'
     variant = job['variant']
     assert variant['file_path'].startswith('titlecard/') and variant['file_path'].endswith('.png')
-    assert variant['title_text'] == 'Зимнее утро'
-    assert variant['author_text'] == 'Пушкин'
+    assert variant['text_block'] == '"Зимнее утро"\n"Пушкин"'
     assert variant['reference_image_paths'] == [ref_path]
 
     data_root = Path(os.environ['APP_DATA_DIR'])

@@ -121,6 +121,35 @@ def test_malformed_override_falls_through_to_builtin(monkeypatch):
     assert amount == pytest.approx(0.30)
 
 
+def test_google_free_aliases_to_google_builtin_price(monkeypatch):
+    monkeypatch.setitem(pricing.BUILTIN_PRICING, 'google:some-model', TEXT_PRICE)
+    amount, source = pricing.compute_cost(
+        'google_free:some-model', {'input_tokens': 1_000_000, 'output_tokens': 1_000_000},
+    )
+    assert source == 'catalog'
+    assert amount == pytest.approx(0.30 + 2.50)
+
+
+def test_google_free_exact_override_wins_over_aliased_builtin(monkeypatch):
+    monkeypatch.setitem(pricing.BUILTIN_PRICING, 'google:some-model', TEXT_PRICE)
+    overrides = {'google_free:some-model': {'kind': 'text', 'input': 9.0, 'output': 9.0}}
+    amount, _ = pricing.compute_cost(
+        'google_free:some-model', {'input_tokens': 1_000_000, 'output_tokens': 0}, overrides,
+    )
+    assert amount == pytest.approx(9.0)
+
+
+def test_google_free_wildcard_override_does_not_leak_to_google():
+    # google_free's own '*' override must be tried before falling through to
+    # the google alias - otherwise a user pricing only google_free as a whole
+    # would silently also affect plain google costs, or vice versa.
+    overrides = {'google_free:*': {'kind': 'image', 'per_image': 0.01}}
+    amount, _ = pricing.compute_cost('google_free:some-image-model', {'images': 2}, overrides)
+    assert amount == pytest.approx(0.02)
+    amount, source = pricing.compute_cost('google:some-image-model', {'images': 2}, overrides)
+    assert source == 'unknown'
+
+
 def test_negative_price_is_rejected():
     overrides = {'x:y': {'kind': 'text', 'input': -1.0, 'output': 1.0}}
     assert pricing.get_price('x:y', overrides) is None

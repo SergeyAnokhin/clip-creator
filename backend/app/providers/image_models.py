@@ -70,6 +70,9 @@ CURATED_IMAGE_MODELS = {
         {'id': 'fal-ai/flux-pro/v1.1', 'name': 'FLUX1.1 [pro]'},
         {'id': 'fal-ai/fast-sdxl', 'name': 'Fast SDXL'},
         {'id': 'fal-ai/aura-flow', 'name': 'AuraFlow'},
+        # Reference-capable (up to ~14 images) - the only FAL model wired for
+        # the Title Card stage's multi-reference generation, see title_card.py.
+        {'id': 'fal-ai/nano-banana/edit', 'name': 'Nano Banana Edit (references)'},
     ],
     'deepseek': [],
     'krea': [
@@ -86,8 +89,8 @@ CURATED_IMAGE_MODELS = {
 
 async def list_models(provider: str, api_key: str) -> dict:
     try:
-        if provider == 'google':
-            return await _list_google(api_key)
+        if provider in ('google', 'google_free'):
+            return await _list_google(provider, api_key)
         if provider == 'openrouter':
             return await _list_openrouter(api_key)
         if provider in CURATED_IMAGE_MODELS:
@@ -97,13 +100,13 @@ async def list_models(provider: str, api_key: str) -> dict:
         return {'provider': provider, 'source': 'error', 'models': [], 'error': str(exc)}
 
 
-async def _list_google(api_key: str) -> dict:
+async def _list_google(provider: str, api_key: str) -> dict:
     if not api_key:
-        return {'provider': 'google', 'source': 'error', 'models': [], 'error': 'Нет API-ключа Google'}
+        return {'provider': provider, 'source': 'error', 'models': [], 'error': 'Нет API-ключа Google'}
     async with httpx.AsyncClient(timeout=20) as http_client:
         resp = await http_client.get(_GEMINI_MODELS_URL, params={'key': api_key})
     if resp.status_code != 200:
-        return {'provider': 'google', 'source': 'error', 'models': [], 'error': f'{resp.status_code}: {resp.text[:200]}'}
+        return {'provider': provider, 'source': 'error', 'models': [], 'error': f'{resp.status_code}: {resp.text[:200]}'}
     data = resp.json()
     models = []
     for m in data.get('models', []):
@@ -116,7 +119,7 @@ async def _list_google(api_key: str) -> dict:
         if not (is_imagen or is_nano_banana):
             continue
         models.append({'id': model_id, 'name': m.get('displayName') or model_id})
-    return {'provider': 'google', 'source': 'live', 'models': models}
+    return {'provider': provider, 'source': 'live', 'models': models}
 
 
 async def _list_openrouter(api_key: str) -> dict:

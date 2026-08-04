@@ -59,11 +59,13 @@ function App() {
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
     imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
+    onTitleCardWishLibraryChange: settings.actions.setTitleCardWishLibrary,
   });
-  // Depends on suno's refinement box and scenes' wish box, so it must be created after them.
+  // Depends on suno's refinement box, scenes' wish box and title card's wish box, so it must be created after them.
   const voice = useVoice({
     updateProject, showToast, L, lang: settings.lang,
     setRefinementText: suno.actions.setRefinementText, setSceneWishText: scenes.actions.setSceneWishText,
+    setTitleCardWishText: titleCard.actions.setTitleCardWishText,
   });
 
   // ---------- navigation ----------
@@ -166,12 +168,17 @@ function App() {
     modelPrices: usage.priceMap,
     titleCardBasePrompt: settings.titleCardBasePrompt,
     titleCardBasePromptPresets: settings.titleCardBasePromptPresets,
+    titleCardWishLibrary: settings.titleCardWishLibrary,
+    isRecordingTitleCardWish: voice.recordingKind === 'titleCardWish',
+    recordingSeconds: voice.recordingSeconds,
+    voiceSupported: voice.isSupported,
     actions: {
       ...titleCard.actions,
       updateTitleCardBasePrompt: settings.actions.updateTitleCardBasePrompt,
       saveTitleCardBasePromptPreset: settings.actions.saveTitleCardBasePromptPreset,
       loadTitleCardBasePromptPreset: settings.actions.loadTitleCardBasePromptPreset,
       deleteTitleCardBasePromptPreset: settings.actions.deleteTitleCardBasePromptPreset,
+      startVoice: voice.startVoice,
     },
   };
 

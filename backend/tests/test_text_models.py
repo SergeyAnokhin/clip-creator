@@ -315,7 +315,7 @@ def test_google_completion_records_tokens_from_usage_metadata(monkeypatch, usage
 
     import asyncio
     ctx = usage_ledger.context('wish_title', None, {})
-    asyncio.run(text_models._complete_google('gemini-2.0-flash-lite', 'key', 'text', ctx))
+    asyncio.run(text_models._complete_google('google', 'gemini-2.0-flash-lite', 'key', 'text', ctx))
 
     rec = usage_ledger.query()['records'][0]
     assert rec['units']['input_tokens'] == 30

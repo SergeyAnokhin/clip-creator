@@ -39,7 +39,8 @@ app_data/
 | `reference_images` | str[] | Paths relative to `app_data/`, e.g. `projects/<slug>/references/ref_ab12cd34.png` |
 | `scenes` | Scene[] | `[]` until the storyboard is generated |
 | `source_url` | str | Original URL, if the project came from one |
-| `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{title_text: '', author_text: '', reference_image_paths: [], variants: []}` |
+| `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{reference_image_paths: [], variants: []}` (`text_block` is seeded lazily on first stage visit, see below) |
+| `active_title_card_wish_ids` | str[] | Ids of `settings.title_card_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (poster wishes vs. scene/imagery ones) |
 
 **Block**: `{id, type, importance, content}` — `type` is
 `intro|verse|chorus|bridge|outro|interlude`; `content` is plain multi-line text.
@@ -54,12 +55,17 @@ backward compatibility, never read or edited.
 extension depends on the provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly
 one `is_selected` per scene once anything is rated.
 
-**TitleCard**: `{title_text, author_text, reference_image_paths, variants}` —
-`reference_image_paths` is up to 4 paths (relative to the project folder)
-picked from `scenes[].images[].file_path` or `reference_images`, persisted so
-the picks survive a reload. **TitleCardVariant**:
-`{variant_id, file_path, rating, is_selected, generated_at, model,
-aspect_ratio, cost, title_text, author_text, base_prompt,
+**TitleCard**: `{text_block, reference_image_paths, variants}` — `text_block`
+is one free-text field the user edits directly (not separate title/author
+inputs the server wraps in quotes), lazily seeded to `'"Заголовок"\n"Автор"'`
+the first time the stage loads for a project (`useTitleCardStage.js`'s
+`resetForProject`, only if the key is `undefined`, so a later intentional
+clear-to-`''` sticks). It's appended to the assembled prompt verbatim
+(`title_card._build_prompt`). `reference_image_paths` is up to 4 paths
+(relative to the project folder) picked from `scenes[].images[].file_path` or
+`reference_images`, persisted so the picks survive a reload.
+**TitleCardVariant**: `{variant_id, file_path, rating, is_selected,
+generated_at, model, aspect_ratio, cost, text_block, base_prompt,
 reference_image_paths}` — same `rating`/`is_selected`/`model`/`aspect_ratio`/
 `cost` shape as `Image` (`file_path` under `titlecard/` instead of `images/`),
 plus a snapshot of the text/prompt/references that produced it. `variants` is
@@ -86,11 +92,13 @@ compute it are unknown; `cost.source` is `provider|catalog|unknown`.
 
 ## Settings (`settings.json`)
 
-`{lang, api_keys{replicate,google,fal,openrouter,deepseek,krea,google_translate}, text_models{favorites[],default},
+`{lang, api_keys{replicate,google,google_free,fal,openrouter,deepseek,krea,google_translate}, text_models{favorites[],default},
 simple_models{favorites[],default}, image_models{favorites[],default}, image_models_simple{favorites[],default},
 special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[],
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
-request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[]}`. Reads and
+request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
+title_card_wish_library[]}`. `google_free` is a second Google Gemini API key (see `architecture.md`'s
+provider-seams section) - same models/calls as `google`, tracked/billed separately. Reads and
 writes merge over `DEFAULT_SETTINGS` in
 [`routers/settings.py`](../backend/app/routers/settings.py) (seed text for
 `suno_base_prompt`/`suno_reference_examples` comes from
@@ -103,7 +111,7 @@ partial merge server-side, so the frontend can persist e.g. just
   same shape: `favorites` is `{provider, id, label}[]`; `default` is a
   composite `"{provider}:{id}"` string (e.g. `"google:gemini-2.5-flash"`).
   `text_models`/`simple_models` only accept `provider`
-  `google|openrouter|deepseek|replicate|fal`; `image_models`/`image_models_simple`
+  `google|google_free|openrouter|deepseek|replicate|fal`; `image_models`/`image_models_simple`
   additionally accept `krea` (Krea AI is image/video-only, so it's excluded
   from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
   `_MODEL_PROVIDERS` in `routers/settings.py`). `text_models.default` is
@@ -173,18 +181,29 @@ partial merge server-side, so the frontend can persist e.g. just
   as everything else that isn't a debounced text field).
 - `title_card_base_prompt` — the general "render this text in the reference
   images' style" instructions for the Title Card stage, sent ahead of the
-  quoted title/author text on every `title-card/generate` call. Seeded from
+  active-wishes block and the stage's free-text `text_block` on every
+  `title-card/generate` call. Seeded from
   [`providers/title_card_prompt_defaults.py`](../backend/app/providers/title_card_prompt_defaults.py),
   editable in the stage's own collapsible panel (autosaves like
   `updateSunoBasePrompt`).
 - `title_card_base_prompt_presets` — unlike Suno's read-only
   `suno-prompt-presets` endpoint, this is a **user-managed** list of named
-  variants of the base prompt, `{id, name, prompt}[]`. Saved/loaded/deleted
-  entirely client-side (`useSettings.js`'s `saveTitleCardBasePromptPreset` /
-  `loadTitleCardBasePromptPreset` / `deleteTitleCardBasePromptPreset`) against
-  the regular partial-merge `PUT /api/settings` — no dedicated endpoints,
-  unlike `suno_wish_library`/`scene_wish_library` which get their own routes
-  because saving those also involves an LLM clean+title call.
+  variants of the base prompt, `{id, name, prompt}[]`, seeded by default with
+  3 built-ins from `title_card_prompt_defaults.TITLE_CARD_BASE_PROMPT_PRESETS`
+  (2 user-supplied "black background lettering" style prompts + this app's own
+  default). Saved/loaded/deleted entirely client-side (`useSettings.js`'s
+  `saveTitleCardBasePromptPreset` / `loadTitleCardBasePromptPreset` /
+  `deleteTitleCardBasePromptPreset`) against the regular partial-merge `PUT
+  /api/settings` — no dedicated endpoints, unlike
+  `suno_wish_library`/`scene_wish_library`/`title_card_wish_library` which get
+  their own routes because saving those also involves an LLM clean+title call.
+- `title_card_wish_library` — global, reusable poster-generation wish "cards",
+  same `{id, title, text, created_at}` shape and `clean_wish_and_title` flow
+  as `suno_wish_library`/`scene_wish_library`, but its own separate list
+  (`wish_library.add_or_get_wish`'s `library_key='title_card_wish_library'`).
+  Each project toggles a subset on via its own `active_title_card_wish_ids`
+  (see above); resolved wish texts are folded into the prompt ahead of the
+  stage's `text_block` (`title_card._build_prompt`).
 - `pricing_overrides` — user-supplied AI price corrections, keyed by
   `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
   wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
@@ -227,12 +246,13 @@ reference-image upload (multipart).
 | `PATCH /api/projects/{id}` | Partial project (the frontend sends the **whole** object) → full project |
 | `DELETE /api/projects/{id}` | → 204 |
 | `GET /api/settings` / `PUT /api/settings` | Settings dict (merged over defaults) |
-| `GET /api/settings/models/{provider}` | `provider` = `google\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/OpenRouter/DeepSeek query the provider's real API with the stored key; Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
+| `GET /api/settings/models/{provider}` | `provider` = `google\|google_free\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/`google_free`/OpenRouter/DeepSeek query the provider's real API with the stored key (`google_free` hits the same Gemini endpoint as `google`, just with its own key); Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
 | `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)). Also upserted into the persisted model catalog |
 | `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
 | `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit of an existing wish's title and/or text (either field, or both); no LLM call, so no usage tracking; `404` if `id` is unknown, `422` if a given field is blank |
 | `POST /api/settings/scene-wish-library` / `PATCH .../{id}` | Same shape and behaviour as `/settings/wish-library`, against `scene_wish_library` instead — a separate library for scene/imagery wishes |
+| `POST /api/projects/{id}/title-card/wishes` | `{text}` → `{wish, title_card_wish_library, active_title_card_wish_ids}`. Poster-generation equivalent of `scenes/wishes` — cleans+titles via `wish_library.add_or_get_wish` (`library_key='title_card_wish_library'`) then immediately activates it for this project |
 | `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model, active_wish_ids?}` → `{style, lyrics, skill_id, model_used, debug}`. `model` is the `"{provider}:{model_id}"` composite — the Suno stage seeds it from `settings.text_models.default` but lets the user override it per-call via the `ModelPicker` next to "Сгенерировать промпт"/"Generate prompt"; `active_wish_ids` (falls back to the project's own field if omitted) is resolved against `settings.suno_wish_library` and sent as an emphasized, numbered "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" block right after the base prompt; `provider ∈ google\|openrouter\|deepseek` + a matching key calls that provider's real chat API; a failed call returns `502` instead of falling back. `debug` is either `{stub: false, request, response, missing_markers}` (real call — `missing_markers` true if the reply didn't follow the `===STYLE===`/`===LYRICS===` format) or `{stub: true, reason: no_model_selected\|unsupported_provider\|no_api_key, requested_model}` — shown in the Suno stage's debug panel, which auto-expands whenever either flag needs attention |
 | `POST /api/projects/{id}/suno/wishes` | `{text}` → `{wish, suno_wish_library, active_wish_ids}`. Cleans+titles `text` via `wish_library.add_or_get_wish` (reuses an existing card with the same text instead of duplicating it), then immediately activates that wish's id for this project — the "Применить" button on the Suno stage's "Доработка через AI-пожелание" section. Replaces the old `suno/refine`, which instead folded the wish into `skill_prompt` and only kept a read-only history |
 | `POST /api/projects/{id}/scenes/generate` | `{style_description, scene_count?, model?, scene_mode?, active_scene_wish_ids?}` → `{scenes, style_description, scene_mode, debug}` — **replaces all scenes**, clearing their images. `scene_mode ∈ narrative\|abstract` picks `scene_base_prompt_narrative`/`_abstract`; `active_scene_wish_ids` (falls back to the project's own field) resolves against `scene_wish_library` the same way Suno's wishes do; `provider ∈ google\|openrouter\|deepseek` + a matching key calls that provider's real chat API asking for a JSON scene array; a failed call returns `502`. `debug` shape mirrors `suno/generate`'s exactly (`{stub, request, response, missing_markers, usage}` or `{stub: true, reason, requested_model}`) |
@@ -241,8 +261,8 @@ reference-image upload (multipart).
 | `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useImagesStage.js`); job state is in-memory only (see `architecture.md`) |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
-| `POST /api/projects/{id}/title-card/generate` | `{title_text, author_text, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`'s Nano Banana ids, or Krea's `google/nano-banana-pro`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |
-| `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', variant: TitleCardVariant\|null, error: str\|null}` — polled every 1.5s by the frontend (`useTitleCardStage.js`), same in-memory-only job state as scene images (a separate `title_card._jobs` dict) |
+| `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |
+| `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', variant: TitleCardVariant\|null, error: str\|null, debug: {request, response}\|null}` — polled every 1.5s by the frontend (`useTitleCardStage.js`), same in-memory-only job state as scene images (a separate `title_card._jobs` dict). `debug` is a redacted snapshot of the actual provider request/response (reference-image bytes and inline result data replaced with `<... bytes>` placeholders; plain URLs kept) for the stage's debug panel |
 | `DELETE /api/projects/{id}/title-card/variants/{variant_id}` | → `{variants}` — removes one result from `project.title_card.variants` and deletes its file |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |

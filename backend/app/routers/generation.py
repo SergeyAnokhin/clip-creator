@@ -308,8 +308,7 @@ async def generate_title_card(project_id: str, body: dict = Body(default={})):
     if project is None:
         raise HTTPException(404, 'Project not found')
 
-    title_text = (body.get('title_text') or '').strip()
-    author_text = (body.get('author_text') or '').strip()
+    text_block = (body.get('text_block') or '').strip()
     base_prompt = body.get('base_prompt', '')
     reference_image_paths = body.get('reference_image_paths') or []
     if not reference_image_paths:
@@ -323,12 +322,46 @@ async def generate_title_card(project_id: str, body: dict = Body(default={})):
     model = body.get('model', '')
     aspect_ratio = body.get('aspect_ratio')
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    active_title_card_wish_ids = body.get('active_title_card_wish_ids', project.get('active_title_card_wish_ids', []))
+    title_card_wish_lookup = {
+        w['id']: w['text'] for w in wish_library.normalize_wish_library(settings.get('title_card_wish_library', []))
+    }
+    active_wishes = [title_card_wish_lookup[wid] for wid in active_title_card_wish_ids if wid in title_card_wish_lookup]
     usage_ctx = usage.context('title_card', project_id, settings, count=count)
     job_ids = title_card.start_jobs(
-        project_id, reference_image_paths, title_text, author_text, base_prompt, count, model, settings,
-        usage_ctx=usage_ctx, aspect_ratio=aspect_ratio,
+        project_id, reference_image_paths, text_block, base_prompt, count, model, settings,
+        usage_ctx=usage_ctx, aspect_ratio=aspect_ratio, active_wishes=active_wishes,
     )
     return {'job_ids': job_ids}
+
+
+@router.post('/{project_id}/title-card/wishes')
+async def add_title_card_wish(project_id: str, body: dict = Body(...)):
+    """Title Card equivalent of /scenes/wishes - see wish_library.add_or_get_wish's
+    docstring for why this is a separate library from scene_wish_library."""
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+
+    text = (body.get('text') or '').strip()
+    if not text:
+        raise HTTPException(422, 'text is required')
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('wish_title', project_id, settings)
+    result = await wish_library.add_or_get_wish(text, settings, usage_ctx=usage_ctx, library_key='title_card_wish_library')
+    wish = result['wish']
+
+    active_title_card_wish_ids = project.get('active_title_card_wish_ids', [])
+    if wish['id'] not in active_title_card_wish_ids:
+        active_title_card_wish_ids = [*active_title_card_wish_ids, wish['id']]
+    project['active_title_card_wish_ids'] = active_title_card_wish_ids
+    project['updated_at'] = _now()
+    storage.save_project(project_id, project)
+    return {
+        'wish': wish, 'title_card_wish_library': result['wish_library'],
+        'active_title_card_wish_ids': active_title_card_wish_ids,
+    }
 
 
 @router.get('/{project_id}/title-card/jobs/{job_id}')

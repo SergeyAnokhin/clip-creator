@@ -29,6 +29,7 @@ export function useSettings({ showToast, onAiCall }) {
   const [sceneBasePromptNarrative, setSceneBasePromptNarrative] = useState('');
   const [sceneBasePromptAbstract, setSceneBasePromptAbstract] = useState('');
   const [sceneWishLibrary, setSceneWishLibrary] = useState([]);
+  const [titleCardWishLibrary, setTitleCardWishLibrary] = useState([]);
   const [hideMotionPrompt, setHideMotionPromptState] = useState(false);
   const [titleCardBasePrompt, setTitleCardBasePrompt] = useState('');
   const [titleCardBasePromptPresets, setTitleCardBasePromptPresets] = useState([]);
@@ -49,6 +50,7 @@ export function useSettings({ showToast, onAiCall }) {
       setSceneBasePromptNarrative(s.scene_base_prompt_narrative || '');
       setSceneBasePromptAbstract(s.scene_base_prompt_abstract || '');
       setSceneWishLibrary(s.scene_wish_library || []);
+      setTitleCardWishLibrary(s.title_card_wish_library || []);
       setHideMotionPromptState(s.hide_motion_prompt || false);
       setTitleCardBasePrompt(s.title_card_base_prompt || '');
       setTitleCardBasePromptPresets(s.title_card_base_prompt_presets || []);
@@ -346,7 +348,7 @@ export function useSettings({ showToast, onAiCall }) {
     apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
     sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets, requestTimeoutSeconds,
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
-    titleCardBasePrompt, titleCardBasePromptPresets,
+    titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
@@ -360,6 +362,7 @@ export function useSettings({ showToast, onAiCall }) {
       updateSceneBasePromptNarrative, updateSceneBasePromptAbstract,
       saveSceneWishToLibrary, removeSceneWishSnippet, updateSceneWishSnippet, setSceneWishLibrary,
       updateTitleCardBasePrompt, saveTitleCardBasePromptPreset, loadTitleCardBasePromptPreset, deleteTitleCardBasePromptPreset,
+      setTitleCardWishLibrary,
     },
   };
 }

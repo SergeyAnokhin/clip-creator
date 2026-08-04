@@ -217,6 +217,16 @@
   border-color: rgba(255, 157, 92, 0.4);
 }
 
+.field option {
+  background-color: #181512;
+  color: var(--text);
+}
+
+.field:disabled,
+.field option:disabled {
+  color: var(--text-dim);
+}
+
 .recording-dot {
   width: 9px;
   height: 9px;

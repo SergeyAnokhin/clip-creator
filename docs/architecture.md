@@ -117,6 +117,14 @@ each keystroke isn't a request.
 without knowing whether the result is canned or real. Keys come from
 `app_data/settings.json`.
 
+`google_free` is a second Google Gemini provider id, wired everywhere
+`google` is (same Gemini/Imagen calls, same models) but resolved against its
+own `settings.api_keys.google_free` — lets a free-tier Gemini token and a
+paid one be tracked/billed separately without touching call logic. Wherever
+this doc says "`provider` is `google`", read that as "`google` or
+`google_free`"; `pricing.py` aliases `google_free:<model_id>` price lookups
+to the `google:<model_id>` row so both share one price catalog entry.
+
 - `suno.generate` recomputes the raw structured lyrics from the project's
   *current* blocks every time (so Lyrics-stage edits always show up), then:
   - `model` is the composite `"{provider}:{model_id}"` string from
@@ -358,56 +366,81 @@ without knowing whether the result is canned or real. Keys come from
 - `title_card.start_jobs`/`get_job` is the Title Card stage's provider seam —
   same background-job/poll shape as `images.py` above (its own `_jobs` dict,
   never shared with it), but genuinely **image-to-image**: it sends the
-  stage's up-to-4 chosen reference images alongside the text prompt, and only
-  the two providers confirmed (2026-08) to actually accept multiple reference
-  images are wired up:
+  stage's up-to-4 chosen reference images alongside the text prompt. Four
+  providers are confirmed (2026-08) to accept multiple reference images the
+  way this feature needs, each with its own generator in
+  `title_card._GENERATORS`:
   - **Google Gemini `generateContent`** ("Nano Banana" family, `gemini-*-image`
-    ids): each reference image becomes its own `inline_data` part ahead of the
-    text part in `contents[0].parts`; `generationConfig.responseModalities:
-    ['IMAGE']` asks for an image back, `generationConfig.imageConfig.aspectRatio`
-    frames it. This is the same Nano Banana model family `images.py`'s
-    `_generate_google` can't reach (that one only speaks Imagen's `:predict`,
-    text-only) — `title_card.py` is where Nano Banana's real multi-image
-    capability is actually used.
+    ids), reachable via either the `google` or `google_free` provider id (see
+    below — same call, different API key): each reference image becomes its
+    own `inline_data` part ahead of the text part in `contents[0].parts`;
+    `generationConfig.responseModalities: ['IMAGE']` asks for an image back,
+    `generationConfig.imageConfig.aspectRatio` frames it. This is the same
+    Nano Banana model family `images.py`'s `_generate_google` can't reach
+    (that one only speaks Imagen's `:predict`, text-only) — `title_card.py`
+    is where Nano Banana's real multi-image capability is actually used.
   - **Krea's `google/nano-banana-pro` proxy** (`POST
     https://api.krea.ai/generate/image/google/nano-banana-pro`): references go
     in as `style_images: [{url, strength}]`, `url` a base64 data URI (no need
     to host the references publicly first) — same job+poll shape as Krea's
     other models.
-  - OpenRouter's Unified Image API also documents reference-image support
-    (`input_references`), but its exact request-body field shape couldn't be
-    confirmed from public docs when this was built, so it's deliberately not
-    wired — `title_card._GENERATORS` is a dict precisely so a third provider
-    is a one-line addition once that's confirmed. Replicate/FAL have no
-    reference-capable models in the current curated catalog
-    (`image_models.CURATED_IMAGE_MODELS`), so they're excluded too.
-  - `POST /api/projects/{id}/title-card/generate` (`{title_text, author_text,
-    base_prompt, reference_image_paths, model, aspect_ratio?, count?}`)
-    validates every reference path resolves inside the project folder and
-    exists, then starts one job per requested variant, same `{job_ids}`
-    immediate-return shape as scene images. `GET .../title-card/jobs/{job_id}`
-    polls one job. `DELETE .../title-card/variants/{variant_id}` removes one
-    result (drops it from `project.title_card.variants`, deletes its file).
+  - **FAL's `fal-ai/nano-banana/edit`** (a fal-hosted proxy of the same
+    Gemini image model, up to ~14 references per fal's own docs): `POST
+    https://queue.fal.run/fal-ai/nano-banana/edit` with `{prompt,
+    image_urls}`, each entry a `data:image/...;base64,...` URI — same
+    queue/poll shape as `images.py`'s `_generate_fal`. Only this one FAL model
+    id supports references; the rest of the curated FAL catalog is
+    text-to-image only, and picking one of those for this stage fails the job
+    with an explicit "doesn't support reference images" error.
+  - **OpenRouter's Unified Image API**: `POST
+    https://openrouter.ai/api/v1/images` with `input_references:
+    [{type: 'image_url', image_url: {url}}]`, `url` a base64 data URL —
+    same single-call shape as `images.py`'s `_generate_openrouter`, plus the
+    extra field.
+  - Replicate has no *multi*-reference model in the current curated catalog —
+    `black-forest-labs/flux-kontext-pro` takes exactly one `input_image`,
+    which doesn't fit this stage's "up to 4 references" shape, so it's
+    deliberately left unwired here rather than silently dropping references.
+  - `POST /api/projects/{id}/title-card/generate` (`{text_block, base_prompt,
+    reference_image_paths, model, aspect_ratio?, count?,
+    active_title_card_wish_ids?}`) validates every reference path resolves
+    inside the project folder and exists, then starts one job per requested
+    variant, same `{job_ids}` immediate-return shape as scene images. `GET
+    .../title-card/jobs/{job_id}` polls one job (its response includes a
+    `debug: {request, response} | null` field — see below). `DELETE
+    .../title-card/variants/{variant_id}` removes one result (drops it from
+    `project.title_card.variants`, deletes its file).
   - A completed job writes to `titlecard/{shorthex}.{png|jpg|webp}` (parallel
     to `images/`/`references/`) and appends a variant — same
     `rating`/`is_selected`/`model`/`aspect_ratio`/`cost` fields as a scene
     `Image`, so the frontend reuses `ImageCarousel`'s star-rating row and
-    `pickMainByRating` unmodified — plus `title_text`/`author_text`/
-    `base_prompt`/`reference_image_paths`, a snapshot of what produced it.
+    `pickMainByRating` unmodified — plus `text_block`/`base_prompt`/
+    `reference_image_paths`, a snapshot of what produced it.
   - Uploading a custom reference image reuses the existing
     `POST/DELETE /api/projects/{id}/reference-images` endpoints unchanged
     (lands in `project.reference_images`, selectable into any of the 4 slots)
     — no dedicated upload endpoint for this stage.
-  - The prompt sent to the model is `settings.title_card_base_prompt`
-    (editable in the stage's own collapsible panel, same autosave pattern as
+  - The final prompt is `settings.title_card_base_prompt` (editable in the
+    stage's own collapsible panel, same autosave pattern as
     `updateSunoBasePrompt`; seeded from
-    [`providers/title_card_prompt_defaults.py`](../backend/app/providers/title_card_prompt_defaults.py))
-    plus the title/author text quoted on their own lines
-    (`title_card._build_prompt`). Unlike Suno's read-only preset list,
-    `settings.title_card_base_prompt_presets` is a **user-managed** array of
-    named variants (`{id, name, prompt}`) the stage can save/load/delete —
-    plain client-side CRUD against the regular partial-merge `PUT
-    /api/settings`, no dedicated endpoints.
+    [`providers/title_card_prompt_defaults.py`](../backend/app/providers/title_card_prompt_defaults.py)),
+    plus an active-wishes block (same `active_scene_wish_ids` pattern as
+    Scenes, backed by its own `settings.title_card_wish_library` and
+    `project.active_title_card_wish_ids` — see `wish_library.py`), plus the
+    stage's free-text block appended verbatim (`title_card._build_prompt`) —
+    a single multi-line field the user edits directly (default value
+    `"Заголовок"\n"Автор"`), not two separate title/author inputs the server
+    wraps in quotes. `settings.title_card_base_prompt_presets` is a
+    **user-managed** array of named variants (`{id, name, prompt}`, seeded
+    with 3 built-ins from `title_card_prompt_defaults.py`) the stage can
+    save/load/delete — plain client-side CRUD against the regular
+    partial-merge `PUT /api/settings`, no dedicated endpoints.
+  - Each generator writes a redacted `{request, response}` debug snapshot into
+    `usage_out['debug']` (reference-image bytes and any inline base64 result
+    data replaced with a short `<... bytes>` placeholder; plain URLs are kept
+    as-is) — `_run_job` threads it onto the job record so the stage's
+    collapsible debug panel (same pattern as Scenes'/Suno's) can show exactly
+    what was sent/received without dumping raw image bytes into the UI.
 
 ## AI usage & cost tracking
 

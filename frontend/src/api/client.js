@@ -97,6 +97,7 @@ export const api = {
   deleteReferenceImage: (id, filename) => request(`${projectPath(id)}/reference-images/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
 
   generateTitleCard: (id, body) => request(`${projectPath(id)}/title-card/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  addTitleCardWish: (id, text) => request(`${projectPath(id)}/title-card/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
   getTitleCardJob: (id, jobId) => request(`${projectPath(id)}/title-card/jobs/${encodeURIComponent(jobId)}`),
   deleteTitleCardVariant: (id, variantId) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}`, { method: 'DELETE' }),
 };

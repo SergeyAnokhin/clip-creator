@@ -93,6 +93,23 @@ def test_generate_google_aspect_ratio_sets_image_config(monkeypatch):
     asyncio.run(title_card._generate_google('gemini-3.1-flash-lite-image', 'p', _REFS, 'key', aspect_ratio='16:9'))
 
 
+def test_generate_google_records_redacted_debug_info(monkeypatch):
+    payload = {'candidates': [{'content': {'parts': [
+        {'inlineData': {'data': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}},
+    ]}}]}
+    _install(monkeypatch, [_FakeResponse(200, payload)])
+    usage_out = {}
+
+    asyncio.run(title_card._generate_google('gemini-3.1-flash-lite-image', 'render this', _REFS, 'test-key', usage_out=usage_out))
+
+    debug = usage_out['debug']
+    assert debug['request']['prompt'] == 'render this'
+    assert debug['request']['reference_images'] == ['<png image, 8 bytes>', '<jpg image, 8 bytes>']
+    redacted_data = debug['response']['candidates'][0]['content']['parts'][0]['inlineData']['data']
+    assert redacted_data.startswith('<image data omitted')
+    assert base64.b64encode(b'PNGDATA').decode() not in str(debug['response'])
+
+
 def test_generate_google_missing_key_raises():
     with pytest.raises(RuntimeError, match='Google'):
         asyncio.run(title_card._generate_google('gemini-3.1-flash-lite-image', 'p', _REFS, ''))
@@ -149,14 +166,91 @@ def test_generate_krea_failed_status_raises(monkeypatch):
         asyncio.run(title_card._generate_krea('google/nano-banana-pro', 'p', _REFS, 'key'))
 
 
-def test_build_prompt_includes_quoted_title_and_author():
-    prompt = title_card._build_prompt('Base instructions', 'Зимнее утро', 'Пушкин')
+def test_generate_fal_sends_image_urls_and_polls_to_completion(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'IN_QUEUE'}),
+        _FakeResponse(200, {'status': 'COMPLETED'}),
+        _FakeResponse(200, {'images': [{'url': 'https://cdn.example/poster.png'}], 'has_nsfw_concepts': [False]}),
+        _FakeResponse(200, content=b'PNGDATA', headers={'content-type': 'image/png'}),
+    ])
+
+    content, ext = asyncio.run(title_card._generate_fal('fal-ai/nano-banana/edit', 'render this', _REFS, 'test-key'))
+
+    assert content == b'PNGDATA'
+    assert ext == 'png'
+    first_call = fake_client.calls[0]
+    assert first_call['url'] == 'https://queue.fal.run/fal-ai/nano-banana/edit'
+    image_urls = first_call['json']['image_urls']
+    assert len(image_urls) == 2
+    assert image_urls[0] == f'data:image/png;base64,{base64.b64encode(b"REF1DATA").decode()}'
+    assert image_urls[1].startswith('data:image/jpeg;base64,')
+
+
+def test_generate_fal_rejects_unsupported_model():
+    with pytest.raises(RuntimeError, match='не поддерживает'):
+        asyncio.run(title_card._generate_fal('fal-ai/flux/dev', 'p', _REFS, 'key'))
+
+
+def test_generate_fal_missing_key_raises():
+    with pytest.raises(RuntimeError, match='FAL'):
+        asyncio.run(title_card._generate_fal('fal-ai/nano-banana/edit', 'p', _REFS, ''))
+
+
+def test_generate_fal_nsfw_flag_raises(monkeypatch):
+    _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'COMPLETED'}),
+        _FakeResponse(200, {'images': [{'url': 'https://cdn.example/poster.png'}], 'has_nsfw_concepts': [True]}),
+    ])
+    with pytest.raises(RuntimeError, match='модерацией'):
+        asyncio.run(title_card._generate_fal('fal-ai/nano-banana/edit', 'p', _REFS, 'key'))
+
+
+def test_generate_openrouter_sends_input_references(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'data': [{'b64_json': base64.b64encode(b'PNGDATA').decode(), 'media_type': 'image/png'}]}),
+    ])
+
+    content, ext = asyncio.run(title_card._generate_openrouter('openai/gpt-image-1', 'render this', _REFS, 'test-key'))
+
+    assert content == b'PNGDATA'
+    assert ext == 'png'
+    call = fake_client.calls[0]
+    assert call['url'] == 'https://openrouter.ai/api/v1/images'
+    refs = call['json']['input_references']
+    assert len(refs) == 2
+    assert refs[0] == {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{base64.b64encode(b"REF1DATA").decode()}'}}
+    assert refs[1]['image_url']['url'].startswith('data:image/jpeg;base64,')
+
+
+def test_generate_openrouter_missing_key_raises():
+    with pytest.raises(RuntimeError, match='OpenRouter'):
+        asyncio.run(title_card._generate_openrouter('openai/gpt-image-1', 'p', _REFS, ''))
+
+
+def test_generate_openrouter_error_status_raises(monkeypatch):
+    _install(monkeypatch, [_FakeResponse(500, text='boom')])
+    with pytest.raises(RuntimeError, match='500'):
+        asyncio.run(title_card._generate_openrouter('openai/gpt-image-1', 'p', _REFS, 'key'))
+
+
+def test_build_prompt_appends_text_block_verbatim():
+    prompt = title_card._build_prompt('Base instructions', '"Зимнее утро"\n"Пушкин"')
     assert prompt == 'Base instructions\n"Зимнее утро"\n"Пушкин"'
 
 
-def test_build_prompt_omits_blank_author():
-    prompt = title_card._build_prompt('Base instructions', 'Зимнее утро', '')
-    assert prompt == 'Base instructions\n"Зимнее утро"'
+def test_build_prompt_omits_blank_text_block():
+    prompt = title_card._build_prompt('Base instructions', '')
+    assert prompt == 'Base instructions'
+
+
+def test_build_prompt_includes_active_wishes_before_text_block():
+    prompt = title_card._build_prompt('Base instructions', '"Заголовок"', ['Больше контраста', 'Крупнее шрифт'])
+    assert prompt == (
+        'Base instructions\n\n'
+        'ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ — обязательно учесть:\n'
+        '1. Больше контраста\n2. Крупнее шрифт\n'
+        '"Заголовок"'
+    )
 
 
 def test_start_jobs_unknown_provider_fails_job(tmp_path, monkeypatch):
@@ -168,7 +262,7 @@ def test_start_jobs_unknown_provider_fails_job(tmp_path, monkeypatch):
 
     async def scenario():
         job_ids = title_card.start_jobs(
-            'poem-a', ['references/ref_1.png'], 'Title', 'Author', 'base', 1, 'unknownprovider:x', {'api_keys': {}},
+            'poem-a', ['references/ref_1.png'], '"Title"\n"Author"', 'base', 1, 'unknownprovider:x', {'api_keys': {}},
         )
         for _ in range(200):
             job = title_card.get_job(job_ids[0])

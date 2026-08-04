@@ -12,6 +12,7 @@ import UsagePill from '../UsagePill.jsx';
 const API_KEY_ROWS = [
   { key: 'replicate', name: 'Replicate' },
   { key: 'google', name: 'Google (Gemini)' },
+  { key: 'google_free', name: 'Google (Gemini) Free' },
   { key: 'fal', name: 'FAL' },
   { key: 'openrouter', name: 'OpenRouter' },
   { key: 'deepseek', name: 'DeepSeek' },
@@ -21,6 +22,7 @@ const API_KEY_ROWS = [
 
 const MODEL_PROVIDERS = [
   { id: 'google', name: 'Google (Gemini)' },
+  { id: 'google_free', name: 'Google (Gemini) Free' },
   { id: 'openrouter', name: 'OpenRouter' },
   { id: 'deepseek', name: 'DeepSeek' },
   { id: 'replicate', name: 'Replicate' },

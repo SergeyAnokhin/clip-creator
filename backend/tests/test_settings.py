@@ -26,7 +26,8 @@ def test_get_settings_returns_defaults(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body['api_keys'] == {
-        'replicate': '', 'google': '', 'fal': '', 'openrouter': '', 'deepseek': '', 'krea': '', 'google_translate': '',
+        'replicate': '', 'google': '', 'google_free': '', 'fal': '', 'openrouter': '', 'deepseek': '',
+        'krea': '', 'google_translate': '',
     }
     assert body['text_models'] == {'favorites': [], 'default': 'google:gemini-2.5-flash'}
     assert body['simple_models'] == {'favorites': [], 'default': ''}
