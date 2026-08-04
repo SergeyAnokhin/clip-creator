@@ -66,10 +66,15 @@ clear-to-`''` sticks). It's appended to the assembled prompt verbatim
 `reference_images`, persisted so the picks survive a reload.
 **TitleCardVariant**: `{variant_id, file_path, rating, is_selected,
 generated_at, model, aspect_ratio, cost, text_block, base_prompt,
-reference_image_paths}` — same `rating`/`is_selected`/`model`/`aspect_ratio`/
-`cost` shape as `Image` (`file_path` under `titlecard/` instead of `images/`),
-plus a snapshot of the text/prompt/references that produced it. `variants` is
-append-only; deleting one removes it from this array and unlinks its file.
+reference_image_paths, source_variant_id?}` — same `rating`/`is_selected`/
+`model`/`aspect_ratio`/`cost` shape as `Image` (`file_path` under
+`titlecard/` instead of `images/`), plus a snapshot of the text/prompt/
+references that produced it. `variants` is append-only; deleting one removes
+it from this array and unlinks its file. `source_variant_id` is only present
+on a "remove background" result (`title_card.remove_background` — see the API
+table below): it points at the original variant's `variant_id`, and the
+original is left untouched — background removal always **appends** a new
+variant rather than replacing one.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
@@ -84,11 +89,15 @@ One JSON object per line, append-only, one file per calendar month. Full
 field-by-field detail, cost-resolution rules, and how to instrument a new
 call site are in [usage-tracking.md](usage-tracking.md); summary:
 
-`{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
+`{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version,saved_amount?}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
 
-`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image|translate`.
+`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image|title_card|title_card_bg_remove|translate`.
 `cost.amount` is `null` (never `0`) when the price or usage units needed to
-compute it are unknown; `cost.source` is `provider|catalog|unknown`.
+compute it are unknown; `cost.source` is `provider|catalog|free|unknown`. A
+`google_free` call always resolves to `amount: 0`/`source: 'free'` (it's a
+free-tier API key, not a discount) — `cost.saved_amount` carries what the
+same call would have cost on the paid `google` catalog price, so it's visible
+without polluting any spend total. See [usage-tracking.md](usage-tracking.md).
 
 ## Settings (`settings.json`)
 
@@ -98,7 +107,9 @@ special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[]
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
 title_card_wish_library[]}`. `google_free` is a second Google Gemini API key (see `architecture.md`'s
-provider-seams section) - same models/calls as `google`, tracked/billed separately. Reads and
+provider-seams section) - same models/calls as `google`, but always priced at `$0`/`source: 'free'`
+in the usage ledger (see [usage-tracking.md](usage-tracking.md)) since it's a free-tier key, not a
+discount. Reads and
 writes merge over `DEFAULT_SETTINGS` in
 [`routers/settings.py`](../backend/app/routers/settings.py) (seed text for
 `suno_base_prompt`/`suno_reference_examples` comes from
@@ -143,7 +154,13 @@ partial merge server-side, so the frontend can persist e.g. just
 - `suno_reference_examples` — curated example style+lyrics blocks, sent
   alongside the base prompt as "reference, don't copy verbatim" material.
 - `suno_wish_library` — global, reusable wish "cards", each
-  `{id, title, text, created_at}`. `text` and `title` are both produced in a
+  `{id, title, text, created_at, use_count?}`. `use_count` is bumped by
+  `useSettings.js`'s `bumpWishUse` every time the wish is toggled *on* on the
+  Suno stage (client-side, via the regular partial `PUT /api/settings` — no
+  dedicated route) and drives the chip list's display order
+  (`lib/wishes.js`'s `sortByUseCount`, most-used first; missing/`0` sorts
+  last). A chip's "×" (`removeWishSnippet`) deletes the wish outright, same
+  partial-`PUT` mechanism. `text` and `title` are both produced in a
   single call to `clean_wish_and_title` on save — `text` is the tidied-up
   wish (not the user's raw input verbatim), `title` a short auto-generated
   label prefixed with one emoji (e.g. `"🎷 Больше саксофона"`) — real LLM
@@ -162,11 +179,14 @@ partial merge server-side, so the frontend can persist e.g. just
   No presets-to-load endpoint like Suno's — each is directly edited in
   Settings or in the compact panel on the Scenes stage itself.
 - `scene_wish_library` — global, reusable scene/imagery wish "cards", same
-  `{id, title, text, created_at}` shape and `clean_wish_and_title` flow as
-  `suno_wish_library`, but a **separate** list (`wish_library.add_or_get_wish`'s
-  `library_key` parameter picks which one) — scene wishes ("больше драмы",
-  "зимняя атмосфера") are a different domain from music/lyrics wishes. Each
-  project toggles a subset on via its own `active_scene_wish_ids` (see above).
+  `{id, title, text, created_at, use_count?}` shape (incl. the same
+  `use_count`/sort-by-popularity/delete-via-partial-`PUT` behaviour as
+  `suno_wish_library` above, via `bumpSceneWishUse`/`removeSceneWishSnippet`)
+  and `clean_wish_and_title` flow as `suno_wish_library`, but a **separate**
+  list (`wish_library.add_or_get_wish`'s `library_key` parameter picks which
+  one) — scene wishes ("больше драмы", "зимняя атмосфера") are a different
+  domain from music/lyrics wishes. Each project toggles a subset on via its
+  own `active_scene_wish_ids` (see above).
 - `request_timeout_seconds` — how long (seconds) a single outbound call to a
   text-model provider may run before being treated as a timeout; read by
   `suno.py`'s `_generate_via_*`, `scenes.py`'s `_generate_via_*` and
@@ -198,12 +218,16 @@ partial merge server-side, so the frontend can persist e.g. just
   `suno_wish_library`/`scene_wish_library`/`title_card_wish_library` which get
   their own routes because saving those also involves an LLM clean+title call.
 - `title_card_wish_library` — global, reusable poster-generation wish "cards",
-  same `{id, title, text, created_at}` shape and `clean_wish_and_title` flow
-  as `suno_wish_library`/`scene_wish_library`, but its own separate list
+  same `{id, title, text, created_at, use_count?}` shape and
+  `clean_wish_and_title` flow as `suno_wish_library`/`scene_wish_library`
+  (incl. the same `use_count` popularity sort), but its own separate list
   (`wish_library.add_or_get_wish`'s `library_key='title_card_wish_library'`).
   Each project toggles a subset on via its own `active_title_card_wish_ids`
   (see above); resolved wish texts are folded into the prompt ahead of the
-  stage's `text_block` (`title_card._build_prompt`).
+  stage's `text_block` (`title_card._build_prompt`). Unlike the other two
+  libraries, it isn't surfaced in `SettingsScreen.jsx` at all (only inline on
+  the Title Card stage), so its delete action (`removeTitleCardWishSnippet`)
+  lives in `useSettings.js` but is only wired up from `TitleCardStage.jsx`.
 - `pricing_overrides` — user-supplied AI price corrections, keyed by
   `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
   wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
@@ -264,12 +288,13 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |
 | `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', variant: TitleCardVariant\|null, error: str\|null, debug: {request, response}\|null}` — polled every 1.5s by the frontend (`useTitleCardStage.js`), same in-memory-only job state as scene images (a separate `title_card._jobs` dict). `debug` is a redacted snapshot of the actual provider request/response (reference-image bytes and inline result data replaced with `<... bytes>` placeholders; plain URLs kept) for the stage's debug panel |
 | `DELETE /api/projects/{id}/title-card/variants/{variant_id}` | → `{variants}` — removes one result from `project.title_card.variants` and deletes its file |
+| `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | → `{variant, variants}` — runs the variant through Replicate's `851-labs/background-remover` (`title_card.remove_background`) and **appends** the result as a new variant (`source_variant_id` pointing back at the original, which is left untouched); `404` if `variant_id` doesn't exist, `502` on a provider failure |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |
 | `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |
 | `GET /api/usage/summary` | Same filters + `group_by ∈ project\|task\|model\|provider\|day`, `tz_offset` → `{group_by, currency, groups[], totals}` |
-| `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls}` |
-| `GET /api/usage/period-totals` | `tz_offset` → `{currency, today, week, month, total}` — each a `{calls, errors, cost, unknown_cost_calls}` totals object; backs the header cost pill's expanded view |
+| `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls, saved_cost}` |
+| `GET /api/usage/period-totals` | `tz_offset` → `{currency, today, week, month, total}` — each a `{calls, errors, cost, unknown_cost_calls, saved_cost}` totals object; backs the header cost pill's expanded view. `saved_cost` is what every `google_free` call in that bucket would have cost at the paid rate — informational only, never added into `cost` |
 | `GET /api/usage/pricing` / `PUT /api/usage/pricing` | Merged price catalog `{pricing_version, currency, models[], overrides}` / body `{pricing_overrides}`, `422` on an invalid row. `models[]` also includes an unpriced row (`input`/`output`/`per_image: null`, `source: 'catalog'`) for every model in the persisted model catalog that isn't priced yet - so the Prices tab lists everything the Models tab has ever seen |
 
 Every generation route persists its result onto the project before returning,

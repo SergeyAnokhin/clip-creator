@@ -43,12 +43,14 @@ function App() {
     textModelDefault: settings.textModels.default,
     onAiCall: usage.actions.refreshToday,
     onWishLibraryChange: settings.actions.setWishLibrary,
+    onWishUsed: settings.actions.bumpWishUse,
   });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
     textModels: settings.textModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
     onSceneWishLibraryChange: settings.actions.setSceneWishLibrary,
+    onSceneWishUsed: settings.actions.bumpSceneWishUse,
   });
   const images = useImagesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
@@ -60,6 +62,7 @@ function App() {
     imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
     onTitleCardWishLibraryChange: settings.actions.setTitleCardWishLibrary,
+    onTitleCardWishUsed: settings.actions.bumpTitleCardWishUse,
   });
   // Depends on suno's refinement box, scenes' wish box and title card's wish box, so it must be created after them.
   const voice = useVoice({
@@ -121,6 +124,7 @@ function App() {
     actions: {
       ...suno.actions, startVoice: voice.startVoice,
       updateSunoBasePrompt: settings.actions.updateSunoBasePrompt,
+      onDeleteWish: settings.actions.removeWishSnippet,
     },
   };
 
@@ -143,6 +147,7 @@ function App() {
       updateSceneBasePromptNarrative: settings.actions.updateSceneBasePromptNarrative,
       updateSceneBasePromptAbstract: settings.actions.updateSceneBasePromptAbstract,
       setHideMotionPrompt: settings.actions.setHideMotionPrompt,
+      onDeleteSceneWish: settings.actions.removeSceneWishSnippet,
     },
   };
 
@@ -178,6 +183,7 @@ function App() {
       saveTitleCardBasePromptPreset: settings.actions.saveTitleCardBasePromptPreset,
       loadTitleCardBasePromptPreset: settings.actions.loadTitleCardBasePromptPreset,
       deleteTitleCardBasePromptPreset: settings.actions.deleteTitleCardBasePromptPreset,
+      onDeleteTitleCardWish: settings.actions.removeTitleCardWishSnippet,
       startVoice: voice.startVoice,
     },
   };

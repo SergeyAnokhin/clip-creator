@@ -191,6 +191,24 @@ def test_recompute_on_read_reflects_new_override(usage):
     assert overridden['records'][0]['cost']['amount'] == pytest.approx(5.0)
 
 
+def test_google_free_cost_is_zero_with_saved_amount(usage):
+    ctx = usage.context('wish_title', None, {})
+    usage.record(ctx, model='google_free:gemini-2.5-flash', kind='text', status='ok', duration_ms=1,
+                 units={'input_tokens': 1_000_000, 'output_tokens': 0})
+
+    rec = usage.query()['records'][0]
+    # google:gemini-2.5-flash's builtin price is 0.30/2.50 (see pricing.py) -
+    # google_free must never bill that, but the ledger still remembers what
+    # it would have cost as `saved_amount`.
+    assert rec['cost']['amount'] == 0.0
+    assert rec['cost']['source'] == 'free'
+    assert rec['cost']['saved_amount'] == pytest.approx(0.30)
+
+    totals = usage.query()['totals']
+    assert totals['cost'] == 0.0
+    assert totals['saved_cost'] == pytest.approx(0.30)
+
+
 def test_provider_reported_cost_is_never_recomputed(usage):
     ctx = usage.context('wish_title', None, {})
     usage.record(ctx, model='openrouter:openai/gpt-4o-mini', kind='text', status='ok', duration_ms=1,
@@ -264,6 +282,20 @@ def test_today_total_respects_timezone_offset(usage, tmp_path, monkeypatch):
     plus3_today = usage.today_total(tz_offset=180)  # UTC+3, "now" fixed at 10:00Z: 22:30Z is tomorrow locally
     assert plus3_today['calls'] == 0
     assert plus3_today['date'] == (fixed_now + datetime.timedelta(minutes=180)).strftime('%Y-%m-%d')
+
+
+def test_today_total_zeroes_google_free_cost_and_reports_saved(usage, tmp_path, monkeypatch):
+    import datetime
+    fixed_now = datetime.datetime(2026, 7, 15, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr(usage, '_utcnow', lambda: fixed_now)
+
+    ctx = usage.context('wish_title', None, {})
+    usage.record(ctx, model='google_free:gemini-2.5-flash', kind='text', status='ok', duration_ms=1,
+                 units={'input_tokens': 1_000_000, 'output_tokens': 0})
+
+    today = usage.today_total()
+    assert today['cost'] == 0.0
+    assert today['saved_cost'] == pytest.approx(0.30)
 
 
 def test_period_totals_splits_today_week_month_total(usage, tmp_path, monkeypatch):

@@ -24,6 +24,7 @@ const DEFAULT_SCENE_COUNT = 10;
  * stage. */
 export function useScenesStage({
   activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, textModels, imageModelsSimple, onAiCall, onSceneWishLibraryChange,
+  onSceneWishUsed,
 }) {
   const [sceneTextModel, setSceneTextModel] = useState(textModels.default || '');
   const [sceneImageModel, setSceneImageModel] = useState(imageModelsSimple?.default || '');
@@ -125,7 +126,9 @@ export function useScenesStage({
   function toggleSceneWish(wishId) {
     updateProject((p) => {
       const active = p.active_scene_wish_ids || [];
-      const next = active.includes(wishId) ? active.filter((id) => id !== wishId) : [...active, wishId];
+      const isActivating = !active.includes(wishId);
+      const next = isActivating ? [...active, wishId] : active.filter((id) => id !== wishId);
+      if (isActivating) onSceneWishUsed?.(wishId);
       return { ...p, active_scene_wish_ids: next };
     });
   }

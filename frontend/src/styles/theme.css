@@ -520,13 +520,13 @@
 }
 
 .modal-card-lg {
-  max-width: min(900px, 92vw);
+  max-width: min(1600px, 96vw);
 }
 
 .lightbox-image {
   display: block;
   width: 100%;
-  max-height: 78vh;
+  max-height: 92vh;
   object-fit: contain;
   border-radius: 12px;
 }
@@ -1387,6 +1387,90 @@
   cursor: pointer;
   padding: 0;
   display: flex;
+}
+
+/* ---------- Title Card gallery (all variants shown at once) ---------- */
+
+.titlecard-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.titlecard-gallery-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.titlecard-gallery-frame {
+  position: relative;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.07),
+    rgba(255, 255, 255, 0.07) 8px,
+    rgba(255, 255, 255, 0.02) 8px,
+    rgba(255, 255, 255, 0.02) 16px
+  );
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+}
+
+.titlecard-gallery-frame.is-main {
+  border-color: var(--accent);
+}
+
+.titlecard-gallery-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.titlecard-gallery-bg-btn {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.titlecard-gallery-bg-btn:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.titlecard-gallery-bg-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.titlecard-gallery-caption {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.titlecard-gallery-caption strong {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.titlecard-gallery-prompt {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- Settings ---------- */

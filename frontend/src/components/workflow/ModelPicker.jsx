@@ -1,5 +1,16 @@
 import { priceLabel } from '../../lib/pricing.js';
 
+/** Short provider tag shown in front of each option's label, so models from
+ * different providers (and critically, free vs. paid Google Gemini) can be
+ * told apart at a glance - native <option> text can't be partially colored
+ * or sized, so a plain-text bracket prefix is the only thing that actually
+ * renders inside a <select> popup. Mirrors the provider names
+ * SettingsScreen.jsx's MODEL_PROVIDERS list uses, just shortened. */
+const _PROVIDER_TAG = {
+  google: 'Google', google_free: 'Google Free', openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek', replicate: 'Replicate', fal: 'FAL', krea: 'Krea',
+};
+
 /** Compact dropdown over a settings favorites list ({provider, id, label}[]),
  * used to pick which of the user's favorited models a specific generation
  * call should use, instead of always silently falling back to the settings
@@ -20,8 +31,9 @@ export default function ModelPicker({ favorites, value, onChange, emptyLabel, pr
     >
       {favorites.map((f) => {
         const composite = `${f.provider}:${f.id}`;
+        const tag = _PROVIDER_TAG[f.provider] || f.provider;
         const suffix = prices && L ? ` · ${priceLabel(prices[composite], L)}` : '';
-        return <option key={composite} value={composite}>{f.label}{suffix}</option>;
+        return <option key={composite} value={composite}>[{tag}] {f.label}{suffix}</option>;
       })}
     </select>
   );

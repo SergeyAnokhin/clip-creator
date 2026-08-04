@@ -186,6 +186,21 @@ def _resolved_cost(rec: dict, overrides: dict | None) -> dict:
     cost = rec.get('cost') or {}
     if cost.get('source') == 'provider':
         return cost
+    # A google_free call is genuinely free - it must never contribute to a
+    # spend total, no matter what the aliased 'google:' catalog price would
+    # otherwise say (see pricing._PROVIDER_PRICE_ALIAS). That aliased number
+    # is still worth surfacing separately as "money this call would have
+    # cost on the paid tier", so it's kept as `saved_amount` rather than
+    # thrown away.
+    if rec.get('provider') == 'google_free':
+        saved_amount, saved_source = pricing.compute_cost(rec.get('model', ''), rec.get('units'), overrides)
+        return {
+            'amount': 0.0,
+            'currency': cost.get('currency', pricing.CURRENCY),
+            'source': 'free',
+            'pricing_version': pricing.PRICING_VERSION if saved_source == 'catalog' else None,
+            'saved_amount': saved_amount,
+        }
     amount, source = pricing.compute_cost(rec.get('model', ''), rec.get('units'), overrides)
     return {
         'amount': amount,
@@ -219,9 +234,12 @@ def _totals(records: list) -> dict:
     errors = sum(1 for r in records if r.get('status') == 'error')
     cost_sum = sum(r['cost']['amount'] for r in records if r['cost'].get('amount') is not None)
     unknown = sum(1 for r in records if r['cost'].get('amount') is None)
+    # What every google_free call in this set would have cost on the paid
+    # tier - purely informational, never added into `cost` above.
+    saved_sum = sum(r['cost'].get('saved_amount') or 0 for r in records)
     return {
         'calls': calls, 'errors': errors, 'cost': cost_sum,
-        'currency': pricing.CURRENCY, 'unknown_cost_calls': unknown,
+        'currency': pricing.CURRENCY, 'unknown_cost_calls': unknown, 'saved_cost': saved_sum,
     }
 
 
@@ -326,6 +344,7 @@ def today_total(tz_offset: int = 0, overrides: dict | None = None) -> dict:
     return {
         'date': today_str, 'cost': totals['cost'], 'currency': pricing.CURRENCY,
         'calls': totals['calls'], 'unknown_cost_calls': totals['unknown_cost_calls'],
+        'saved_cost': totals['saved_cost'],
     }
 
 

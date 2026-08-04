@@ -120,10 +120,15 @@ without knowing whether the result is canned or real. Keys come from
 `google_free` is a second Google Gemini provider id, wired everywhere
 `google` is (same Gemini/Imagen calls, same models) but resolved against its
 own `settings.api_keys.google_free` — lets a free-tier Gemini token and a
-paid one be tracked/billed separately without touching call logic. Wherever
+paid one be tracked separately without touching call logic. Wherever
 this doc says "`provider` is `google`", read that as "`google` or
 `google_free`"; `pricing.py` aliases `google_free:<model_id>` price lookups
-to the `google:<model_id>` row so both share one price catalog entry.
+to the `google:<model_id>` row so both share one price catalog entry — but
+`usage._resolved_cost` special-cases `provider == 'google_free'` to always
+report `$0`/`source: 'free'` rather than that aliased paid-tier price (a
+free-tier key means the call is actually free, not merely tracked apart);
+the aliased price is kept alongside as `cost.saved_amount` purely as an
+informational "money saved" figure — see [usage-tracking.md](usage-tracking.md).
 
 - `suno.generate` recomputes the raw structured lyrics from the project's
   *current* blocks every time (so Lyrics-stage edits always show up), then:
@@ -401,6 +406,10 @@ to the `google:<model_id>` row so both share one price catalog entry.
     `black-forest-labs/flux-kontext-pro` takes exactly one `input_image`,
     which doesn't fit this stage's "up to 4 references" shape, so it's
     deliberately left unwired here rather than silently dropping references.
+    Replicate *is* used for one single-image, non-generation call this stage
+    makes: `851-labs/background-remover` (see the "remove background" bullet
+    below) — that's a plain image edit, not a multi-reference generation, so
+    the constraint above doesn't apply to it.
   - `POST /api/projects/{id}/title-card/generate` (`{text_block, base_prompt,
     reference_image_paths, model, aspect_ratio?, count?,
     active_title_card_wish_ids?}`) validates every reference path resolves
@@ -410,12 +419,25 @@ to the `google:<model_id>` row so both share one price catalog entry.
     `debug: {request, response} | null` field — see below). `DELETE
     .../title-card/variants/{variant_id}` removes one result (drops it from
     `project.title_card.variants`, deletes its file).
+  - "Remove background" (`POST
+    .../title-card/variants/{variant_id}/remove-background`, `title_card.
+    remove_background`) sends one existing variant's image bytes to
+    Replicate's `851-labs/background-remover` (base64 data URI in,
+    `background_type: 'rgba'`, same predict-and-poll shape as `images.py`'s
+    `_generate_replicate`) and **appends** the transparent-background result
+    as a new variant — `source_variant_id` points back at the original,
+    which is left untouched. Awaited directly by the route (no job/poll
+    round-trip on the frontend, since it's one call, not `count` of them);
+    priced off `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover`
+    row, ledger task `title_card_bg_remove`.
   - A completed job writes to `titlecard/{shorthex}.{png|jpg|webp}` (parallel
     to `images/`/`references/`) and appends a variant — same
     `rating`/`is_selected`/`model`/`aspect_ratio`/`cost` fields as a scene
-    `Image`, so the frontend reuses `ImageCarousel`'s star-rating row and
-    `pickMainByRating` unmodified — plus `text_block`/`base_prompt`/
-    `reference_image_paths`, a snapshot of what produced it.
+    `Image` (`pickMainByRating` reused unmodified), plus `text_block`/
+    `base_prompt`/`reference_image_paths`, a snapshot of what produced it
+    (and `source_variant_id` for a "remove background" result — see below).
+    The frontend shows every variant at once in `TitleCardGallery.jsx`'s grid
+    rather than paging through them like `ImageCarousel.jsx` does elsewhere.
   - Uploading a custom reference image reuses the existing
     `POST/DELETE /api/projects/{id}/reference-images` endpoints unchanged
     (lands in `project.reference_images`, selectable into any of the 4 slots)

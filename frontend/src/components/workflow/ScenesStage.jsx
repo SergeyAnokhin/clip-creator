@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Mic, MicOff, Minus, Plus, Sparkles, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Mic, MicOff, Minus, Plus, Sparkles, X, Zap } from 'lucide-react';
 import SceneTextCard from './SceneTextCard.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import { formatCost, formatTokens } from '../../lib/pricing.js';
+import { sortByUseCount } from '../../lib/wishes.js';
 
 /** `12с` / `1м 05с` (or the EN `12s` / `1m 05s`) - shared unit labels with
  * SunoStage.jsx's own formatDuration, reused here rather than duplicated
@@ -196,15 +197,23 @@ export default function ScenesStage({
         )}
         {!!sceneWishLibrary?.length && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            {sceneWishLibrary.map((wish) => (
-              <button
-                key={wish.id}
-                className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
-                title={wish.text}
-                onClick={() => actions.toggleSceneWish(wish.id)}
-              >
-                {wish.title}
-              </button>
+            {sortByUseCount(sceneWishLibrary).map((wish) => (
+              <span key={wish.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
+                  title={wish.text}
+                  onClick={() => actions.toggleSceneWish(wish.id)}
+                >
+                  {wish.title}
+                </button>
+                <button
+                  className="icon-btn" style={{ width: 20, height: 20 }}
+                  title={L.wish_deleteTitle}
+                  onClick={() => actions.onDeleteSceneWish(wish.id)}
+                >
+                  <X size={10} />
+                </button>
+              </span>
             ))}
           </div>
         )}

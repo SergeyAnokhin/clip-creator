@@ -67,6 +67,9 @@ _KREA_NANO_BANANA_PRO_ID = 'google/nano-banana-pro'
 _FAL_BASE = 'https://queue.fal.run'
 _FAL_NANO_BANANA_EDIT_ID = 'fal-ai/nano-banana/edit'
 _OPENROUTER_IMAGES_URL = 'https://openrouter.ai/api/v1/images'
+_REPLICATE_BASE = 'https://api.replicate.com/v1'
+_REPLICATE_BG_REMOVER_ID = '851-labs/background-remover'
+_BG_REMOVE_MODEL = f'replicate:{_REPLICATE_BG_REMOVER_ID}'
 
 _POLL_INTERVAL = 2.0
 _JOB_TIMEOUT = 300.0
@@ -334,6 +337,61 @@ _GENERATORS = {
 _jobs: dict[str, dict] = {}
 
 
+async def _generate_background_remover(
+    image_bytes: bytes, ext: str, api_key: str, usage_out: dict | None = None,
+) -> tuple[bytes, str]:
+    """Replicate's `851-labs/background-remover` (see the memory note this
+    feature was planned from): a single `image` input (URL or base64 data
+    URI), `background_type: 'rgba'` for a transparent cutout. Same
+    predict-and-poll shape as `images.py`'s `_generate_replicate` - the
+    shorthand `models/{owner}/{name}/predictions` endpoint needs no `version`
+    field for an official model id."""
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Replicate')
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    data_uri = f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(image_bytes).decode()}'
+    input_body = {'image': data_uri, 'background_type': 'rgba', 'format': 'png'}
+    debug_request = {
+        'url': f'{_REPLICATE_BASE}/models/{_REPLICATE_BG_REMOVER_ID}/predictions',
+        'input': {**input_body, 'image': f'<image data, {len(image_bytes)} bytes>'},
+    }
+
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        resp = await http_client.post(
+            f'{_REPLICATE_BASE}/models/{_REPLICATE_BG_REMOVER_ID}/predictions',
+            headers=headers, json={'input': input_body},
+        )
+    if resp.status_code not in (200, 201):
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
+        raise RuntimeError(f'Replicate API вернул {resp.status_code}: {resp.text[:300]}')
+    data = resp.json()
+    get_url = data['urls']['get']
+
+    deadline = time.monotonic() + _JOB_TIMEOUT
+    while data.get('status') not in ('succeeded', 'failed', 'canceled'):
+        if time.monotonic() > deadline:
+            raise RuntimeError('Replicate: превышено время ожидания генерации')
+        await asyncio.sleep(_POLL_INTERVAL)
+        async with httpx.AsyncClient(timeout=30) as http_client:
+            poll = await http_client.get(get_url, headers=headers)
+        if poll.status_code != 200:
+            raise RuntimeError(f'Replicate API (poll) вернул {poll.status_code}: {poll.text[:300]}')
+        data = poll.json()
+
+    if usage_out is not None:
+        usage_out['debug'] = {'request': debug_request, 'response': data}
+    if data.get('status') != 'succeeded':
+        raise RuntimeError(f'Replicate: {data.get("error") or data.get("status")}')
+    output = data.get('output')
+    url = output[0] if isinstance(output, list) else output
+    if not url:
+        raise RuntimeError('Replicate: задание завершено, но результат пуст')
+    if usage_out is not None:
+        usage_out['compute_seconds'] = (data.get('metrics') or {}).get('predict_time')
+    return await _download(url)
+
+
 def _build_prompt(base_prompt: str, text_block: str, active_wishes: list[str] | None = None) -> str:
     wishes_block = ''
     if active_wishes:
@@ -438,3 +496,70 @@ def start_jobs(
 
 def get_job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
+
+
+async def remove_background(
+    slug: str, variant_id: str, settings: dict, usage_ctx: dict | None = None,
+) -> dict:
+    """Runs one existing variant through `_generate_background_remover` and
+    appends the result as a **new** variant (`source_variant_id` pointing back
+    at the original) - the source variant is left untouched, matching the
+    "creates a copy" behaviour the user asked for. Synchronous (awaited
+    directly by the route, no job/poll dance) since it's a single call, not a
+    batch of `count` - the caller just shows a per-button spinner while this
+    resolves. Raises `ValueError` if `variant_id` doesn't exist (mapped to a
+    404 by the route)."""
+    project = storage.load_project(slug)
+    if project is None:
+        raise ValueError('Project not found')
+    variants = (project.get('title_card') or {}).get('variants', [])
+    source = next((v for v in variants if v.get('variant_id') == variant_id), None)
+    if source is None:
+        raise ValueError('Variant not found')
+
+    file_path = storage.project_dir(slug) / source['file_path']
+    ext = file_path.suffix.removeprefix('.').lower() or 'png'
+    api_key = (settings.get('api_keys') or {}).get('replicate', '')
+
+    started = time.monotonic()
+    provider_usage: dict = {}
+    try:
+        console_log.log_request_start(_BG_REMOVE_MODEL, 'image', usage_ctx.get('task') if usage_ctx else None)
+        content, out_ext = await _generate_background_remover(
+            file_path.read_bytes(), ext, api_key, usage_out=provider_usage,
+        )
+    except Exception as exc:
+        usage.record(usage_ctx, model=_BG_REMOVE_MODEL, kind='image', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=source['file_path'], error=str(exc))
+        raise RuntimeError(str(exc)) from exc
+
+    titlecard_dir = storage.project_dir(slug) / 'titlecard'
+    titlecard_dir.mkdir(parents=True, exist_ok=True)
+    new_variant_id = f'tc_{uuid4().hex[:8]}'
+    filename = f'{new_variant_id.removeprefix("tc_")}.{out_ext}'
+    (titlecard_dir / filename).write_bytes(content)
+
+    units = {'images': 1, **{k: v for k, v in provider_usage.items() if k not in ('debug',)}}
+    cost, _ = pricing.compute_cost(_BG_REMOVE_MODEL, units, (usage_ctx or {}).get('pricing_overrides'))
+    new_variant = {
+        'variant_id': new_variant_id, 'file_path': f'titlecard/{filename}',
+        'rating': 0, 'is_selected': False, 'generated_at': _now(),
+        'model': _BG_REMOVE_MODEL, 'aspect_ratio': source.get('aspect_ratio'), 'cost': cost,
+        'text_block': source.get('text_block'), 'base_prompt': source.get('base_prompt'),
+        'reference_image_paths': source.get('reference_image_paths', []),
+        'source_variant_id': variant_id,
+    }
+
+    async with storage.project_lock(slug):
+        project = storage.load_project(slug)
+        title_card = project.get('title_card') or {}
+        current_variants = [*title_card.get('variants', []), new_variant]
+        title_card['variants'] = current_variants
+        project['title_card'] = title_card
+        project['updated_at'] = _now()
+        storage.save_project(slug, project)
+
+    usage.record(usage_ctx, model=_BG_REMOVE_MODEL, kind='image', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000),
+                 units=units, prompt=source['file_path'], response=new_variant['file_path'])
+    return {'variant': new_variant, 'variants': current_variants}

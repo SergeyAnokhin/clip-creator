@@ -7,6 +7,7 @@ import { api } from '../api/client.js';
  * more UI to change it. */
 export function useSunoStage({
   activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, onAiCall, onWishLibraryChange,
+  onWishUsed,
 }) {
   const [skillId, setSkillId] = useState('skill_a');
   const [refinementText, setRefinementText] = useState('');
@@ -77,7 +78,9 @@ export function useSunoStage({
   function toggleWish(wishId) {
     updateProject((p) => {
       const active = p.active_wish_ids || [];
-      const next = active.includes(wishId) ? active.filter((id) => id !== wishId) : [...active, wishId];
+      const isActivating = !active.includes(wishId);
+      const next = isActivating ? [...active, wishId] : active.filter((id) => id !== wishId);
+      if (isActivating) onWishUsed?.(wishId);
       return { ...p, active_wish_ids: next };
     });
   }

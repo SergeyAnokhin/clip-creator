@@ -39,7 +39,7 @@ Price row shapes:
     image: {'kind': 'image', 'per_image': USD per generated image}
 """
 
-PRICING_VERSION = '2026-07-31'
+PRICING_VERSION = '2026-08-04'
 CURRENCY = 'USD'
 
 TOKENS_PER_UNIT = 1_000_000
@@ -143,6 +143,11 @@ BUILTIN_PRICING: dict[str, dict] = {
     'replicate:recraft-ai/recraft-v3': {'kind': 'image', 'per_image': 0.04},
     'replicate:anthropic/claude-3.7-sonnet': {'kind': 'text', 'input': 3.00, 'output': 15.00},
     'replicate:deepseek-ai/deepseek-r1': {'kind': 'text', 'input': 3.75, 'output': 10.00},
+    # replicate.com/851-labs/background-remover's own page (2026-08): "This
+    # model costs approximately $0.00044 to run on Replicate, or 2272 runs
+    # per $1." Used by the Title Card stage's "remove background" button
+    # (providers/title_card.py's remove_background).
+    'replicate:851-labs/background-remover': {'kind': 'image', 'per_image': 0.00044},
 
     # ---- FAL: fal.ai's model-comparison pricing page (pasted by the user) +
     # each model's own page for the exact `fal-ai/...` id (the comparison

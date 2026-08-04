@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, Loader2, MessageSquare, Mic, MicOff, Sparkles, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Loader2, MessageSquare, Mic, MicOff, Sparkles, X, Zap } from 'lucide-react';
 import ModelPicker from './ModelPicker.jsx';
 import { buildSunoPromptPreview, groupPresetsByService } from '../../lib/sunoPrompt.js';
 import { estimateCost, estimateTokensFromChars, formatCost, formatTokens } from '../../lib/pricing.js';
+import { sortByUseCount } from '../../lib/wishes.js';
 import { TYPE_COLORS } from '../../i18n/dict.js';
 
 const _TAG_COLOR_DEFAULT = '#ff9d5c';
@@ -289,15 +290,23 @@ export default function SunoStage({
         </div>
         {!!wishLibrary?.length && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            {wishLibrary.map((wish) => (
-              <button
-                key={wish.id}
-                className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
-                title={wish.text}
-                onClick={() => actions.toggleWish(wish.id)}
-              >
-                {wish.title}
-              </button>
+            {sortByUseCount(wishLibrary).map((wish) => (
+              <span key={wish.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
+                  title={wish.text}
+                  onClick={() => actions.toggleWish(wish.id)}
+                >
+                  {wish.title}
+                </button>
+                <button
+                  className="icon-btn" style={{ width: 20, height: 20 }}
+                  title={L.wish_deleteTitle}
+                  onClick={() => actions.onDeleteWish(wish.id)}
+                >
+                  <X size={10} />
+                </button>
+              </span>
             ))}
           </div>
         )}

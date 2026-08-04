@@ -38,7 +38,8 @@ def test_list_records_empty(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body == {'records': [], 'total': 0, 'limit': 100, 'offset': 0,
-                     'totals': {'calls': 0, 'errors': 0, 'cost': 0, 'currency': 'USD', 'unknown_cost_calls': 0}}
+                     'totals': {'calls': 0, 'errors': 0, 'cost': 0, 'currency': 'USD', 'unknown_cost_calls': 0,
+                                'saved_cost': 0}}
 
 
 def test_list_records_and_filters(client):

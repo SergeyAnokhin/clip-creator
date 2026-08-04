@@ -50,7 +50,7 @@ export default function ImageLightbox({ L, projectId, images, initialIndex = 0, 
   }
 
   const image = images[index];
-  const hasMeta = image.model || image.cost != null || image.aspect_ratio || naturalSize;
+  const hasMeta = image.model || image.cost != null || image.aspect_ratio || image.base_prompt || naturalSize;
 
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
@@ -86,6 +86,11 @@ export default function ImageLightbox({ L, projectId, images, initialIndex = 0, 
             {image.cost != null && <span><span className="lightbox-meta-label">{L.lightboxCost}:</span> {formatCost(image.cost)}</span>}
             {image.aspect_ratio && <span><span className="lightbox-meta-label">{L.lightboxAspectRatio}:</span> {image.aspect_ratio}</span>}
             {naturalSize && <span><span className="lightbox-meta-label">{L.lightboxResolution}:</span> {naturalSize.w}×{naturalSize.h}</span>}
+            {image.base_prompt && (
+              <span style={{ flexBasis: '100%' }}>
+                <span className="lightbox-meta-label">{L.lightboxBasePrompt}:</span> {image.base_prompt}
+              </span>
+            )}
           </div>
         )}
       </div>

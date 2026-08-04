@@ -278,3 +278,78 @@ def test_start_jobs_unknown_provider_fails_job(tmp_path, monkeypatch):
 
 def test_get_job_unknown_id_returns_none():
     assert title_card.get_job('does-not-exist') is None
+
+
+def test_generate_background_remover_sends_data_uri_and_polls_to_completion(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'p1', 'status': 'starting', 'urls': {'get': 'https://api.replicate.com/v1/predictions/p1'}}),
+        _FakeResponse(200, {'status': 'succeeded', 'output': 'https://cdn.example/out.png', 'urls': {'get': 'https://x'}}),
+        _FakeResponse(200, content=b'PNGDATA', headers={'content-type': 'image/png'}),
+    ])
+
+    content, ext = asyncio.run(title_card._generate_background_remover(b'SOURCEDATA', 'png', 'test-key'))
+
+    assert content == b'PNGDATA'
+    assert ext == 'png'
+    first_call = fake_client.calls[0]
+    assert first_call['url'] == 'https://api.replicate.com/v1/models/851-labs/background-remover/predictions'
+    assert first_call['headers']['Authorization'] == 'Bearer test-key'
+    assert first_call['json']['input']['background_type'] == 'rgba'
+    assert first_call['json']['input']['image'].startswith('data:image/png;base64,')
+
+
+def test_generate_background_remover_missing_key_raises():
+    with pytest.raises(RuntimeError, match='Replicate'):
+        asyncio.run(title_card._generate_background_remover(b'x', 'png', ''))
+
+
+@pytest.fixture
+def usage_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import usage as usage_module
+    return usage_module
+
+
+def test_remove_background_appends_copy_and_leaves_source_untouched(tmp_path, monkeypatch, usage_ledger):
+    from app import storage
+
+    tc_dir = storage.project_dir('poem-a') / 'titlecard'
+    tc_dir.mkdir(parents=True)
+    (tc_dir / 'src.png').write_bytes(b'SOURCEDATA')
+    source_variant = {
+        'variant_id': 'tc_src1', 'file_path': 'titlecard/src.png', 'rating': 0, 'is_selected': False,
+        'generated_at': '', 'model': 'google:gemini-3.1-flash-image', 'aspect_ratio': '16:9', 'cost': 0.04,
+        'text_block': '"T"\n"A"', 'base_prompt': 'base', 'reference_image_paths': ['references/ref_1.png'],
+    }
+    storage.save_project('poem-a', {'id': 'poem-a', 'title_card': {'variants': [source_variant]}})
+
+    _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'p1', 'status': 'succeeded', 'output': 'https://cdn.example/out.png', 'urls': {'get': 'https://x'}}),
+        _FakeResponse(200, content=b'REMOVEDBG', headers={'content-type': 'image/png'}),
+    ])
+
+    ctx = usage_ledger.context('title_card_bg_remove', 'poem-a', {})
+    result = asyncio.run(title_card.remove_background('poem-a', 'tc_src1', {'api_keys': {'replicate': 'k'}}, usage_ctx=ctx))
+
+    assert len(result['variants']) == 2
+    new_variant = result['variant']
+    assert new_variant['source_variant_id'] == 'tc_src1'
+    assert new_variant['model'] == 'replicate:851-labs/background-remover'
+    assert new_variant['base_prompt'] == 'base'
+    assert new_variant['text_block'] == '"T"\n"A"'
+    assert new_variant['is_selected'] is False
+    new_file = storage.project_dir('poem-a') / new_variant['file_path']
+    assert new_file.read_bytes() == b'REMOVEDBG'
+    # Source variant/file untouched.
+    project = storage.load_project('poem-a')
+    assert project['title_card']['variants'][0] == source_variant
+    assert (storage.project_dir('poem-a') / 'titlecard' / 'src.png').read_bytes() == b'SOURCEDATA'
+
+
+def test_remove_background_unknown_variant_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import storage
+    storage.save_project('poem-a', {'id': 'poem-a', 'title_card': {'variants': []}})
+
+    with pytest.raises(ValueError, match='Variant not found'):
+        asyncio.run(title_card.remove_background('poem-a', 'does-not-exist', {'api_keys': {}}))

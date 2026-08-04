@@ -1,7 +1,8 @@
 # AI usage & cost tracking
 
 Every paid AI call the backend makes (Suno text generation, wish-title
-completion, scene storyboard generation, scene image generation, prompt
+completion, scene storyboard generation, scene image generation, title card
+generation, title card background removal, prompt
 translation) is recorded to a local ledger with
 tokens/images/characters, a computed cost, and short previews of the prompt/response.
 The frontend reads that ledger for a "Расходы"/"Usage" screen, a
@@ -43,13 +44,13 @@ bounds how much has to be read for a "today" or date-ranged query.
 | --- | --- | --- |
 | `id` | str | `u_` + 12 hex chars |
 | `ts` | str | UTC ISO-8601, `…Z` |
-| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `translate` |
+| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `title_card` \| `title_card_bg_remove` \| `translate` |
 | `project_id` | str \| null | The project slug (= "стих"); `null` for `wish_title` calls made from the Settings → Wishes tab (library-only, no project); set for `wish_title` calls made from a project's Suno stage ("Применить"). Always `null` for `translate` — the "translate" button isn't tied to any one project's stored state |
 | `provider`, `model_id`, `model` | str | `model` is the `"{provider}:{model_id}"` composite, denormalized for grouping |
 | `status` | str | `ok` \| `error` |
 | `duration_ms` | int | Wall-clock around the provider call |
 | `units` | dict | `{kind, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, total_tokens, images, compute_seconds, characters}` — fields the provider didn't report are `null`/absent, not `0`; `characters` is `translate`-only (input length) |
-| `cost` | dict | `{amount, currency, source, pricing_version}` — see below |
+| `cost` | dict | `{amount, currency, source, pricing_version, saved_amount?}` — see below |
 | `prompt_preview`, `response_preview` | str | First 300 chars (see "Preview convention") |
 | `prompt_chars`, `response_chars` | int | True length of what was actually sent/received |
 | `error` | str \| null | Truncated to 300 chars |
@@ -71,6 +72,16 @@ or the units needed to compute it are missing; `cost.source` is one of:
   return the token/image counts needed. Every summary carries a separate
   `unknown_cost_calls` count so a total is never read as "the whole truth"
   when part of it is missing.
+- `free` — the call went out through the `google_free` provider (a free-tier
+  Google Gemini API key, separate from the paid `google` one — see
+  `pricing._PROVIDER_PRICE_ALIAS`). `amount` is always `0`, never the
+  aliased paid-tier price, so it can never inflate a spend total; the paid
+  price it would have cost is kept alongside as `cost.saved_amount` (rolled
+  up into every totals object's `saved_cost` field — `_totals`,
+  `today_total`, `period_totals`, `summarize`'s overall totals) purely as an
+  informational "money saved" figure, shown in `UsagePill.jsx`'s expanded
+  popover and `UsageSummary.jsx`'s totals row. This is computed in
+  `usage._resolved_cost` on every read, same as the `catalog` case above.
 
 **Preview convention.** `prompt_preview`/`response_preview` are the text that
 makes a call *distinguishable*, not necessarily the literal bytes sent. For
@@ -215,6 +226,7 @@ ones someone has already priced.
 | FAL (`images.py`) | `payload.timings.inference` | Same treatment as Replicate |
 | Krea, Google Imagen (`images.py`) | none | `units: {images: 1}` only, catalog-priced |
 | OpenRouter images (`images.py`) | `data.usage.cost` | Exact USD, `source: 'provider'` — same treatment as OpenRouter text |
+| Replicate background remover (`title_card.py`'s `remove_background`/`_generate_background_remover`) | none | `units: {images: 1}` only, catalog-priced off `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover` row (`$0.00044`/run, replicate.com's own page) — the Title Card stage's "remove background" button, task `title_card_bg_remove` |
 | Google Translate (`providers/translate.py`) | none | `units: {characters: len(text)}` only — `pricing.py` has no per-character row shape, so cost always reads `unknown` unless a manual override is entered for `google_translate:v2` |
 
 `text_models.list_models` / `image_models.list_models` (the Settings
@@ -264,12 +276,12 @@ panel only has whatever `POST .../suno/generate` returns.
 | --- | --- |
 | [`lib/pricing.js`](../frontend/src/lib/pricing.js) | Pure: `formatCost`, `formatTokens`, `estimateCost`, `priceLabel`, `modelPriceMap` — vitest-covered in `pricing.test.js` |
 | [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `periodTotals` loads lazily via `loadPeriodTotals` (called when the pill first expands); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
-| [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared header cost pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header. Collapsed: today's spend only. Click: expands an in-place popover with today/week/month/all-time and an "Все расходы →" link — that link is the only way to reach the full Usage screen from here |
+| [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared header cost pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header. Collapsed: today's spend only. Click: expands an in-place popover with today/week/month/all-time and an "Все расходы →" link — that link is the only way to reach the full Usage screen from here. Also shows a "Сэкономлено сегодня" line when `periodTotals.today.saved_cost > 0` (a `google_free` call happened today) |
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |
 | [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog, and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
 | `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50`, `· $0.04 за кадр`, or `price ?` — the token price needs no unit suffix since "per 1M" is the only unit used app-wide, but the image price keeps `L.price_perImage` since that unit isn't obvious). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
 | `components/workflow/SunoStage.jsx`'s `UsageSummaryLine` | Compact, icon-led strip (🔤 tokens in→out, 💰 cost - `≈` prefix means estimated/`cost.source !== 'provider'`, no prefix means the provider billed that exact amount, 🕐 finish time, ⏱ response time) rendered from `lastDebug.usage` + a client-stamped `lastDebug.completedAt`. Sits directly under the debug panel's title and is shown **regardless of whether the panel itself is expanded** (`DebugPanel`'s `hasUsage` check) - the whole point is not needing to open raw JSON to see what a call cost |
-| `useSunoStage.js`'s `elapsedSeconds` / `sunoError` | `elapsedSeconds`: a `setInterval`-driven ticking counter, started/stopped by a `sunoLoading` effect (not managed inside `generateSuno()` itself, so it can't drift out of sync with the loading spinner) — shown next to the "⏳ Генерация текста и стиля..." line while a generate call is in flight. `sunoError`: unlike the toast (which auto-dismisses after a few seconds), this is rendered in the same spot the loading line occupies and **persists until the next `generateSuno()` call** clears it — a timeout or provider error stays visible instead of flashing past. Both the toast and this persistent line show the same message (`err.detail`, see below); the failure is also `console.error`'d for devtools visibility |
+| `useSunoStage.js`'s `elapsedSeconds` / `sunoError` | `elapsedSeconds`: a `setInterval`-driven ticking counter, started/stopped by a `sunoLoading` effect (not managed inside `generateSuno()` itself, so it can't drift out of sync with the loading spinner) — shown next to the "⏳ Генерация текста и стиля..." line while a generate call is in flight. `sunoError`: unlike the toast (which auto-dismisses after a few seconds), this is rendered in the same spot the loading line occupies and **persists until the next `generateSuno()` call** clears it — a timeout or provider error stays visible instead of flashing past. Both the toast and this persistent line show the same message (`err.detail`, see below); the failure is also `console.error`'d for devtools visibility. `useTitleCardStage.js`'s `elapsedSeconds`/`titleCardError` mirror this exact pattern (keyed off `generating` instead of `sunoLoading`), rendered under the "Сгенерировать афишу" button in `TitleCardStage.jsx` |
 
 **Navigation note.** The Usage screen is reachable from all three top-level
 screens (home/workflow/settings), including Settings itself. `App.jsx` keeps

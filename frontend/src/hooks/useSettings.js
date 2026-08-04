@@ -270,6 +270,33 @@ export function useSettings({ showToast, onAiCall }) {
       .catch(() => showToast(L.toast_saveFailed));
   }
 
+  function removeTitleCardWishSnippet(id) {
+    const next = titleCardWishLibrary.filter((w) => w.id !== id);
+    setTitleCardWishLibrary(next);
+    api.putSettings({ title_card_wish_library: next }).catch(() => {});
+  }
+
+  // Bumps a wish's `use_count` (shown-chip sort order, most-used first) each
+  // time it's toggled *on* - see useSunoStage.js/useScenesStage.js/
+  // useTitleCardStage.js's toggleWish/toggleSceneWish/toggleTitleCardWish.
+  // Same persistence pattern as removeWishSnippet - a partial `PUT
+  // /api/settings` body, fire-and-forget.
+  function bumpWishUse(id) {
+    const next = wishLibrary.map((w) => (w.id === id ? { ...w, use_count: (w.use_count || 0) + 1 } : w));
+    setWishLibrary(next);
+    api.putSettings({ suno_wish_library: next }).catch(() => {});
+  }
+  function bumpSceneWishUse(id) {
+    const next = sceneWishLibrary.map((w) => (w.id === id ? { ...w, use_count: (w.use_count || 0) + 1 } : w));
+    setSceneWishLibrary(next);
+    api.putSettings({ scene_wish_library: next }).catch(() => {});
+  }
+  function bumpTitleCardWishUse(id) {
+    const next = titleCardWishLibrary.map((w) => (w.id === id ? { ...w, use_count: (w.use_count || 0) + 1 } : w));
+    setTitleCardWishLibrary(next);
+    api.putSettings({ title_card_wish_library: next }).catch(() => {});
+  }
+
   async function importApiKeys(file) {
     try {
       const data = await readJSONFile(file);
@@ -362,7 +389,8 @@ export function useSettings({ showToast, onAiCall }) {
       updateSceneBasePromptNarrative, updateSceneBasePromptAbstract,
       saveSceneWishToLibrary, removeSceneWishSnippet, updateSceneWishSnippet, setSceneWishLibrary,
       updateTitleCardBasePrompt, saveTitleCardBasePromptPreset, loadTitleCardBasePromptPreset, deleteTitleCardBasePromptPreset,
-      setTitleCardWishLibrary,
+      setTitleCardWishLibrary, removeTitleCardWishSnippet,
+      bumpWishUse, bumpSceneWishUse, bumpTitleCardWishUse,
     },
   };
 }

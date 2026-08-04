@@ -3,6 +3,7 @@ import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2, Upload } from 'lucide
 import { api } from '../../api/client.js';
 import { modelPriceMap } from '../../lib/pricing.js';
 import { downloadJSON } from '../../lib/download.js';
+import { sortByUseCount } from '../../lib/wishes.js';
 import { useFieldVoice } from '../../hooks/useVoice.js';
 import { groupPresetsByService } from '../../lib/sunoPrompt.js';
 import ModelFavorites from './ModelFavorites.jsx';
@@ -548,7 +549,7 @@ export default function SettingsScreen({
             <div className="settings-panel">
               <div className="settings-panel-label">{L.settings_wishLibrary}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {wishLibrary.map((wish) => (
+                {sortByUseCount(wishLibrary).map((wish) => (
                   editingWishId === wish.id ? (
                     <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
                       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
@@ -638,7 +639,7 @@ export default function SettingsScreen({
             <div className="settings-panel">
               <div className="settings-panel-label">{L.scene_wishesTitle}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {sceneWishLibrary.map((wish) => (
+                {sortByUseCount(sceneWishLibrary).map((wish) => (
                   editingSceneWishId === wish.id ? (
                     <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
                       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>

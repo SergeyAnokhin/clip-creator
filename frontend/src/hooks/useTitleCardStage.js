@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { pickMainByRating } from '../lib/scenes.js';
 import { pickTopReferenceImages } from '../lib/titleCard.js';
@@ -22,7 +22,7 @@ const REFERENCE_SLOTS = 4;
  * reload (text fields, chosen reference paths, variant ratings). */
 export function useTitleCardStage({
   activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, imageModelsSimple, onAiCall,
-  onTitleCardWishLibraryChange,
+  onTitleCardWishLibraryChange, onTitleCardWishUsed,
 }) {
   const [imageModelTier, setImageModelTier] = useState('simple');
   const [imageModelMain, setImageModelMain] = useState(imageModels.default || '');
@@ -34,6 +34,31 @@ export function useTitleCardStage({
   const [titleCardWishText, setTitleCardWishText] = useState('');
   const [wishLoading, setWishLoading] = useState(false);
   const [lastDebug, setLastDebug] = useState(null);
+  // variant_ids currently running through "remove background" - several can
+  // be in flight independently, each gallery cell shows its own spinner.
+  const [removingBgIds, setRemovingBgIds] = useState(() => new Set());
+  // Sticks around (unlike the toast) until the next generate() call, so a
+  // timeout/error doesn't just flash past unnoticed - mirrors
+  // useSunoStage.js's sunoError.
+  const [titleCardError, setTitleCardError] = useState(null);
+  // Ticking "waiting for model" seconds counter, starts/stops with
+  // `generating` rather than being managed inside generate() itself - mirrors
+  // useSunoStage.js's elapsedSeconds.
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const elapsedTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (generating) {
+      setElapsedSeconds(0);
+      elapsedTimerRef.current = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
+    } else if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
+    return () => {
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    };
+  }, [generating]);
 
   function resetForProject(project) {
     setImageModelMain(imageModels.default || '');
@@ -43,6 +68,7 @@ export function useTitleCardStage({
     setAspectRatio('16:9');
     setTitleCardWishText('');
     setLastDebug(null);
+    setTitleCardError(null);
     const titleCard = project?.title_card || EMPTY_TITLE_CARD;
     if (!titleCard.reference_image_paths?.length && project?.scenes?.length) {
       const picked = pickTopReferenceImages(project.scenes, REFERENCE_SLOTS);
@@ -121,7 +147,9 @@ export function useTitleCardStage({
   function toggleTitleCardWish(wishId) {
     updateProject((p) => {
       const active = p.active_title_card_wish_ids || [];
-      const next = active.includes(wishId) ? active.filter((id) => id !== wishId) : [...active, wishId];
+      const isActivating = !active.includes(wishId);
+      const next = isActivating ? [...active, wishId] : active.filter((id) => id !== wishId);
+      if (isActivating) onTitleCardWishUsed?.(wishId);
       return { ...p, active_title_card_wish_ids: next };
     });
   }
@@ -134,6 +162,7 @@ export function useTitleCardStage({
       return;
     }
     setGenerating(true);
+    setTitleCardError(null);
     try {
       await flushPendingSave();
       const { job_ids: jobIds } = await api.generateTitleCard(activeProject.id, {
@@ -153,12 +182,17 @@ export function useTitleCardStage({
       setLastDebug(lastJobDebug ? { ...lastJobDebug, completedAt: new Date().toISOString() } : null);
       const failedJob = jobs.find((j) => j.status === 'failed');
       if (failedJob) {
-        showToast(failedJob.error || 'Не удалось сгенерировать часть вариантов');
+        const message = failedJob.error || 'Не удалось сгенерировать часть вариантов';
+        setTitleCardError(message);
+        showToast(message);
       } else {
         showToast(L.toast_generated);
       }
-    } catch {
-      showToast('Не удалось сгенерировать афишу');
+    } catch (err) {
+      const message = err?.detail || 'Не удалось сгенерировать афишу';
+      console.error('[Title Card generate] request failed:', err);
+      setTitleCardError(message);
+      showToast(message);
     } finally {
       setGenerating(false);
       onAiCall?.();
@@ -194,18 +228,37 @@ export function useTitleCardStage({
     }
   }
 
+  async function removeBackground(variantIdx) {
+    if (!activeProject) return;
+    const variant = titleCard.variants[variantIdx];
+    if (!variant) return;
+    setRemovingBgIds((s) => new Set(s).add(variant.variant_id));
+    try {
+      const result = await api.removeTitleCardBackground(activeProject.id, variant.variant_id);
+      setActiveProject((p) => ({
+        ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), variants: result.variants },
+      }));
+    } catch (err) {
+      showToast(err?.detail || 'Не удалось удалить фон');
+    } finally {
+      setRemovingBgIds((s) => { const next = new Set(s); next.delete(variant.variant_id); return next; });
+      onAiCall?.();
+    }
+  }
+
   return {
     state: {
       imageModel, imageModelTier, variantCount, aspectRatio, generating,
       textBlock: titleCard.text_block ?? '',
       referenceSlots, variants: titleCard.variants, presetNameDraft,
-      titleCardWishText, wishLoading, lastDebug,
+      titleCardWishText, wishLoading, lastDebug, elapsedSeconds, titleCardError, removingBgIds,
     },
     resetForProject,
     actions: {
       setImageModelTier, selectImageModel, setVariantCount, setAspectRatio,
       setTextBlock, setReferenceSlot, removeReferenceSlot, uploadReferenceForSlot,
       onGenerate: generate, onRate: rateVariant, onSelectMain: selectMainVariant, onDelete: deleteVariant,
+      onRemoveBackground: removeBackground,
       setPresetNameDraft, setTitleCardWishText, addTitleCardWish, toggleTitleCardWish,
     },
   };

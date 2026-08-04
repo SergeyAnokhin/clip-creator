@@ -2,10 +2,21 @@ import { useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, ImagePlus, Loader2, Mic, MicOff, Minus, Plus, Sparkles, Upload, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import ModelPicker from './ModelPicker.jsx';
-import ImageCarousel from './ImageCarousel.jsx';
+import TitleCardGallery from './TitleCardGallery.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
+import { sortByUseCount } from '../../lib/wishes.js';
 
 const ASPECT_RATIOS = ['1:1', '16:9', '9:16'];
+
+/** `12с` / `1м 05с` (or the EN `12s` / `1m 05s`) - mirrors SunoStage.jsx's
+ * local helper of the same name. */
+function formatDuration(totalSeconds, L) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  if (s < 60) return `${s}${L.suno_unitSeconds}`;
+  const m = Math.floor(s / 60);
+  const rem = String(s % 60).padStart(2, '0');
+  return `${m}${L.suno_unitMinutes} ${rem}${L.suno_unitSeconds}`;
+}
 
 function DebugPanel({ L, lastDebug }) {
   const [open, setOpen] = useState(false);
@@ -160,19 +171,18 @@ function ReferencePicker({ L, projectId, candidates, onPick, onUpload, onClose }
 }
 
 export default function TitleCardStage({
-  L, project, isMobile,
+  L, project,
   imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
   variantCount, aspectRatio, generating,
   textBlock, referenceSlots, variants, presetNameDraft,
   titleCardBasePrompt, titleCardBasePromptPresets,
   titleCardWishText, wishLoading, titleCardWishLibrary, lastDebug,
   isRecordingTitleCardWish, recordingSeconds, voiceSupported,
+  elapsedSeconds, titleCardError, removingBgIds,
   actions,
 }) {
   const [pickerSlot, setPickerSlot] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(null);
-  const [carouselIndex, setCarouselIndex] = useState(Math.max(0, variants.length - 1));
-  const boundedIndex = Math.min(carouselIndex, Math.max(0, variants.length - 1));
   const tierFavorites = imageModelTier === 'simple' ? imageModelSimpleFavorites : imageModelFavorites;
   const activeWishIds = project.active_title_card_wish_ids || [];
 
@@ -245,15 +255,23 @@ export default function TitleCardStage({
         )}
         {!!titleCardWishLibrary?.length && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            {titleCardWishLibrary.map((wish) => (
-              <button
-                key={wish.id}
-                className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
-                title={wish.text}
-                onClick={() => actions.toggleTitleCardWish(wish.id)}
-              >
-                {wish.title}
-              </button>
+            {sortByUseCount(titleCardWishLibrary).map((wish) => (
+              <span key={wish.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  className={`chip${activeWishIds.includes(wish.id) ? ' is-active' : ''}`}
+                  title={wish.text}
+                  onClick={() => actions.toggleTitleCardWish(wish.id)}
+                >
+                  {wish.title}
+                </button>
+                <button
+                  className="icon-btn" style={{ width: 20, height: 20 }}
+                  title={L.wish_deleteTitle}
+                  onClick={() => actions.onDeleteTitleCardWish(wish.id)}
+                >
+                  <X size={10} />
+                </button>
+              </span>
             ))}
           </div>
         )}
@@ -355,21 +373,28 @@ export default function TitleCardStage({
           {generating ? <Loader2 size={16} className="spin" /> : <ImagePlus size={16} />}
           {generating ? L.generatingTitleCard : L.generateTitleCard}
         </button>
+        {generating && (
+          <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 10 }}>
+            ⏳ {L.generatingTitleCard} · {formatDuration(elapsedSeconds, L)}
+          </div>
+        )}
+        {/* Sticks here (not just a toast) until the next generate() call
+            clears it - a timeout/error must stay visible, not flash past. */}
+        {!generating && titleCardError && (
+          <div style={{ fontSize: 13, color: '#fca5a5', marginTop: 10 }}>⚠️ {titleCardError}</div>
+        )}
       </div>
 
       <div className="scene-prompt-label" style={{ marginBottom: 10 }}>{L.titleCard_variantsLabel}</div>
       {variants.length === 0 ? (
         <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>{L.titleCard_noVariantsYet}</div>
       ) : (
-        <div className="glass-card scene-image-panel" style={{ maxWidth: isMobile ? '100%' : 640 }}>
-          <ImageCarousel
-            L={L} projectId={project.id} images={variants} currentIndex={boundedIndex}
-            onIndexChange={setCarouselIndex} onExpand={(i) => setLightboxIndex(i)}
-            onDelete={() => actions.onDelete(boundedIndex)}
-            showSelectMain onSelectMain={() => actions.onSelectMain(boundedIndex)}
-            showStars onRate={(rating) => actions.onRate(boundedIndex, rating)}
-          />
-        </div>
+        <TitleCardGallery
+          L={L} projectId={project.id} variants={variants}
+          onExpand={(i) => setLightboxIndex(i)}
+          onDelete={actions.onDelete} onSelectMain={actions.onSelectMain} onRate={actions.onRate}
+          onRemoveBackground={actions.onRemoveBackground} removingBgIds={removingBgIds}
+        />
       )}
 
       <ImageLightbox

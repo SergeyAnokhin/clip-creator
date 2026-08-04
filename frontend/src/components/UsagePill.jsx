@@ -49,6 +49,12 @@ export default function UsagePill({ L, today, periodTotals, onOpen, onLoadPeriod
             <span>{L.usage_periodTotal}</span>
             <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: 700 }}>{formatCost(periodTotals?.total?.cost)}</span>
           </div>
+          {periodTotals?.today?.saved_cost > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-dim)' }}>
+              <span>{L.usage_savedToday}</span>
+              <span style={{ color: '#7ee787', fontWeight: 700 }}>{formatCost(periodTotals.today.saved_cost)}</span>
+            </div>
+          )}
           <button className="btn btn-accent-soft" style={{ marginTop: 4, fontSize: 12 }} onClick={onOpen}>
             {L.usage_openScreen}
           </button>

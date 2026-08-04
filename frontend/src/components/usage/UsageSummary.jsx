@@ -25,6 +25,9 @@ export default function UsageSummary({ L, summary, groupBy, onGroupByChange }) {
           {totals.unknown_cost_calls > 0 && (
             <div style={{ color: 'var(--text-faint)' }}>{L.usage_costAtLeast}: {totals.unknown_cost_calls}</div>
           )}
+          {totals.saved_cost > 0 && (
+            <div><span style={{ color: 'var(--text-dim)' }}>{L.usage_savedCost}: </span><strong style={{ color: '#7ee787' }}>{formatCost(totals.saved_cost)}</strong></div>
+          )}
         </div>
       )}
 
