@@ -173,11 +173,24 @@ without knowing whether the result is canned or real. Keys come from
   "refresh models" button (`GET /api/settings/image-models/{provider}`),
   mirroring `text_models.list_models`'s shape and split:
   - Google is a **live** call to the same "list models" endpoint as
-    `text_models`, filtered to `predict`-capable (Imagen) models instead of
-    `generateContent`-capable ones.
-  - Replicate, FAL, OpenRouter, DeepSeek and Krea return a curated
-    `CURATED_IMAGE_MODELS` list (empty for OpenRouter and DeepSeek, neither
-    of which route image models). Krea
+    `text_models`, filtered to `predict`-capable (Imagen) models **plus**
+    `generateContent`-capable models whose id matches Gemini's "Nano Banana"
+    image family shape (`gemini-*-image`, e.g. `gemini-3.1-flash-lite-image`
+    — see `image_models.is_gemini_image_model`). Nano Banana answers through
+    the same method as text models and has no `predict` capability to
+    distinguish it, so id shape is the only signal; `text_models.py`'s own
+    Google listing excludes the same ids for the opposite reason (so they
+    don't also show up as text models).
+  - OpenRouter is also a **live** call to its combined `/models` catalog
+    (the same endpoint `text_models.py` uses), filtered to entries whose
+    `architecture.output_modalities` includes `'image'`
+    (`image_models.is_openrouter_image_model`) — that field is what lets a
+    generic model listing double as an image-model catalog with no dedicated
+    endpoint or manual curation; new image models on OpenRouter (further
+    Nano Banana releases included) show up automatically. `text_models.py`
+    excludes the same entries from its own OpenRouter listing.
+  - Replicate, FAL and Krea return a curated `CURATED_IMAGE_MODELS` list
+    (empty for DeepSeek, which doesn't route image models at all). Krea
     (krea.ai) has no model-discovery endpoint at all — each model is its own
     fixed REST path (`POST /generate/image/{id}` against `api.krea.ai`,
     async job + `GET /jobs/{id}` polling), confirmed against
@@ -251,7 +264,14 @@ without knowing whether the result is canned or real. Keys come from
     **Google Imagen**
     `POST .../v1beta/models/{model_id}:predict` (same host as `suno.py`'s
     Gemini call) → `{predictions: [{bytesBase64Encoded, mimeType}]}` — no
-    job/polling, it's a single synchronous call. **OpenRouter**
+    job/polling, it's a single synchronous call. `_generate_google` only
+    implements this `:predict` path — Gemini's "Nano Banana" image family
+    (now listed under `google`'s image-model catalog, see above) answers
+    through `:generateContent` instead, which isn't wired up here yet, so
+    picking a Nano Banana model as the **direct Google** provider for scene
+    images currently fails at generation time even though it now shows up
+    correctly in the picker. Nano Banana models routed via **OpenRouter**
+    already work end-to-end (see next). **OpenRouter**
     `POST https://openrouter.ai/api/v1/images` (its Unified Image API,
     launched 2026-06) → `{data: [{b64_json, media_type}], usage: {..., cost}}`
     — also a single synchronous call; `usage.cost` is OpenRouter's own exact

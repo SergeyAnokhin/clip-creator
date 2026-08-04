@@ -8,6 +8,13 @@ and FAL don't have a filterable list-of-chat-models endpoint worth calling
 here (Replicate's catalog spans every modality; FAL has no equivalent public
 listing), so those two fall back to a small curated constant - the user can
 still add any model id manually in the UI.
+
+Google's and OpenRouter's listings both include image-generation models
+alongside real text models (Gemini's "Nano Banana" family answers through
+the same `generateContent` method as text; OpenRouter's `/models` is one
+combined catalog for every modality) - both are filtered out here via
+`image_models.is_gemini_image_model` / `is_openrouter_image_model` so they
+only show up in image_models.py's catalog, not this one.
 """
 
 import time
@@ -15,6 +22,7 @@ import time
 import httpx
 
 from .. import console_log, usage
+from . import image_models
 
 _DEFAULT_TIMEOUT_SECONDS = 60
 
@@ -100,6 +108,12 @@ async def _list_google(api_key: str) -> dict:
         model_id = (m.get('name') or '').removeprefix('models/')
         if not model_id:
             continue
+        # Gemini's "Nano Banana" image-generation family also answers through
+        # generateContent - it belongs in image_models.py's catalog instead
+        # (see is_gemini_image_model there for why this can't be told apart
+        # via supportedGenerationMethods alone).
+        if image_models.is_gemini_image_model(model_id):
+            continue
         models.append({'id': model_id, 'name': m.get('displayName') or model_id})
     return {'provider': 'google', 'source': 'live', 'models': models}
 
@@ -113,7 +127,11 @@ async def _list_openrouter(api_key: str) -> dict:
     data = resp.json()
     models = [
         {'id': m.get('id', ''), 'name': m.get('name') or m.get('id', '')}
-        for m in data.get('data', []) if m.get('id')
+        for m in data.get('data', [])
+        # Models that generate images (Nano Banana included) belong in
+        # image_models.py's OpenRouter catalog instead - see
+        # is_openrouter_image_model there.
+        if m.get('id') and not image_models.is_openrouter_image_model(m)
     ]
     return {'provider': 'openrouter', 'source': 'live', 'models': models}
 

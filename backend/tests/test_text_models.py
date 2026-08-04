@@ -81,6 +81,40 @@ def test_list_models_openrouter_maps_ids(monkeypatch):
     assert result['models'] == [{'id': 'openai/gpt-4o-mini', 'name': 'GPT-4o mini'}]
 
 
+def test_list_models_google_excludes_nano_banana_image_family(monkeypatch):
+    payload = {'models': [
+        {'name': 'models/gemini-3.1-flash-lite-image', 'displayName': 'Nano Banana 2 Lite',
+         'supportedGenerationMethods': ['generateContent']},
+        {'name': 'models/gemini-2.5-flash', 'displayName': 'Gemini 2.5 Flash',
+         'supportedGenerationMethods': ['generateContent']},
+    ]}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    result = asyncio.run(text_models.list_models('google', 'test-key'))
+
+    assert result['source'] == 'live'
+    assert result['models'] == [{'id': 'gemini-2.5-flash', 'name': 'Gemini 2.5 Flash'}]
+
+
+def test_list_models_openrouter_excludes_image_output_modality(monkeypatch):
+    payload = {'data': [
+        {'id': 'google/gemini-3.1-flash-lite-image', 'name': 'Nano Banana 2 Lite',
+         'architecture': {'output_modalities': ['text', 'image']}},
+        {'id': 'openai/gpt-4o-mini', 'name': 'GPT-4o mini',
+         'architecture': {'output_modalities': ['text']}},
+    ]}
+    fake_client = _FakeAsyncClient(_FakeResponse(200, payload))
+    monkeypatch.setattr(text_models.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    import asyncio
+    result = asyncio.run(text_models.list_models('openrouter', ''))
+
+    assert result['source'] == 'live'
+    assert result['models'] == [{'id': 'openai/gpt-4o-mini', 'name': 'GPT-4o mini'}]
+
+
 def test_list_models_deepseek_without_key_returns_error():
     import asyncio
     result = asyncio.run(text_models.list_models('deepseek', ''))
