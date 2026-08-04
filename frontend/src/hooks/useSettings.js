@@ -30,6 +30,8 @@ export function useSettings({ showToast, onAiCall }) {
   const [sceneBasePromptAbstract, setSceneBasePromptAbstract] = useState('');
   const [sceneWishLibrary, setSceneWishLibrary] = useState([]);
   const [hideMotionPrompt, setHideMotionPromptState] = useState(false);
+  const [titleCardBasePrompt, setTitleCardBasePrompt] = useState('');
+  const [titleCardBasePromptPresets, setTitleCardBasePromptPresets] = useState([]);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -48,6 +50,8 @@ export function useSettings({ showToast, onAiCall }) {
       setSceneBasePromptAbstract(s.scene_base_prompt_abstract || '');
       setSceneWishLibrary(s.scene_wish_library || []);
       setHideMotionPromptState(s.hide_motion_prompt || false);
+      setTitleCardBasePrompt(s.title_card_base_prompt || '');
+      setTitleCardBasePromptPresets(s.title_card_base_prompt_presets || []);
     }).catch(() => {});
     api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
   }, []);
@@ -185,6 +189,38 @@ export function useSettings({ showToast, onAiCall }) {
     debouncedSaveSceneBaseAbstract(value);
   }
 
+  // Same autosave-on-the-stage pattern as updateSunoBasePrompt, for the
+  // Title Card stage's base-prompt panel.
+  const debouncedSaveTitleCardBasePrompt = useMemo(
+    () => debounce((value) => { api.putSettings({ title_card_base_prompt: value }).catch(() => {}); }, 400),
+    [],
+  );
+  function updateTitleCardBasePrompt(value) {
+    setTitleCardBasePrompt(value);
+    debouncedSaveTitleCardBasePrompt(value);
+  }
+  // User-managed named variants of the base prompt (unlike Suno's read-only
+  // suno-prompt-presets endpoint) - plain array CRUD persisted via the
+  // regular partial-merge PUT, same as scene_wish_library above.
+  function saveTitleCardBasePromptPreset(name) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const preset = { id: crypto.randomUUID(), name: trimmed, prompt: titleCardBasePrompt };
+    const next = [...titleCardBasePromptPresets, preset];
+    setTitleCardBasePromptPresets(next);
+    api.putSettings({ title_card_base_prompt_presets: next }).catch(() => {});
+  }
+  function loadTitleCardBasePromptPreset(id) {
+    const preset = titleCardBasePromptPresets.find((p) => p.id === id);
+    if (!preset) return;
+    updateTitleCardBasePrompt(preset.prompt);
+  }
+  function deleteTitleCardBasePromptPreset(id) {
+    const next = titleCardBasePromptPresets.filter((p) => p.id !== id);
+    setTitleCardBasePromptPresets(next);
+    api.putSettings({ title_card_base_prompt_presets: next }).catch(() => {});
+  }
+
   // Shared Scenes/Images-stage UI toggle (hide motion_prompt fields) -
   // persisted like updateSunoBasePrompt so it applies immediately and
   // survives a reload, but it's a single boolean flip, not a debounced text
@@ -262,6 +298,8 @@ export function useSettings({ showToast, onAiCall }) {
         scene_base_prompt_abstract: src.scene_base_prompt_abstract ?? sceneBasePromptAbstract,
         scene_wish_library: src.scene_wish_library ?? sceneWishLibrary,
         hide_motion_prompt: src.hide_motion_prompt ?? hideMotionPrompt,
+        title_card_base_prompt: src.title_card_base_prompt ?? titleCardBasePrompt,
+        title_card_base_prompt_presets: src.title_card_base_prompt_presets ?? titleCardBasePromptPresets,
       };
       setLang(next.lang);
       setTextModels(next.text_models);
@@ -277,6 +315,8 @@ export function useSettings({ showToast, onAiCall }) {
       setSceneBasePromptAbstract(next.scene_base_prompt_abstract);
       setSceneWishLibrary(next.scene_wish_library);
       setHideMotionPromptState(next.hide_motion_prompt);
+      setTitleCardBasePrompt(next.title_card_base_prompt);
+      setTitleCardBasePromptPresets(next.title_card_base_prompt_presets);
       await api.putSettings(next);
       showToast(L.toast_imported);
     } catch {
@@ -293,6 +333,7 @@ export function useSettings({ showToast, onAiCall }) {
         request_timeout_seconds: requestTimeoutSeconds,
         scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
         scene_wish_library: sceneWishLibrary, hide_motion_prompt: hideMotionPrompt,
+        title_card_base_prompt: titleCardBasePrompt, title_card_base_prompt_presets: titleCardBasePromptPresets,
       });
       showToast(L.toast_saved);
     } catch {
@@ -305,6 +346,7 @@ export function useSettings({ showToast, onAiCall }) {
     apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
     sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets, requestTimeoutSeconds,
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
+    titleCardBasePrompt, titleCardBasePromptPresets,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
@@ -317,6 +359,7 @@ export function useSettings({ showToast, onAiCall }) {
       addImageModelSimpleFavorite, removeImageModelSimpleFavorite, setImageModelSimpleDefault,
       updateSceneBasePromptNarrative, updateSceneBasePromptAbstract,
       saveSceneWishToLibrary, removeSceneWishSnippet, updateSceneWishSnippet, setSceneWishLibrary,
+      updateTitleCardBasePrompt, saveTitleCardBasePromptPreset, loadTitleCardBasePromptPreset, deleteTitleCardBasePromptPreset,
     },
   };
 }

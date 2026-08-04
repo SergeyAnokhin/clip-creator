@@ -80,7 +80,10 @@ def _stub_scenes(lines: list[str], scene_count: int, style: str, reference_image
             f'Slow, deliberate camera movement bringing the scene to life: gentle drift, '
             f'subtle particle and light motion, matching the mood of "{segment}".'
         ) if segment else 'Slow, deliberate camera movement bringing the scene to life: gentle drift, subtle particle and light motion.'
-        scenes.append({'lyric_segment': segment, 'static_prompt': static_prompt, 'motion_prompt': motion_prompt, 'images': []})
+        scenes.append({
+            'lyric_segment': segment, 'scene_description': '', 'static_prompt': static_prompt,
+            'motion_prompt': motion_prompt, 'images': [],
+        })
     return scenes
 
 
@@ -109,6 +112,8 @@ def _build_prompt(
         'без какого-либо текста до или после, внутри блока кода:\n'
         '```json\n'
         '[{"lyric_segment": "<фрагмент текста, к которому относится кадр>", '
+        '"scene_description": "<короткое описание на русском (5-8 слов) того, что показано в кадре, '
+        'например: \'женщина стоит в пол-оборота на фоне огней\'>", '
         '"static_prompt": "<промпт кадра на английском>", '
         '"motion_prompt": "<описание движения камеры на английском>"}, ...]\n'
         '```'
@@ -131,6 +136,7 @@ def _parse_model_response(text: str, lines: list[str], scene_count: int, style: 
                     item = parsed[i] if i < len(parsed) else {}
                     scenes.append({
                         'lyric_segment': str(item.get('lyric_segment', '') or ''),
+                        'scene_description': str(item.get('scene_description', '') or ''),
                         'static_prompt': str(item.get('static_prompt', '') or '') or f'{style}. Scene {i + 1} of {scene_count}.',
                         'motion_prompt': str(item.get('motion_prompt', '') or '') or 'Slow, deliberate camera movement.',
                         'images': [],

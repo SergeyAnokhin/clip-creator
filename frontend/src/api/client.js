@@ -69,6 +69,16 @@ export const api = {
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getSceneImageJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/jobs/${encodeURIComponent(jobId)}`),
   deleteSceneImage: (id, sceneIndex, imageId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/${encodeURIComponent(imageId)}`, { method: 'DELETE' }),
+  uploadSceneImageFile: (id, sceneIndex, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return requestForm(`${projectPath(id)}/scenes/${sceneIndex}/images/upload`, { method: 'POST', body: form });
+  },
+  uploadSceneImageUrl: (id, sceneIndex, url) => {
+    const form = new FormData();
+    form.append('url', url);
+    return requestForm(`${projectPath(id)}/scenes/${sceneIndex}/images/upload`, { method: 'POST', body: form });
+  },
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),
@@ -85,4 +95,8 @@ export const api = {
     return requestForm(`${projectPath(id)}/reference-images`, { method: 'POST', body: form });
   },
   deleteReferenceImage: (id, filename) => request(`${projectPath(id)}/reference-images/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
+
+  generateTitleCard: (id, body) => request(`${projectPath(id)}/title-card/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  getTitleCardJob: (id, jobId) => request(`${projectPath(id)}/title-card/jobs/${encodeURIComponent(jobId)}`),
+  deleteTitleCardVariant: (id, variantId) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}`, { method: 'DELETE' }),
 };

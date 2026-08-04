@@ -13,6 +13,7 @@ app_data/
       config.json            # the whole project
       images/scene_{n}_{shorthex}.{png|jpg|webp}
       references/ref_{uuid}.{ext}
+      titlecard/{shorthex}.{png|jpg|webp}
   usage/
     YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
 ```
@@ -38,6 +39,7 @@ app_data/
 | `reference_images` | str[] | Paths relative to `app_data/`, e.g. `projects/<slug>/references/ref_ab12cd34.png` |
 | `scenes` | Scene[] | `[]` until the storyboard is generated |
 | `source_url` | str | Original URL, if the project came from one |
+| `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{title_text: '', author_text: '', reference_image_paths: [], variants: []}` |
 
 **Block**: `{id, type, importance, content}` — `type` is
 `intro|verse|chorus|bridge|outro|interlude`; `content` is plain multi-line text.
@@ -51,6 +53,17 @@ backward compatibility, never read or edited.
 `file_path` is relative to the project folder (`images/scene_1_a1b2c3d4.png`;
 extension depends on the provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly
 one `is_selected` per scene once anything is rated.
+
+**TitleCard**: `{title_text, author_text, reference_image_paths, variants}` —
+`reference_image_paths` is up to 4 paths (relative to the project folder)
+picked from `scenes[].images[].file_path` or `reference_images`, persisted so
+the picks survive a reload. **TitleCardVariant**:
+`{variant_id, file_path, rating, is_selected, generated_at, model,
+aspect_ratio, cost, title_text, author_text, base_prompt,
+reference_image_paths}` — same `rating`/`is_selected`/`model`/`aspect_ratio`/
+`cost` shape as `Image` (`file_path` under `titlecard/` instead of `images/`),
+plus a snapshot of the text/prompt/references that produced it. `variants` is
+append-only; deleting one removes it from this array and unlinks its file.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
@@ -77,7 +90,7 @@ compute it are unknown; `cost.source` is `provider|catalog|unknown`.
 simple_models{favorites[],default}, image_models{favorites[],default}, image_models_simple{favorites[],default},
 special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[],
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
-request_timeout_seconds, hide_motion_prompt}`. Reads and
+request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[]}`. Reads and
 writes merge over `DEFAULT_SETTINGS` in
 [`routers/settings.py`](../backend/app/routers/settings.py) (seed text for
 `suno_base_prompt`/`suno_reference_examples` comes from
@@ -158,6 +171,20 @@ partial merge server-side, so the frontend can persist e.g. just
   on either stage (`ScenesStage.jsx`/`ImagesStage.jsx`), autosaves immediately
   via `useSettings.js`'s `setHideMotionPrompt` (same one-boolean-flip pattern
   as everything else that isn't a debounced text field).
+- `title_card_base_prompt` — the general "render this text in the reference
+  images' style" instructions for the Title Card stage, sent ahead of the
+  quoted title/author text on every `title-card/generate` call. Seeded from
+  [`providers/title_card_prompt_defaults.py`](../backend/app/providers/title_card_prompt_defaults.py),
+  editable in the stage's own collapsible panel (autosaves like
+  `updateSunoBasePrompt`).
+- `title_card_base_prompt_presets` — unlike Suno's read-only
+  `suno-prompt-presets` endpoint, this is a **user-managed** list of named
+  variants of the base prompt, `{id, name, prompt}[]`. Saved/loaded/deleted
+  entirely client-side (`useSettings.js`'s `saveTitleCardBasePromptPreset` /
+  `loadTitleCardBasePromptPreset` / `deleteTitleCardBasePromptPreset`) against
+  the regular partial-merge `PUT /api/settings` — no dedicated endpoints,
+  unlike `suno_wish_library`/`scene_wish_library` which get their own routes
+  because saving those also involves an LLM clean+title call.
 - `pricing_overrides` — user-supplied AI price corrections, keyed by
   `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
   wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
@@ -214,6 +241,9 @@ reference-image upload (multipart).
 | `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useImagesStage.js`); job state is in-memory only (see `architecture.md`) |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
+| `POST /api/projects/{id}/title-card/generate` | `{title_text, author_text, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`'s Nano Banana ids, or Krea's `google/nano-banana-pro`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |
+| `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', variant: TitleCardVariant\|null, error: str\|null}` — polled every 1.5s by the frontend (`useTitleCardStage.js`), same in-memory-only job state as scene images (a separate `title_card._jobs` dict) |
+| `DELETE /api/projects/{id}/title-card/variants/{variant_id}` | → `{variants}` — removes one result from `project.title_card.variants` and deletes its file |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |
 | `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |

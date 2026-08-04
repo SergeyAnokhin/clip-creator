@@ -121,6 +121,32 @@ export function useImagesStage({
       showToast('Не удалось удалить изображение');
     }
   }
+  async function uploadSceneImageFile(sceneIdx, file) {
+    if (!activeProject || !file) return;
+    try {
+      const { image } = await api.uploadSceneImageFile(activeProject.id, sceneIdx, file);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, images: [...s.images, image] } : s)),
+      }));
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось загрузить изображение');
+    }
+  }
+  async function uploadSceneImageUrl(sceneIdx, url) {
+    if (!activeProject || !url) return;
+    try {
+      const { image } = await api.uploadSceneImageUrl(activeProject.id, sceneIdx, url);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, images: [...s.images, image] } : s)),
+      }));
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось загрузить изображение по ссылке');
+    }
+  }
   function selectMainImage(sceneIdx, imgIdx) {
     updateProject((p) => ({
       ...p,
@@ -154,6 +180,7 @@ export function useImagesStage({
       onStaticChange: onSceneStaticChange, onMotionChange: onSceneMotionChange,
       onGenerate: generateSceneImages,
       onSelectMain: selectMainImage, onRate: rateImage, onDelete: deleteImage,
+      onUploadImageFile: uploadSceneImageFile, onUploadImageUrl: uploadSceneImageUrl,
     },
   };
 }

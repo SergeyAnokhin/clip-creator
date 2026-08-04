@@ -48,13 +48,21 @@ the project by the time its status is polled as 'completed'.
 
 import asyncio
 import base64
+import ipaddress
+import socket
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
 
 from .. import console_log, pricing, storage, usage
+
+# Cap for user-pasted/dropped image URLs (scene-image upload endpoint) - not
+# applied to `_download` above, which only ever fetches URLs a trusted
+# provider API just handed back.
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 _KREA_BASE = 'https://api.krea.ai'
 _REPLICATE_BASE = 'https://api.replicate.com/v1'
@@ -108,6 +116,75 @@ async def _download(url: str) -> tuple[bytes, str]:
     if resp.status_code != 200:
         raise RuntimeError(f'Не удалось скачать изображение ({resp.status_code})')
     return resp.content, _ext_from_response(url, resp.headers.get('content-type', ''))
+
+
+def _is_public_host(host: str) -> bool:
+    """Resolves `host` and rejects it if any address it resolves to is
+    private/loopback/link-local/reserved - the SSRF guard for
+    `download_user_image_url` below, whose URL comes directly from user
+    input (a pasted or dropped link) rather than a trusted provider API."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+    return True
+
+
+async def download_user_image_url(url: str) -> tuple[bytes, str]:
+    """Fetches a user-supplied image URL for the scene-image upload endpoint
+    (generation.py's `upload_scene_image`). Unlike `_download` above, `url`
+    here is arbitrary user input (pasted or dropped by the user), so this is
+    hardened accordingly: only http(s) with a hostname, the host is resolved
+    up front and rejected if it points at a private/loopback/link-local
+    address (`_is_public_host`), redirects are not followed (a redirect
+    could otherwise retarget a validated public URL at an internal one), the
+    response must declare an `image/*` content-type, and the body is capped
+    at `_MAX_UPLOAD_BYTES` while streaming (rejects before buffering an
+    oversized response in memory)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+        raise RuntimeError('Некорректная ссылка на изображение')
+    if not _is_public_host(parsed.hostname):
+        raise RuntimeError('Ссылка указывает на недопустимый адрес')
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as http_client:
+        async with http_client.stream('GET', url) as resp:
+            if resp.status_code != 200:
+                raise RuntimeError(f'Не удалось скачать изображение ({resp.status_code})')
+            content_type = resp.headers.get('content-type', '').split(';')[0].strip()
+            if not content_type.startswith('image/'):
+                raise RuntimeError('Ссылка не указывает на изображение')
+            content = bytearray()
+            async for chunk in resp.aiter_bytes():
+                content.extend(chunk)
+                if len(content) > _MAX_UPLOAD_BYTES:
+                    raise RuntimeError('Изображение слишком большое (лимит 15 МБ)')
+    return bytes(content), _ext_from_response(url, content_type)
+
+
+def save_uploaded_image(slug: str, scene_index: int, content: bytes, ext: str) -> dict:
+    """Writes an already-fetched/validated image into the same `images/` dir
+    and `scene.images` dict shape `_run_job` produces for AI-generated
+    images (see this module's docstring) - used by the scene-image-upload
+    endpoint for both the local-file and pasted-URL paths, so uploaded
+    images are indistinguishable from generated ones to the rest of the UI
+    (carousel, rating, delete, lightbox). `model`/`aspect_ratio`/`cost` are
+    set to the "not AI-generated" values (`'upload'`/`None`/`0`)."""
+    scene_number = scene_index + 1
+    images_dir = storage.project_dir(slug) / 'images'
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_id = f'img_{uuid4().hex[:8]}'
+    filename = f'scene_{scene_number}_{image_id.removeprefix("img_")}.{ext}'
+    (images_dir / filename).write_bytes(content)
+    return {
+        'image_id': image_id, 'file_path': f'images/{filename}',
+        'rating': 0, 'is_selected': False, 'generated_at': _now(),
+        'model': 'upload', 'aspect_ratio': None, 'cost': 0,
+    }
 
 
 async def _generate_krea(

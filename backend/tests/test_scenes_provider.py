@@ -35,7 +35,7 @@ def test_parse_model_response_reads_json_block():
     text = '```json\n[{"lyric_segment": "a", "static_prompt": "sp", "motion_prompt": "mp"}]\n```'
     scenes_out, missing = scenes._parse_model_response(text, ['a'], 1, 'style', [])
     assert missing is False
-    assert scenes_out == [{'lyric_segment': 'a', 'static_prompt': 'sp', 'motion_prompt': 'mp', 'images': []}]
+    assert scenes_out == [{'lyric_segment': 'a', 'scene_description': '', 'static_prompt': 'sp', 'motion_prompt': 'mp', 'images': []}]
 
 
 def test_parse_model_response_pads_short_list_and_flags_missing_markers():
@@ -102,7 +102,10 @@ def test_generate_calls_gemini_and_parses_json_scenes(monkeypatch):
     }
     result = asyncio.run(scenes.generate(project, model='google:gemini-2.5-flash', scene_count=1, settings=settings))
 
-    assert result['scenes'] == [{'lyric_segment': 'Line one', 'static_prompt': '((sad man))', 'motion_prompt': 'slow drift', 'images': []}]
+    assert result['scenes'] == [{
+        'lyric_segment': 'Line one', 'scene_description': '', 'static_prompt': '((sad man))',
+        'motion_prompt': 'slow drift', 'images': [],
+    }]
     assert result['debug']['stub'] is False
     assert result['debug']['missing_markers'] is False
     assert 'BASE RULES' in fake_client.last_call['json']['contents'][0]['parts'][0]['text']

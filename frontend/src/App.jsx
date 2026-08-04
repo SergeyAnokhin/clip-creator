@@ -8,6 +8,7 @@ import { useLyricsStage } from './hooks/useLyricsStage.js';
 import { useSunoStage } from './hooks/useSunoStage.js';
 import { useScenesStage } from './hooks/useScenesStage.js';
 import { useImagesStage } from './hooks/useImagesStage.js';
+import { useTitleCardStage } from './hooks/useTitleCardStage.js';
 import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
@@ -54,6 +55,11 @@ function App() {
     imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
   });
+  const titleCard = useTitleCardStage({
+    activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+    imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
+    onAiCall: usage.actions.refreshToday,
+  });
   // Depends on suno's refinement box and scenes' wish box, so it must be created after them.
   const voice = useVoice({
     updateProject, showToast, L, lang: settings.lang,
@@ -69,6 +75,7 @@ function App() {
     suno.resetForProject(project);
     scenes.resetForProject(project);
     images.resetForProject(project);
+    titleCard.resetForProject(project);
     setScreen('workflow');
   }
 
@@ -152,6 +159,22 @@ function App() {
     },
   };
 
+  const titleCardState = {
+    ...titleCard.state,
+    imageModelFavorites: settings.imageModels.favorites,
+    imageModelSimpleFavorites: settings.imageModelsSimple.favorites,
+    modelPrices: usage.priceMap,
+    titleCardBasePrompt: settings.titleCardBasePrompt,
+    titleCardBasePromptPresets: settings.titleCardBasePromptPresets,
+    actions: {
+      ...titleCard.actions,
+      updateTitleCardBasePrompt: settings.actions.updateTitleCardBasePrompt,
+      saveTitleCardBasePromptPreset: settings.actions.saveTitleCardBasePromptPreset,
+      loadTitleCardBasePromptPreset: settings.actions.loadTitleCardBasePromptPreset,
+      deleteTitleCardBasePromptPreset: settings.actions.deleteTitleCardBasePromptPreset,
+    },
+  };
+
   return (
     <div className="app-shell">
       {screen === 'home' && (
@@ -177,7 +200,8 @@ function App() {
         <WorkflowScreen
           L={L} langLabel={settings.langLabel} viewport={view.viewport}
           project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
-          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} imagesState={imagesState} updateProject={updateProject}
+          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} imagesState={imagesState}
+          titleCardState={titleCardState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}

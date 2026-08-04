@@ -9,6 +9,7 @@ from ..providers.scenes_prompt_defaults import (
 from ..providers.suno_prompt_defaults import (
     DEFAULT_REFERENCE_EXAMPLES, DEFAULT_SUNO_BASE_PROMPT, SUNO_BASE_PROMPT_PRESETS,
 )
+from ..providers.title_card_prompt_defaults import DEFAULT_TITLE_CARD_BASE_PROMPT
 
 router = APIRouter(prefix='/api/settings', tags=['settings'])
 
@@ -31,6 +32,13 @@ DEFAULT_SETTINGS = {
     'scene_base_prompt_narrative': DEFAULT_SCENE_BASE_PROMPT_NARRATIVE,
     'scene_base_prompt_abstract': DEFAULT_SCENE_BASE_PROMPT_ABSTRACT,
     'scene_wish_library': [],
+    # Title Card stage (poster-text generation) - see providers/title_card.py.
+    # `title_card_base_prompt` is directly edited (same pattern as the scene
+    # base prompts above); `_presets` is a user-managed list of named
+    # variants {id, name, prompt} the stage can save/load, CRUD'd entirely
+    # via this partial-merge PUT (no dedicated endpoints needed).
+    'title_card_base_prompt': DEFAULT_TITLE_CARD_BASE_PROMPT,
+    'title_card_base_prompt_presets': [],
     'pricing_overrides': {},
     'request_timeout_seconds': 60,
     # UI-only preference (Scenes/Images stage): hides every motion_prompt

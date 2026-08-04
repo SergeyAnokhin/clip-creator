@@ -33,12 +33,13 @@ value) so it doesn't need editing when the frontend's port changes.
 
 ## The workflow
 
-A project moves through four stages, all inside one workflow screen:
+A project moves through five stages, all inside one workflow screen:
 
 ```text
-Lyrics  →  Music  →  Scenes        →  Images
-blocks     style +   storyboard        images per scene,
-           lyrics    (text only)       rated, top pick = main
+Lyrics  →  Music  →  Scenes        →  Images            →  Title Card
+blocks     style +   storyboard        images per scene,    poster text in the
+           lyrics    (text only)       rated, top pick =    style of 4 picked
+                                       main                 reference images
 ```
 
 1. **Lyrics** — a poem (pasted text or a parsed URL) is split into blocks on
@@ -52,8 +53,11 @@ blocks     style +   storyboard        images per scene,
    `lyrics` pair to paste into whichever music service (Suno, Mureka, ...)
    the user is targeting.
 3. **Scenes** (`stage: 'scenes'`) — turn the lyrics into `scene_count` scenes
-   (default 10), each `{lyric_segment, static_prompt, motion_prompt}`, in one
-   of two `scene_mode`s (`narrative`: scenes follow the lyrics in order and
+   (default 10), each `{lyric_segment, scene_description, static_prompt,
+   motion_prompt}` (`scene_description`: a short Russian caption of what the
+   shot shows, e.g. "женщина стоит в пол-оборота" — shown in the scene card's
+   header so scenes can be scanned without reading the full English prompt),
+   in one of two `scene_mode`s (`narrative`: scenes follow the lyrics in order and
    read as one continuous story; `abstract`: scenes vary one mood/atmosphere
    with no forced plot) — see "The scene prompt" below. Purely text; no image
    is generated here.
@@ -66,6 +70,14 @@ blocks     style +   storyboard        images per scene,
    preview next to the prompts, sharing the same `scenes[n].images` array and
    backend endpoint - the full multi-variant/rating workflow still only lives
    here.
+5. **Title Card** (`stage: 'title_card'`) — picks up to 4 already-generated
+   scene images (or uploads) as style references, takes a title/author text
+   block, and asks a reference-capable image model to render that text baked
+   into the references' visual style — a poster/cover-text graphic, not a
+   scene. Auto-picks the 4 highest-rated images across every scene on first
+   open (`lib/titleCard.js`'s `pickTopReferenceImages`), any slot swappable or
+   replaceable with an upload. See `providers/title_card.py` below for why
+   this needs its own provider seam instead of reusing `images.py`.
 
 Both stages also share a `hideMotionPrompt` toggle (a `settings.json`
 preference, not per-project) that hides every `motion_prompt` field when a
@@ -214,8 +226,10 @@ without knowing whether the result is canned or real. Keys come from
     with a prompt built from `settings.scene_base_prompt_{scene_mode}` + the
     project's active scene wishes + `style_description` + a reference-image
     count note + the raw lyric lines, asking for a ```` ```json ```` array of
-    exactly `scene_count` `{lyric_segment, static_prompt, motion_prompt}`
-    objects (`scenes._parse_model_response`).
+    exactly `scene_count` `{lyric_segment, scene_description, static_prompt,
+    motion_prompt}` objects (`scenes._parse_model_response`); the stub
+    fallback below leaves `scene_description` `''` (no LLM call, nothing to
+    summarize).
   - Parsing is tolerant, same philosophy as `suno.py`'s missing-marker
     handling: a response with the wrong item count or that isn't valid JSON
     at all falls back to the deterministic stub scenes (chunked lyric lines,
@@ -310,22 +324,90 @@ without knowing whether the result is canned or real. Keys come from
     file from disk (same load/mutate/save-then-unlink shape as
     `POST`/`DELETE .../reference-images` in `routers/generation.py`, which
     upload/remove `project.reference_images` the same way).
+  - `POST /api/projects/{id}/scenes/{n}/images/upload` (`multipart/form-data`,
+    exactly one of a `file` or a `url` field) lets a user add their own image
+    to a scene alongside AI-generated ones — the Images stage's `SceneCard.jsx`
+    exposes it as an "upload" button (file picker or a pasted URL) and as
+    drag-and-drop directly onto the image preview (a dropped file, or a
+    dragged image URL). The `file` path validates the extension the same way
+    `upload_reference_image` does; the `url` path goes through
+    `images.download_user_image_url`, which — unlike the provider-URL
+    `_download` helper above, since this URL is arbitrary user input — only
+    allows `http(s)` with a resolvable **public** host (rejects
+    private/loopback/link-local addresses, an SSRF guard), does not follow
+    redirects, requires an `image/*` content-type, and caps the response at
+    15MB while streaming. Either path is written and appended to
+    `scene.images` via `images.save_uploaded_image` (same dict shape as a
+    generated image, with `model: 'upload'`, `aspect_ratio: null`, `cost: 0`
+    so the rest of the UI — carousel, rating, delete, lightbox — treats it
+    identically).
   - A job's background task, on failure (missing API key, non-2xx response,
     unexpected shape, provider-reported failure/timeout), sets `status:
     'failed'` with a Russian `error` string — no silent fallback, matching
     `suno.py`'s philosophy that a real-provider failure must be visible
     rather than quietly serving a placeholder.
   - The prompt sent to every provider is the scene's `static_prompt` as-is;
-    `reference_images` are **not** sent to any provider yet (no image-to-image
-    conditioning) — adding that would need per-provider research into their
-    image-input parameters, which wasn't done here.
+    scene image generation does **not** send any reference images to the
+    provider (no image-to-image conditioning) — see `title_card.py` just
+    below for the one place in this app that does.
   - Widens the existing "autosave race" gotcha below: a job can take anywhere
     from ~1s (Google) to tens of seconds (Krea/Replicate/FAL polling), so the
     window in which an unrelated debounced `PATCH` could revert the job's
     just-written `scenes[n].images` is longer than it was for the old
     synchronous stub.
-
-Not implemented at all: image-to-image conditioning from `reference_images`.
+- `title_card.start_jobs`/`get_job` is the Title Card stage's provider seam —
+  same background-job/poll shape as `images.py` above (its own `_jobs` dict,
+  never shared with it), but genuinely **image-to-image**: it sends the
+  stage's up-to-4 chosen reference images alongside the text prompt, and only
+  the two providers confirmed (2026-08) to actually accept multiple reference
+  images are wired up:
+  - **Google Gemini `generateContent`** ("Nano Banana" family, `gemini-*-image`
+    ids): each reference image becomes its own `inline_data` part ahead of the
+    text part in `contents[0].parts`; `generationConfig.responseModalities:
+    ['IMAGE']` asks for an image back, `generationConfig.imageConfig.aspectRatio`
+    frames it. This is the same Nano Banana model family `images.py`'s
+    `_generate_google` can't reach (that one only speaks Imagen's `:predict`,
+    text-only) — `title_card.py` is where Nano Banana's real multi-image
+    capability is actually used.
+  - **Krea's `google/nano-banana-pro` proxy** (`POST
+    https://api.krea.ai/generate/image/google/nano-banana-pro`): references go
+    in as `style_images: [{url, strength}]`, `url` a base64 data URI (no need
+    to host the references publicly first) — same job+poll shape as Krea's
+    other models.
+  - OpenRouter's Unified Image API also documents reference-image support
+    (`input_references`), but its exact request-body field shape couldn't be
+    confirmed from public docs when this was built, so it's deliberately not
+    wired — `title_card._GENERATORS` is a dict precisely so a third provider
+    is a one-line addition once that's confirmed. Replicate/FAL have no
+    reference-capable models in the current curated catalog
+    (`image_models.CURATED_IMAGE_MODELS`), so they're excluded too.
+  - `POST /api/projects/{id}/title-card/generate` (`{title_text, author_text,
+    base_prompt, reference_image_paths, model, aspect_ratio?, count?}`)
+    validates every reference path resolves inside the project folder and
+    exists, then starts one job per requested variant, same `{job_ids}`
+    immediate-return shape as scene images. `GET .../title-card/jobs/{job_id}`
+    polls one job. `DELETE .../title-card/variants/{variant_id}` removes one
+    result (drops it from `project.title_card.variants`, deletes its file).
+  - A completed job writes to `titlecard/{shorthex}.{png|jpg|webp}` (parallel
+    to `images/`/`references/`) and appends a variant — same
+    `rating`/`is_selected`/`model`/`aspect_ratio`/`cost` fields as a scene
+    `Image`, so the frontend reuses `ImageCarousel`'s star-rating row and
+    `pickMainByRating` unmodified — plus `title_text`/`author_text`/
+    `base_prompt`/`reference_image_paths`, a snapshot of what produced it.
+  - Uploading a custom reference image reuses the existing
+    `POST/DELETE /api/projects/{id}/reference-images` endpoints unchanged
+    (lands in `project.reference_images`, selectable into any of the 4 slots)
+    — no dedicated upload endpoint for this stage.
+  - The prompt sent to the model is `settings.title_card_base_prompt`
+    (editable in the stage's own collapsible panel, same autosave pattern as
+    `updateSunoBasePrompt`; seeded from
+    [`providers/title_card_prompt_defaults.py`](../backend/app/providers/title_card_prompt_defaults.py))
+    plus the title/author text quoted on their own lines
+    (`title_card._build_prompt`). Unlike Suno's read-only preset list,
+    `settings.title_card_base_prompt_presets` is a **user-managed** array of
+    named variants (`{id, name, prompt}`) the stage can save/load/delete —
+    plain client-side CRUD against the regular partial-merge `PUT
+    /api/settings`, no dedicated endpoints.
 
 ## AI usage & cost tracking
 

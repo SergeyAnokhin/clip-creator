@@ -522,3 +522,106 @@ def test_start_jobs_records_error_status_on_failure(usage_ledger):
     assert rec['status'] == 'error'
     assert rec['cost']['amount'] is None
     assert 'unknownprovider' in rec['error']
+
+
+# ---------- download_user_image_url (scene-image upload's SSRF guard) ----------
+
+class _FakeStreamResponse:
+    def __init__(self, status_code, headers, chunks):
+        self.status_code = status_code
+        self.headers = headers
+        self._chunks = chunks
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeStreamCtx:
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self._response
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _FakeStreamClient:
+    """Mimics the subset of httpx.AsyncClient used by
+    `download_user_image_url`'s streaming GET (`.stream(...)` as an async
+    context manager) - the fixed-response `_FakeAsyncClient` above only
+    covers `.post`/`.get`, which the streaming path doesn't call."""
+
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def stream(self, method, url):
+        return _FakeStreamCtx(self._response)
+
+
+def test_download_user_image_url_rejects_non_http_scheme():
+    with pytest.raises(RuntimeError, match='ссылка'):
+        asyncio.run(images.download_user_image_url('ftp://example.com/x.png'))
+
+
+@pytest.mark.parametrize('url', [
+    'http://127.0.0.1/x.png',
+    'http://localhost/x.png',
+    'http://10.0.0.5/x.png',
+    'http://192.168.1.5/x.png',
+    'http://169.254.169.254/latest/meta-data/',
+])
+def test_download_user_image_url_rejects_private_and_loopback_hosts(url):
+    with pytest.raises(RuntimeError, match='адрес'):
+        asyncio.run(images.download_user_image_url(url))
+
+
+def test_download_user_image_url_rejects_non_image_content_type(monkeypatch):
+    fake_client = _FakeStreamClient(_FakeStreamResponse(200, {'content-type': 'text/html'}, [b'<html>']))
+    monkeypatch.setattr(images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    with pytest.raises(RuntimeError, match='изображение'):
+        asyncio.run(images.download_user_image_url('http://example.com/not-an-image'))
+
+
+def test_download_user_image_url_rejects_oversized_body(monkeypatch):
+    monkeypatch.setattr(images, '_MAX_UPLOAD_BYTES', 10)
+    fake_client = _FakeStreamClient(_FakeStreamResponse(200, {'content-type': 'image/png'}, [b'x' * 20]))
+    monkeypatch.setattr(images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    with pytest.raises(RuntimeError, match='большое'):
+        asyncio.run(images.download_user_image_url('http://example.com/huge.png'))
+
+
+def test_download_user_image_url_success(monkeypatch):
+    fake_client = _FakeStreamClient(_FakeStreamResponse(200, {'content-type': 'image/png'}, [b'fake-bytes']))
+    monkeypatch.setattr(images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+
+    content, ext = asyncio.run(images.download_user_image_url('http://example.com/pic.png'))
+
+    assert content == b'fake-bytes'
+    assert ext == 'png'
+
+
+def test_save_uploaded_image_writes_file_with_upload_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import storage
+
+    image = images.save_uploaded_image('poem-a', 0, b'fake-bytes', 'png')
+
+    assert image['model'] == 'upload'
+    assert image['aspect_ratio'] is None
+    assert image['cost'] == 0
+    assert image['rating'] == 0
+    assert image['is_selected'] is False
+    written = storage.project_dir('poem-a') / image['file_path']
+    assert written.is_file()
+    assert written.read_bytes() == b'fake-bytes'

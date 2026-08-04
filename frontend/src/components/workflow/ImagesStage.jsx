@@ -34,7 +34,7 @@ export default function ImagesStage({
                 src={mediaUrl(`projects/${project.id}/${path}`)}
                 alt=""
                 style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }}
-                onClick={() => setLightboxImage({ file_path: path })}
+                onClick={() => setLightboxImage(path)}
               />
               <button
                 className="icon-btn"
@@ -142,7 +142,11 @@ export default function ImagesStage({
         </div>
       )}
 
-      <ImageLightbox L={L} projectId={project.id} image={lightboxImage} onClose={() => setLightboxImage(null)} />
+      <ImageLightbox
+        L={L} projectId={project.id}
+        images={lightboxImage ? [{ file_path: lightboxImage }] : []}
+        onClose={() => setLightboxImage(null)}
+      />
     </>
   );
 }

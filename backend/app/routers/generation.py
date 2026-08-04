@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from .. import storage, usage
-from ..providers import images, scenes, suno, wish_library
+from ..providers import images, scenes, suno, title_card, wish_library
 from .projects import migrate_legacy_project
 from .settings import DEFAULT_SETTINGS
 
@@ -203,6 +203,49 @@ async def delete_scene_image(project_id: str, scene_index: int, image_id: str):
     return {'images': remaining}
 
 
+@router.post('/{project_id}/scenes/{scene_index}/images/upload')
+async def upload_scene_image(
+    project_id: str, scene_index: int,
+    file: UploadFile | None = File(None), url: str | None = Form(None),
+):
+    """Adds a user's own image to a scene (drag-drop/file-picker upload, or
+    a pasted/dropped image URL) alongside AI-generated ones - see
+    images.save_uploaded_image / images.download_user_image_url for the
+    storage shape and the SSRF guards on the URL path respectively."""
+    has_url = bool(url and url.strip())
+    if not file and not has_url:
+        raise HTTPException(422, 'file or url is required')
+    if file and has_url:
+        raise HTTPException(422, 'provide either file or url, not both')
+
+    if file:
+        suffix = ('.' + file.filename.rsplit('.', 1)[-1].lower()) if file.filename and '.' in file.filename else ''
+        if suffix not in _ALLOWED_REFERENCE_EXTENSIONS:
+            raise HTTPException(415, 'Unsupported image type')
+        content = await file.read()
+        ext = suffix.removeprefix('.')
+    else:
+        try:
+            content, ext = await images.download_user_image_url(url.strip())
+        except RuntimeError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        scene_list = project.get('scenes', [])
+        if scene_index < 0 or scene_index >= len(scene_list):
+            raise HTTPException(404, 'Scene not found')
+
+        image = images.save_uploaded_image(project_id, scene_index, content, ext)
+        scene_list[scene_index]['images'] = [*scene_list[scene_index].get('images', []), image]
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    return {'image': image}
+
+
 @router.post('/{project_id}/reference-images')
 async def upload_reference_image(project_id: str, file: UploadFile = File(...)):
     suffix = ('.' + file.filename.rsplit('.', 1)[-1].lower()) if file.filename and '.' in file.filename else ''
@@ -245,3 +288,78 @@ async def delete_reference_image(project_id: str, filename: str):
         file_path.unlink()
 
     return {'reference_images': reference_images}
+
+
+def _resolve_reference_path(project_id: str, path: str) -> None:
+    """Rejects a `title-card/generate` reference path that doesn't stay
+    inside the project's own folder or doesn't exist - `path` is one of the
+    strings the client already got back from us (a scene image or a
+    project reference image), never user-typed, but this stays defense in
+    depth against a tampered request."""
+    project_root = storage.project_dir(project_id).resolve()
+    candidate = (project_root / path).resolve()
+    if project_root not in candidate.parents or not candidate.is_file():
+        raise HTTPException(422, f'Некорректный путь к референсному изображению: {path}')
+
+
+@router.post('/{project_id}/title-card/generate')
+async def generate_title_card(project_id: str, body: dict = Body(default={})):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+
+    title_text = (body.get('title_text') or '').strip()
+    author_text = (body.get('author_text') or '').strip()
+    base_prompt = body.get('base_prompt', '')
+    reference_image_paths = body.get('reference_image_paths') or []
+    if not reference_image_paths:
+        raise HTTPException(422, 'reference_image_paths is required')
+    if len(reference_image_paths) > 4:
+        raise HTTPException(422, 'reference_image_paths accepts at most 4 images')
+    for path in reference_image_paths:
+        _resolve_reference_path(project_id, path)
+
+    count = body.get('count', 1)
+    model = body.get('model', '')
+    aspect_ratio = body.get('aspect_ratio')
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('title_card', project_id, settings, count=count)
+    job_ids = title_card.start_jobs(
+        project_id, reference_image_paths, title_text, author_text, base_prompt, count, model, settings,
+        usage_ctx=usage_ctx, aspect_ratio=aspect_ratio,
+    )
+    return {'job_ids': job_ids}
+
+
+@router.get('/{project_id}/title-card/jobs/{job_id}')
+async def get_title_card_job(project_id: str, job_id: str):
+    job = title_card.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    return job
+
+
+@router.delete('/{project_id}/title-card/variants/{variant_id}')
+async def delete_title_card_variant(project_id: str, variant_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+
+        variants = (project.get('title_card') or {}).get('variants', [])
+        target = next((v for v in variants if v.get('variant_id') == variant_id), None)
+        if target is None:
+            raise HTTPException(404, 'Variant not found')
+
+        remaining = [v for v in variants if v.get('variant_id') != variant_id]
+        title_card_field = project.get('title_card') or {}
+        title_card_field['variants'] = remaining
+        project['title_card'] = title_card_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'variants': remaining}
