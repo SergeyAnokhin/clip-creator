@@ -118,20 +118,20 @@ export default function PosterConstructor({
   // Default-place a freshly picked overlay (no stored transform yet) once
   // both its image and the background's natural size are known.
   useEffect(() => {
-    if (titleImg.loaded && !titleLayer && bg.width) {
+    if (titleImg.image && !titleLayer && bg.width) {
       const s = (bg.width * 0.6) / titleImg.width;
       setTitleLayer({ x: (bg.width - titleImg.width * s) / 2, y: (bg.height - titleImg.height * s) / 2, scaleX: s, scaleY: s, rotation: 0 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [titleImg.loaded, bg.width]);
+  }, [titleImg.image, bg.width]);
 
   useEffect(() => {
-    if (logoImg.loaded && logoId && !logoLayer && bg.width) {
+    if (logoImg.image && logoId && !logoLayer && bg.width) {
       const s = (bg.width * 0.18) / logoImg.width;
       setLogoLayer({ x: bg.width * 0.04, y: bg.height * 0.04, scaleX: s, scaleY: s, rotation: 0 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logoImg.loaded, logoId, bg.width]);
+  }, [logoImg.image, logoId, bg.width]);
 
   function pickBackground(path) { setBackgroundPath(path); }
   function pickTitleCard(variantId) { setTitleCardVariantId(variantId); setTitleLayer(null); setSelected(null); }
@@ -164,10 +164,13 @@ export default function PosterConstructor({
               width: displayW, height: displayH, borderRadius: 8, overflow: 'hidden', flexShrink: 0,
               background: 'repeating-conic-gradient(#2a2a2a 0% 25%, #363636 0% 50%) 50% / 16px 16px',
             }}
-            onClick={() => setSelected(null)}
           >
             {bg.image && (
-              <Stage ref={stageRef} width={displayW} height={displayH} scaleX={scale} scaleY={scale}>
+              <Stage
+                ref={stageRef} width={displayW} height={displayH} scaleX={scale} scaleY={scale}
+                onMouseDown={(e) => { if (e.target === e.target.getStage()) setSelected(null); }}
+                onTouchStart={(e) => { if (e.target === e.target.getStage()) setSelected(null); }}
+              >
                 <Layer>
                   <KonvaImage image={bg.image} width={bg.width} height={bg.height} listening={false} />
                   {titleImg.image && (
