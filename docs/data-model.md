@@ -79,8 +79,9 @@ original is left untouched — background removal always **appends** a new
 variant rather than replacing one.
 
 **Poster**: `{poster_id, file_path, background_path, title_card_variant_id,
-logo_id, canvas_size{width,height}, layers{title_card{x,y,scaleX,scaleY,rotation},
-logo{...}|null}, rating, is_selected, generated_at}` — the Poster
+logo_id, canvas_size{width,height}, layers{title_card[{id,x,y,scaleX,scaleY,rotation,crop,effects}],
+logo[{...}]|null, glass{x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null},
+rating, is_selected, generated_at}` — the Poster
 constructor's output: `background_path` (a scene/reference image path,
 same shape as `TitleCard.reference_image_paths` entries) and
 `title_card_variant_id` (points into `variants[]`) are the two source
@@ -91,6 +92,32 @@ drag/scale/rotate transform, kept so `PosterConstructor.jsx` can reopen and
 re-edit the exact same arrangement. `posters` is append-only like `variants`
 except re-saving with an existing `poster_id` updates that entry in place
 (new flattened PNG, same id/file path) instead of appending.
+
+`title_card` and `logo` are **arrays**, not single objects — the same
+source image (the chosen title-card variant, or the chosen logo) can appear
+as several independent layers, each with its own transform/crop/effects,
+via `PosterConstructor.jsx`'s "Дублировать" (duplicate) button. `crop` is
+`{x,y,width,height}` in the source image's natural pixel space, or `null`
+for the full image — how a single title-card render (e.g. headline + author
+baked into one PNG) gets split into independently-movable pieces (crop one
+duplicate to the headline, another to the author line). Older saved posters
+stored a single transform object here instead of an array; the frontend
+wraps it into a one-item array on load (`normalizeLayers` in
+`PosterConstructor.jsx`), so both shapes still open correctly.
+
+Each layer's `effects` is opaque to the backend (stored and round-tripped
+as-is, no schema validation) — `PosterConstructor.jsx` currently writes
+`{glow{enabled,color,blur,distance,opacity}, opacity}`, `glow` rendered
+client-side as a Konva shadow on the overlay image's own alpha shape and
+`opacity` applied directly to the image; both are baked into the flattened
+PNG at save time, same as position/scale/rotation/crop. (An earlier
+`backdrop` effect — a feathered filled `Rect` behind the image — was dropped
+in favor of the plain `opacity` control; old saved posters with a `backdrop`
+key simply lose that effect on next load, no migration.)
+
+Unlike `title_card`/`logo`, `glass` is not tied to a picked source image —
+it's a standalone decorative rounded-rect panel (a simulated "frosted glass"
+look), limited to one instance, and also opaque/unvalidated on the backend.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads

@@ -464,7 +464,13 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     stage's free-text block appended verbatim (`title_card._build_prompt`) —
     a single multi-line field the user edits directly (default value
     `"Заголовок"\n"Автор"`), not two separate title/author inputs the server
-    wraps in quotes. `settings.title_card_base_prompt_presets` is a
+    wraps in quotes: the quote marks are a delimiter the user types
+    themselves to mark off one styleable group of text (title vs. author,
+    say), and the app's own default base prompt (`DEFAULT_TITLE_CARD_BASE_PROMPT`
+    in `title_card_prompt_defaults.py`) instructs the model accordingly — the
+    quote characters themselves are not meant to be rendered on the poster,
+    and a group's opening/closing quote may be on different lines while
+    still counting as one group in one style. `settings.title_card_base_prompt_presets` is a
     **user-managed** array of named variants (`{id, name, prompt}`, seeded
     with 3 built-ins from `title_card_prompt_defaults.py`) the stage can
     save/load/delete — plain client-side CRUD against the regular
@@ -498,14 +504,110 @@ draggable/resizable layout, flattened to PNG client-side
 { poster_id, file_path,                 # flattened PNG
   background_path, title_card_variant_id, logo_id,
   canvas_size: {width, height},         # background's natural size
-  layers: { title_card: {x,y,scaleX,scaleY,rotation}, logo: {...}|null },
+  layers: { title_card: [{id,x,y,scaleX,scaleY,rotation,crop,effects}],
+            logo: [{...}]|null,
+            glass: {x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null },
   rating, is_selected, generated_at }
 ```
 
 Saving stores the layer transforms alongside the flattened image (not just
 the PNG), so `PosterGallery.jsx`'s "Edit" reopens the exact same arrangement
 in `PosterConstructor` for further adjustment — re-saving with the same
-`poster_id` re-renders in place rather than creating a new entry.
+`poster_id` re-renders in place rather than creating a new entry (same
+`file_path`; the gallery/lightbox `<img>` tags append a `?v=generated_at`
+cache-busting query param so the browser doesn't keep showing the previous
+PNG it already cached at that same URL).
+
+`title_card` and `logo` are **arrays** of layers, not single objects — the
+layer toolbar's "Дублировать" (duplicate) button clones the selected layer
+(offset slightly, independently movable from then on) so the same source
+image can appear multiple times with different positions/crops, e.g.
+splitting one title-card render (headline + author baked into a single PNG)
+into an independently-placed headline layer and author layer. "Обрезать"
+(crop) toggles a second interaction mode on `OverlayImage`: the normal
+whole-layer Transformer (corner handles only, plus rotate) is swapped for a
+resize-only crop-rect Transformer with all 8 anchors enabled — 4 corners
+plus the 4 edge midpoints (`top-center`/`bottom-center`/`middle-left`/
+`middle-right`) — so a single edge can be pulled in independently instead of
+always dragging a corner and affecting two sides at once; each anchor
+renders Konva's default small square handle, doubling as the "this edge is
+draggable" indicator. It's drawn over a dimmed full-resolution copy of the
+image, so parts outside the current crop are visible again to crop back in,
+editing `layer.crop`
+(`{x,y,width,height}` in the source image's natural pixel space, or `null`
+for no crop) live as it's dragged. Both the ghost image and the crop editor
+share the Konva name `crop-editor` purely so `handleSave`'s export pass can
+find-and-hide them in one call — nothing from crop-editing mode should ever
+leak into a saved PNG, even if the user saves without clicking "Готово"
+first. Older saved posters stored a single transform object here instead of
+an array; `PosterConstructor.jsx`'s `normalizeLayers` wraps it into a
+one-item array on load, so both shapes still open correctly.
+
+Each layer also carries an `effects` bag, edited via `EffectsPanel` in
+`PosterConstructor.jsx` when that layer is selected: the layer's own
+**opacity** (a plain 5–100% slider) and an optional **glow**
+(`{enabled,color,blur,distance,opacity}`, rendered as a Konva shadow on the
+overlay image itself — the shadow follows the image's own alpha shape).
+Both bake into the flattened PNG at save time; the backend stores `effects`
+opaquely inside `layers` (no schema validation), see `docs/data-model.md`'s
+**Poster** entry. (Earlier versions of this panel had a **backdrop** effect
+— a feathered filled `Rect` behind the image — instead of `opacity`; it was
+dropped as not useful enough to justify the extra control. Old saved posters
+with a `backdrop` key just lose that effect on next load.)
+
+A third, optional overlay is a **glass** panel - a plain rounded rect (not
+tied to any source image), added via the "Объекты" row's button and limited
+to one instance. Its live-preview render (`OverlayGlass` in
+`PosterConstructor.jsx`) is a cheap simulation - a white-tinted `Rect` plus a
+soft edge-highlight `Rect` stroke, both driven by the `opacity`/`thickness`
+sliders in `GlassPanel` - since redrawing a real blurred backdrop on every
+drag frame would be too slow. At save time `handleSave` swaps in the real
+thing: it hides the glass node, rasterizes the rest of the stage to a canvas,
+samples and blurs the region under the glass's (possibly rotated) bounds with
+plain Canvas2D ops (`buildHqGlassCanvas`), re-tints/clips/borders that
+sample, and inserts it as a temporary `Konva.Image` in the glass's place
+before flattening - then reverts the stage back to its live editable state.
+
+The picture area itself can be expanded via the header's fullscreen toggle
+(`Maximize2`/`Minimize2`). In fullscreen the modal's own title bar is
+dropped entirely (not just shrunk) — `.modal-backdrop`'s padding and the
+`.modal-card`'s own padding/border-radius are both zeroed so the card is a
+true edge-to-edge `100vw`/`100vh` overlay, and the collapse/close buttons
+float over the picture's top-right corner instead of taking their own
+layout row — so the picture cell can grow to fill essentially the entire
+viewport height (only `FULLSCREEN_V_RESERVE`, a small bottom-padding
+buffer, is reserved). The tools column stays a fixed `SIDE_PANEL_WIDTH`
+(300px) docked flush to the right edge in both modes — `flex: 1` on the
+picture cell plus a fixed-width (non-growing) panel, rather than the
+reverse, is what keeps the extra space from piling up as a dead zone next
+to a narrower/portrait poster. In both modes the Stage canvas is padded
+with an `OVERFLOW_MARGIN`/`OVERFLOW_MARGIN_FULLSCREEN` border (screen px)
+beyond the poster's own bounds, so an overlay being dragged or resized past
+the poster edge stays visible instead of getting clipped mid-edit;
+`handleSave` crops that margin back out (`toBlob({x,y,width,height,...})`)
+so the exported poster is always exactly `canvas_size`.
+
+Independent of that fit-to-container scale, the picture area also supports
+interactive zoom/pan — a `−`/percentage/`+` row docked at the top of the
+tools panel (not floating over the picture, so it never sits on top of the
+poster content), plus mouse-wheel zoom anchored at the cursor (the standard
+Konva "zoom to pointer" recipe: read the pointer's position in stage space
+at the old scale, then solve for the stage offset that keeps that same
+point under the cursor at the new scale). This is layered on top of the
+auto-fit `scale` as a separate `zoom` multiplier plus a `stagePos` pan
+offset, both reset whenever the background image or fullscreen state
+changes (a pan computed under a since-resized view doesn't mean anything
+any more). `handleSave` briefly resets the Stage's actual `scale`/`position`
+to the neutral fit-scale/origin before capturing (matching the crop/margin
+math, which assumes exactly that state) and restores the interactive
+zoom/pan afterward, so the exported poster is never affected by whatever the
+user happened to be zoomed/panned to while editing.
+
+The four picker rows (background/title card/logo/objects) are individually
+collapsible (`PickerRow`'s `collapsible` prop, chevron toggle, open/closed
+state kept local to each row) so the fixed-width panel stays manageable
+once several sections have content — logo and objects default closed since
+they're touched less often than background/title card.
 
 - `POST /api/projects/{id}/title-card/poster` (multipart: `file` PNG +
   `background_path`, `title_card_variant_id`, `logo_id`, `layers` (JSON),

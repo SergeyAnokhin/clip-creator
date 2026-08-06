@@ -186,6 +186,7 @@ export default function TitleCardStage({
 }) {
   const [pickerSlot, setPickerSlot] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(null);
+  const [posterLightboxIndex, setPosterLightboxIndex] = useState(null);
   const tierFavorites = imageModelTier === 'simple' ? imageModelSimpleFavorites : imageModelFavorites;
   const activeWishIds = project.active_title_card_wish_ids || [];
 
@@ -425,9 +426,19 @@ export default function TitleCardStage({
       ) : (
         <PosterGallery
           L={L} projectId={project.id} posters={posters}
+          onExpand={(i) => setPosterLightboxIndex(i)}
           onEdit={actions.openConstructor} onDelete={actions.deletePoster} onSelectMain={actions.selectMainPoster}
         />
       )}
+
+      <ImageLightbox
+        L={L} projectId={project.id}
+        // `?v=generated_at` busts the browser's image cache after an
+        // in-place re-save (same file_path, new PNG) - see PosterGallery.jsx.
+        images={posterLightboxIndex == null ? [] : posters.map((p) => ({ ...p, file_path: `${p.file_path}?v=${encodeURIComponent(p.generated_at || '')}` }))}
+        initialIndex={posterLightboxIndex || 0}
+        onClose={() => setPosterLightboxIndex(null)}
+      />
 
       {posterConstructorOpen && (
         <PosterConstructor
