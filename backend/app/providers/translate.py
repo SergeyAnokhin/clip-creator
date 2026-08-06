@@ -31,6 +31,7 @@ async def translate_text(text: str, target_lang: str, api_key: str, usage_ctx: d
     if not api_key:
         raise RuntimeError('Нет API-ключа Google Translate')
 
+    debug_request = {'url': _TRANSLATE_URL, 'q': text, 'target': target_lang, 'format': 'text'}
     started = time.monotonic()
     console_log.log_request_start(_MODEL, 'translate', usage_ctx.get('task') if usage_ctx else None)
     async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT_SECONDS) as http_client:
@@ -42,17 +43,20 @@ async def translate_text(text: str, target_lang: str, api_key: str, usage_ctx: d
     duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:
         usage.record(usage_ctx, model=_MODEL, kind='translate', status='error', duration_ms=duration_ms,
-                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}',
+                     debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'Google Translate API вернул {resp.status_code}: {resp.text[:200]}')
 
     data = resp.json()
     translations = (data.get('data') or {}).get('translations') or []
     if not translations:
         usage.record(usage_ctx, model=_MODEL, kind='translate', status='error', duration_ms=duration_ms,
-                     prompt=text, error=f'unexpected response: {data}')
+                     prompt=text, error=f'unexpected response: {data}',
+                     debug={'request': debug_request, 'response': data})
         raise RuntimeError('Google Translate: неожиданный формат ответа')
 
     result = translations[0].get('translatedText', '')
     usage.record(usage_ctx, model=_MODEL, kind='translate', status='ok', duration_ms=duration_ms,
-                 units={'characters': len(text)}, prompt=text, response=result)
+                 units={'characters': len(text)}, prompt=text, response=result,
+                 debug={'request': debug_request, 'response': data})
     return result

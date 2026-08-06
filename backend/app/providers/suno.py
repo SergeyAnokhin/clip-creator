@@ -129,13 +129,14 @@ async def _generate_via_gemini(
         duration_ms = int((time.monotonic() - started) * 1000)
         error = f'Таймаут: модель {model} не ответила за {timeout_seconds} секунд.'
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=error)
+                      prompt=raw_lyrics, error=error, debug={'request': debug_request})
         raise RuntimeError(error) from None
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code != 200:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}')
+                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}',
+                      debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'Gemini API вернул {resp.status_code}: {resp.text[:300]}')
 
     data = resp.json()
@@ -143,7 +144,8 @@ async def _generate_via_gemini(
         text = data['candidates'][0]['content']['parts'][0]['text']
     except (KeyError, IndexError) as exc:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=f'Неожиданный ответ Gemini: {data}')
+                      prompt=raw_lyrics, error=f'Неожиданный ответ Gemini: {data}',
+                      debug={'request': debug_request, 'response': data})
         raise RuntimeError(f'Неожиданный ответ Gemini: {data}') from exc
 
     result = _parse_model_response(text, raw_lyrics)
@@ -160,7 +162,7 @@ async def _generate_via_gemini(
         'usage': _usage_summary(model, units, None, settings.get('pricing_overrides'), duration_ms),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
-                 units=units, prompt=raw_lyrics, response=text)
+                 units=units, prompt=raw_lyrics, response=text, debug=result['debug'])
     return result
 
 
@@ -185,13 +187,14 @@ async def _generate_via_openrouter(
         duration_ms = int((time.monotonic() - started) * 1000)
         error = f'Таймаут: модель {model} не ответила за {timeout_seconds} секунд.'
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=error)
+                      prompt=raw_lyrics, error=error, debug={'request': debug_request})
         raise RuntimeError(error) from None
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code != 200:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}')
+                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}',
+                      debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:300]}')
 
     data = resp.json()
@@ -199,7 +202,8 @@ async def _generate_via_openrouter(
         text = data['choices'][0]['message']['content']
     except (KeyError, IndexError) as exc:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=f'Неожиданный ответ OpenRouter: {data}')
+                      prompt=raw_lyrics, error=f'Неожиданный ответ OpenRouter: {data}',
+                      debug={'request': debug_request, 'response': data})
         raise RuntimeError(f'Неожиданный ответ OpenRouter: {data}') from exc
 
     result = _parse_model_response(text, raw_lyrics)
@@ -219,7 +223,7 @@ async def _generate_via_openrouter(
         'usage': _usage_summary(model, units, u.get('cost'), settings.get('pricing_overrides'), duration_ms),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
-                 units=units, prompt=raw_lyrics, response=text, provider_cost=u.get('cost'))
+                 units=units, prompt=raw_lyrics, response=text, provider_cost=u.get('cost'), debug=result['debug'])
     return result
 
 
@@ -242,13 +246,14 @@ async def _generate_via_deepseek(
         duration_ms = int((time.monotonic() - started) * 1000)
         error = f'Таймаут: модель {model} не ответила за {timeout_seconds} секунд.'
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=error)
+                      prompt=raw_lyrics, error=error, debug={'request': debug_request})
         raise RuntimeError(error) from None
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if resp.status_code != 200:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}')
+                      prompt=raw_lyrics, error=f'{resp.status_code}: {resp.text[:300]}',
+                      debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'DeepSeek API вернул {resp.status_code}: {resp.text[:300]}')
 
     data = resp.json()
@@ -256,7 +261,8 @@ async def _generate_via_deepseek(
         text = data['choices'][0]['message']['content']
     except (KeyError, IndexError) as exc:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                      prompt=raw_lyrics, error=f'Неожиданный ответ DeepSeek: {data}')
+                      prompt=raw_lyrics, error=f'Неожиданный ответ DeepSeek: {data}',
+                      debug={'request': debug_request, 'response': data})
         raise RuntimeError(f'Неожиданный ответ DeepSeek: {data}') from exc
 
     result = _parse_model_response(text, raw_lyrics)
@@ -276,7 +282,7 @@ async def _generate_via_deepseek(
         'usage': _usage_summary(model, units, None, settings.get('pricing_overrides'), duration_ms),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
-                 units=units, prompt=raw_lyrics, response=text)
+                 units=units, prompt=raw_lyrics, response=text, debug=result['debug'])
     return result
 
 

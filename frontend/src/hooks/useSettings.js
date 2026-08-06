@@ -9,6 +9,7 @@ const DEFAULT_TEXT_MODELS = { favorites: [], default: 'google:gemini-2.5-flash' 
 const DEFAULT_SIMPLE_MODELS = { favorites: [], default: '' };
 const DEFAULT_IMAGE_MODELS = { favorites: [], default: '' };
 const DEFAULT_IMAGE_MODELS_SIMPLE = { favorites: [], default: '' };
+const DEFAULT_BG_REMOVER_PARAMS = { background_type: 'rgba', format: 'png', threshold: 0, reverse: false };
 
 /** App settings (language, API keys, default models, Suno meta-tags), loaded
  * from the backend on mount. Owns `lang`, and therefore the `L` dictionary
@@ -33,6 +34,8 @@ export function useSettings({ showToast, onAiCall }) {
   const [hideMotionPrompt, setHideMotionPromptState] = useState(false);
   const [titleCardBasePrompt, setTitleCardBasePrompt] = useState('');
   const [titleCardBasePromptPresets, setTitleCardBasePromptPresets] = useState([]);
+  const [backgroundRemoverParams, setBackgroundRemoverParams] = useState(DEFAULT_BG_REMOVER_PARAMS);
+  const [logos, setLogos] = useState([]);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -54,6 +57,8 @@ export function useSettings({ showToast, onAiCall }) {
       setHideMotionPromptState(s.hide_motion_prompt || false);
       setTitleCardBasePrompt(s.title_card_base_prompt || '');
       setTitleCardBasePromptPresets(s.title_card_base_prompt_presets || []);
+      setBackgroundRemoverParams(s.background_remover_params || DEFAULT_BG_REMOVER_PARAMS);
+      setLogos(s.logos || []);
     }).catch(() => {});
     api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
   }, []);
@@ -232,6 +237,28 @@ export function useSettings({ showToast, onAiCall }) {
     api.putSettings({ hide_motion_prompt: value }).catch(() => {});
   }
 
+  function setBackgroundRemoverParam(key, value) {
+    setBackgroundRemoverParams((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function uploadLogo(name, file) {
+    try {
+      const result = await api.uploadLogo(name, file);
+      setLogos(result.logos);
+      showToast(L.toast_saved);
+    } catch {
+      showToast(L.toast_saveFailed);
+    }
+  }
+  async function deleteLogo(id) {
+    try {
+      const result = await api.deleteLogo(id);
+      setLogos(result.logos);
+    } catch {
+      showToast(L.toast_saveFailed);
+    }
+  }
+
   function removeWishSnippet(id) {
     const next = wishLibrary.filter((w) => w.id !== id);
     setWishLibrary(next);
@@ -329,6 +356,7 @@ export function useSettings({ showToast, onAiCall }) {
         hide_motion_prompt: src.hide_motion_prompt ?? hideMotionPrompt,
         title_card_base_prompt: src.title_card_base_prompt ?? titleCardBasePrompt,
         title_card_base_prompt_presets: src.title_card_base_prompt_presets ?? titleCardBasePromptPresets,
+        background_remover_params: src.background_remover_params ?? backgroundRemoverParams,
       };
       setLang(next.lang);
       setTextModels(next.text_models);
@@ -346,6 +374,7 @@ export function useSettings({ showToast, onAiCall }) {
       setHideMotionPromptState(next.hide_motion_prompt);
       setTitleCardBasePrompt(next.title_card_base_prompt);
       setTitleCardBasePromptPresets(next.title_card_base_prompt_presets);
+      setBackgroundRemoverParams(next.background_remover_params);
       await api.putSettings(next);
       showToast(L.toast_imported);
     } catch {
@@ -363,6 +392,7 @@ export function useSettings({ showToast, onAiCall }) {
         scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
         scene_wish_library: sceneWishLibrary, hide_motion_prompt: hideMotionPrompt,
         title_card_base_prompt: titleCardBasePrompt, title_card_base_prompt_presets: titleCardBasePromptPresets,
+        background_remover_params: backgroundRemoverParams,
       });
       showToast(L.toast_saved);
     } catch {
@@ -376,9 +406,11 @@ export function useSettings({ showToast, onAiCall }) {
     sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets, requestTimeoutSeconds,
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
     titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
+    backgroundRemoverParams, logos, setLogos,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
+      setBackgroundRemoverParam, uploadLogo, deleteLogo,
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings, setHideMotionPrompt,
       addSpecialTag, removeSpecialTag, updateSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
       addReferenceExample, removeReferenceExample, updateReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet, setWishLibrary,

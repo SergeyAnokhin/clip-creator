@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -409,3 +410,95 @@ async def remove_title_card_variant_background(project_id: str, variant_id: str)
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
     return result
+
+
+@router.post('/{project_id}/title-card/poster')
+async def save_title_card_poster(
+    project_id: str,
+    file: UploadFile = File(...),
+    background_path: str = Form(...),
+    title_card_variant_id: str = Form(...),
+    logo_id: str = Form(''),
+    layers: str = Form(...),
+    canvas_size: str = Form(...),
+    poster_id: str = Form(''),
+):
+    """Saves the flattened PNG a `PosterConstructor.jsx` Konva stage rendered
+    (background scene image + the title-card overlay + an optional logo,
+    dragged/scaled by the user) as a new poster, or re-renders an existing
+    one in place when `poster_id` is given - the constructor is re-openable
+    because `layers`/`background_path`/`title_card_variant_id`/`logo_id` are
+    stored alongside the flattened image, not just the flattened PNG itself."""
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    _resolve_reference_path(project_id, background_path)
+    variants = (project.get('title_card') or {}).get('variants', [])
+    if not any(v.get('variant_id') == title_card_variant_id for v in variants):
+        raise HTTPException(422, f'Unknown title_card_variant_id: {title_card_variant_id}')
+
+    try:
+        layers_data = json.loads(layers)
+        canvas_size_data = json.loads(canvas_size)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(422, f'layers/canvas_size must be valid JSON: {exc}') from exc
+
+    contents = await file.read()
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        title_card_field = project.get('title_card') or {}
+        posters = title_card_field.get('posters', [])
+        existing = next((p for p in posters if p.get('poster_id') == poster_id), None) if poster_id else None
+
+        new_poster_id = existing['poster_id'] if existing else f'poster_{uuid4().hex[:8]}'
+        posters_dir = storage.project_dir(project_id) / 'titlecard' / 'posters'
+        posters_dir.mkdir(parents=True, exist_ok=True)
+        filename = f'{new_poster_id.removeprefix("poster_")}.png'
+        (posters_dir / filename).write_bytes(contents)
+
+        poster = {
+            'poster_id': new_poster_id, 'file_path': f'titlecard/posters/{filename}',
+            'background_path': background_path, 'title_card_variant_id': title_card_variant_id,
+            'logo_id': logo_id or None, 'canvas_size': canvas_size_data, 'layers': layers_data,
+            'rating': existing.get('rating', 0) if existing else 0,
+            'is_selected': existing.get('is_selected', False) if existing else False,
+            'generated_at': _now(),
+        }
+        posters = (
+            [poster if p.get('poster_id') == new_poster_id else p for p in posters]
+            if existing else [*posters, poster]
+        )
+        title_card_field['posters'] = posters
+        project['title_card'] = title_card_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    return {'poster': poster, 'posters': posters}
+
+
+@router.delete('/{project_id}/title-card/poster/{poster_id}')
+async def delete_title_card_poster(project_id: str, poster_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        title_card_field = project.get('title_card') or {}
+        posters = title_card_field.get('posters', [])
+        target = next((p for p in posters if p.get('poster_id') == poster_id), None)
+        if target is None:
+            raise HTTPException(404, 'Poster not found')
+
+        remaining = [p for p in posters if p.get('poster_id') != poster_id]
+        title_card_field['posters'] = remaining
+        project['title_card'] = title_card_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'posters': remaining}

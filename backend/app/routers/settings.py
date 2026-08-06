@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Body, HTTPException
+from uuid import uuid4
+
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from .. import storage, usage
 from ..providers import image_models, text_models, wish_library
@@ -19,6 +21,7 @@ _MODEL_PROVIDERS = {'google', 'google_free', 'openrouter', 'deepseek', 'replicat
 # Krea (krea.ai) only does image/video generation, no text/LLM models, so it's
 # valid for the image-models endpoint but not the text one.
 _IMAGE_MODEL_PROVIDERS = _MODEL_PROVIDERS | {'krea'}
+_ALLOWED_LOGO_EXTENSIONS = {'.png', '.webp'}
 
 DEFAULT_SETTINGS = {
     'lang': 'ru',
@@ -47,6 +50,14 @@ DEFAULT_SETTINGS = {
     'title_card_base_prompt_presets': TITLE_CARD_BASE_PROMPT_PRESETS,
     'pricing_overrides': {},
     'request_timeout_seconds': 60,
+    # Replicate 851-labs/background-remover input params (see
+    # providers/title_card.py's _generate_background_remover) - defaults
+    # match the model's own schema defaults (confirmed live against
+    # api.replicate.com/v1/models/851-labs/background-remover, 2026-08).
+    'background_remover_params': {
+        'background_type': 'rgba', 'format': 'png', 'threshold': 0, 'reverse': False,
+    },
+    'logos': [],
     # UI-only preference (Scenes/Images stage): hides every motion_prompt
     # field/label when the scene mainly needs a static image right now -
     # doesn't touch the underlying scene data, just what's rendered.
@@ -204,3 +215,47 @@ def update_scene_wish(wish_id: str, body: dict = Body(...)):
     settings['scene_wish_library'] = wish_lib
     storage.save_settings(settings)
     return {'scene_wish_library': wish_lib, 'wish': wish}
+
+
+@router.post('/logos')
+async def upload_logo(file: UploadFile = File(...), name: str = Form('')):
+    """Global (cross-project) logo library for the Poster constructor (see
+    routers/generation.py's poster routes) - PNG/WebP with a transparent
+    background, stored under app_data/logos/ (served at /media/logos/... -
+    the /media mount is storage.get_data_root(), see main.py) and listed in
+    settings.logos, same partial-merge-PUT-visible pattern as
+    suno_wish_library etc."""
+    suffix = ('.' + file.filename.rsplit('.', 1)[-1].lower()) if file.filename and '.' in file.filename else ''
+    if suffix not in _ALLOWED_LOGO_EXTENSIONS:
+        raise HTTPException(415, 'Unsupported image type (use png or webp)')
+    contents = await file.read()
+
+    logos_dir = storage.get_data_root() / 'logos'
+    logos_dir.mkdir(parents=True, exist_ok=True)
+    logo_id = uuid4().hex[:8]
+    filename = f'logo_{logo_id}{suffix}'
+    (logos_dir / filename).write_bytes(contents)
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    logos = [*settings.get('logos', []), {'id': logo_id, 'name': (name or file.filename or '').strip(), 'file_path': f'logos/{filename}'}]
+    settings['logos'] = logos
+    storage.save_settings(settings)
+    return {'logos': logos}
+
+
+@router.delete('/logos/{logo_id}')
+def delete_logo(logo_id: str):
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    logos = settings.get('logos', [])
+    target = next((l for l in logos if l.get('id') == logo_id), None)
+    if target is None:
+        raise HTTPException(404, 'Logo not found')
+
+    remaining = [l for l in logos if l.get('id') != logo_id]
+    settings['logos'] = remaining
+    storage.save_settings(settings)
+
+    file_path = storage.get_data_root() / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+    return {'logos': remaining}

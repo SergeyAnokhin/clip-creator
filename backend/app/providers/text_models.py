@@ -237,9 +237,11 @@ async def _complete_google(
             json={'contents': [{'parts': [{'text': prompt}]}]},
         )
     duration_ms = int((time.monotonic() - started) * 1000)
+    debug_request = {'url': url, 'model': model_id, 'prompt': prompt}
     if resp.status_code != 200:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}',
+                     debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'Gemini API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
     result = data['candidates'][0]['content']['parts'][0]['text']
@@ -252,7 +254,7 @@ async def _complete_google(
         'reasoning_tokens': um.get('thoughtsTokenCount'),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
-                 units=units, prompt=text, response=result)
+                 units=units, prompt=text, response=result, debug={'request': debug_request, 'response': data})
     return result
 
 
@@ -261,6 +263,8 @@ async def _complete_openrouter(
     prompt_template: str = _TITLE_PROMPT, timeout: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     model = f'openrouter:{model_id}'
+    prompt = prompt_template.format(text=text)
+    debug_request = {'url': _OPENROUTER_CHAT_URL, 'model': model_id, 'prompt': prompt}
     started = time.monotonic()
     console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
     async with httpx.AsyncClient(timeout=timeout) as http_client:
@@ -269,14 +273,15 @@ async def _complete_openrouter(
             headers={'Authorization': f'Bearer {api_key}'},
             json={
                 'model': model_id,
-                'messages': [{'role': 'user', 'content': prompt_template.format(text=text)}],
+                'messages': [{'role': 'user', 'content': prompt}],
                 'usage': {'include': True},
             },
         )
     duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}',
+                     debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
     result = data['choices'][0]['message']['content']
@@ -292,7 +297,8 @@ async def _complete_openrouter(
     # set on the request - it wins over the catalog estimate (see
     # usage.record's provider_cost handling).
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
-                 units=units, prompt=text, response=result, provider_cost=u.get('cost'))
+                 units=units, prompt=text, response=result, provider_cost=u.get('cost'),
+                 debug={'request': debug_request, 'response': data})
     return result
 
 
@@ -301,18 +307,21 @@ async def _complete_deepseek(
     prompt_template: str = _TITLE_PROMPT, timeout: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     model = f'deepseek:{model_id}'
+    prompt = prompt_template.format(text=text)
+    debug_request = {'url': _DEEPSEEK_CHAT_URL, 'model': model_id, 'prompt': prompt}
     started = time.monotonic()
     console_log.log_request_start(model, 'text', usage_ctx.get('task') if usage_ctx else None)
     async with httpx.AsyncClient(timeout=timeout) as http_client:
         resp = await http_client.post(
             _DEEPSEEK_CHAT_URL,
             headers={'Authorization': f'Bearer {api_key}'},
-            json={'model': model_id, 'messages': [{'role': 'user', 'content': prompt_template.format(text=text)}]},
+            json={'model': model_id, 'messages': [{'role': 'user', 'content': prompt}]},
         )
     duration_ms = int((time.monotonic() - started) * 1000)
     if resp.status_code != 200:
         usage.record(usage_ctx, model=model, kind='text', status='error', duration_ms=duration_ms,
-                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}')
+                     prompt=text, error=f'{resp.status_code}: {resp.text[:200]}',
+                     debug={'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}})
         raise RuntimeError(f'DeepSeek API вернул {resp.status_code}: {resp.text[:200]}')
     data = resp.json()
     result = data['choices'][0]['message']['content']
@@ -324,5 +333,5 @@ async def _complete_deepseek(
         'cached_input_tokens': u.get('prompt_cache_hit_tokens'),
     }
     usage.record(usage_ctx, model=model, kind='text', status='ok', duration_ms=duration_ms,
-                 units=units, prompt=text, response=result)
+                 units=units, prompt=text, response=result, debug={'request': debug_request, 'response': data})
     return result

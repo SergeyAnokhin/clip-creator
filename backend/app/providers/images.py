@@ -196,10 +196,13 @@ async def _generate_krea(
     body = {'prompt': prompt}
     if aspect_ratio:
         body['aspect_ratio'] = aspect_ratio
+    debug_request = {'url': f'{_KREA_BASE}/generate/image/{model_id}', 'model': model_id, 'body': body}
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         resp = await http_client.post(f'{_KREA_BASE}/generate/image/{model_id}', headers=headers, json=body)
     if resp.status_code not in (200, 201, 202):
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'Krea API вернул {resp.status_code}: {resp.text[:300]}')
     job_id = resp.json()['job_id']
 
@@ -209,15 +212,21 @@ async def _generate_krea(
         async with httpx.AsyncClient(timeout=30) as http_client:
             poll = await http_client.get(f'{_KREA_BASE}/jobs/{job_id}', headers=headers)
         if poll.status_code != 200:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
             raise RuntimeError(f'Krea API (poll) вернул {poll.status_code}: {poll.text[:300]}')
         data = poll.json()
         status = data.get('status')
         if status == 'completed':
             urls = (data.get('result') or {}).get('urls') or []
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': data}
             if not urls:
                 raise RuntimeError('Krea: задание завершено, но URL изображения не найден')
             return await _download(urls[0])
         if status in ('failed', 'cancelled'):
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': data}
             raise RuntimeError(f'Krea: задание завершилось со статусом {status}')
         if time.monotonic() > deadline:
             raise RuntimeError('Krea: превышено время ожидания генерации')
@@ -236,12 +245,15 @@ async def _generate_replicate(
             input_body['width'], input_body['height'] = width, height
         else:
             input_body['aspect_ratio'] = aspect_ratio
+    debug_request = {'url': f'{_REPLICATE_BASE}/models/{model_id}/predictions', 'model': model_id, 'input': input_body}
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         resp = await http_client.post(
             f'{_REPLICATE_BASE}/models/{model_id}/predictions', headers=headers, json={'input': input_body},
         )
     if resp.status_code not in (200, 201):
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'Replicate API вернул {resp.status_code}: {resp.text[:300]}')
     data = resp.json()
     get_url = data['urls']['get']
@@ -249,14 +261,20 @@ async def _generate_replicate(
     deadline = time.monotonic() + _JOB_TIMEOUT
     while data.get('status') not in ('succeeded', 'failed', 'canceled'):
         if time.monotonic() > deadline:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': data}
             raise RuntimeError('Replicate: превышено время ожидания генерации')
         await asyncio.sleep(_POLL_INTERVAL)
         async with httpx.AsyncClient(timeout=30) as http_client:
             poll = await http_client.get(get_url, headers=headers)
         if poll.status_code != 200:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
             raise RuntimeError(f'Replicate API (poll) вернул {poll.status_code}: {poll.text[:300]}')
         data = poll.json()
 
+    if usage_out is not None:
+        usage_out['debug'] = {'request': debug_request, 'response': data}
     if data.get('status') != 'succeeded':
         raise RuntimeError(f'Replicate: {data.get("error") or data.get("status")}')
     output = data.get('output')
@@ -277,10 +295,13 @@ async def _generate_fal(
     body = {'prompt': prompt}
     if aspect_ratio:
         body['image_size'] = _FAL_IMAGE_SIZE[aspect_ratio]
+    debug_request = {'url': f'{_FAL_BASE}/{model_id}', 'model': model_id, 'body': body}
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         resp = await http_client.post(f'{_FAL_BASE}/{model_id}', headers=headers, json=body)
     if resp.status_code >= 400:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'FAL API вернул {resp.status_code}: {resp.text[:300]}')
     submitted = resp.json()
     status_url = submitted['status_url']
@@ -290,6 +311,8 @@ async def _generate_fal(
     status = submitted.get('status')
     while status != 'COMPLETED':
         if status == 'FAILED':
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': 'FAILED'}}
             raise RuntimeError('FAL: задание завершилось с ошибкой')
         if time.monotonic() > deadline:
             raise RuntimeError('FAL: превышено время ожидания генерации')
@@ -301,15 +324,22 @@ async def _generate_fal(
         # the job's own status field (checked below) is what decides whether
         # to keep polling.
         if poll.status_code >= 400:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
             raise RuntimeError(f'FAL API (poll) вернул {poll.status_code}: {poll.text[:300]}')
         status = poll.json().get('status')
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         result = await http_client.get(response_url, headers=headers)
     if result.status_code >= 400:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': result.status_code, 'text': result.text[:500]}}
         raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
     payload = result.json()
     images = payload.get('images') or []
+    if usage_out is not None:
+        redacted_response = {**payload, 'images': [{'url': img.get('url')} for img in images]}
+        usage_out['debug'] = {'request': debug_request, 'response': redacted_response}
     if not images:
         raise RuntimeError('FAL: результат не содержит изображений')
     if (payload.get('has_nsfw_concepts') or [False])[0]:
@@ -329,18 +359,25 @@ async def _generate_google(
     parameters = {'sampleCount': 1}
     if aspect_ratio:
         parameters['aspectRatio'] = aspect_ratio
+    url = _GOOGLE_PREDICT_URL.format(model=model_id)
+    debug_request = {'url': url, 'model': model_id, 'prompt': prompt, 'parameters': parameters}
 
     async with httpx.AsyncClient(timeout=60) as http_client:
         resp = await http_client.post(
-            _GOOGLE_PREDICT_URL.format(model=model_id),
+            url,
             params={'key': api_key},
             json={'instances': [{'prompt': prompt}], 'parameters': parameters},
         )
     if resp.status_code != 200:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'Google Imagen API вернул {resp.status_code}: {resp.text[:300]}')
     data = resp.json()
     predictions = data.get('predictions') or []
     b64 = predictions[0].get('bytesBase64Encoded') if predictions else None
+    if usage_out is not None:
+        redacted = {**data, 'predictions': [{k: v for k, v in p.items() if k != 'bytesBase64Encoded'} for p in predictions]}
+        usage_out['debug'] = {'request': debug_request, 'response': redacted}
     if not b64:
         raise RuntimeError(f'Google Imagen: неожиданный ответ {data}')
     ext = _MIME_EXT.get(predictions[0].get('mimeType', 'image/png'), 'png')
@@ -356,13 +393,19 @@ async def _generate_openrouter(
     body = {'model': model_id, 'prompt': prompt, 'n': 1}
     if aspect_ratio:
         body['aspect_ratio'] = aspect_ratio
+    debug_request = {'url': _OPENROUTER_IMAGES_URL, 'model': model_id, 'body': body}
 
     async with httpx.AsyncClient(timeout=90) as http_client:
         resp = await http_client.post(_OPENROUTER_IMAGES_URL, headers=headers, json=body)
     if resp.status_code != 200:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
         raise RuntimeError(f'OpenRouter API вернул {resp.status_code}: {resp.text[:300]}')
     data = resp.json()
     items = data.get('data') or []
+    if usage_out is not None:
+        redacted_response = {**data, 'data': [{'media_type': it.get('media_type')} for it in items]}
+        usage_out['debug'] = {'request': debug_request, 'response': redacted_response}
     if not items:
         raise RuntimeError('OpenRouter: результат не содержит изображений')
     b64 = items[0].get('b64_json')
@@ -406,7 +449,8 @@ async def _run_job(
         content, ext = await generator(model_id, prompt, api_key, usage_out=provider_usage, aspect_ratio=aspect_ratio)
     except Exception as exc:
         usage.record(usage_ctx, model=model, kind='image', status='error',
-                     duration_ms=int((time.monotonic() - started) * 1000), prompt=prompt, error=str(exc))
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=prompt, error=str(exc),
+                     debug=provider_usage.get('debug'))
         _jobs[job_id] = {'status': 'failed', 'image': None, 'error': str(exc)}
         return
 
@@ -418,6 +462,7 @@ async def _run_job(
     (images_dir / filename).write_bytes(content)
 
     provider_cost = provider_usage.pop('cost', None)
+    debug_info = provider_usage.pop('debug', None)
     units = {'images': 1, **provider_usage}
     if provider_cost is not None:
         cost = provider_cost
@@ -441,7 +486,7 @@ async def _run_job(
     usage.record(usage_ctx, model=model, kind='image', status='ok',
                  duration_ms=int((time.monotonic() - started) * 1000),
                  units=units, prompt=prompt, response=image['file_path'],
-                 provider_cost=provider_cost)
+                 provider_cost=provider_cost, debug=debug_info)
     _jobs[job_id] = {'status': 'completed', 'image': image, 'error': None}
 
 

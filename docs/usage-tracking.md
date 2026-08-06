@@ -281,7 +281,7 @@ panel only has whatever `POST .../suno/generate` returns.
 | [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog, and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
 | `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50`, `· $0.04 за кадр`, or `price ?` — the token price needs no unit suffix since "per 1M" is the only unit used app-wide, but the image price keeps `L.price_perImage` since that unit isn't obvious). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
 | `components/workflow/SunoStage.jsx`'s `UsageSummaryLine` | Compact, icon-led strip (🔤 tokens in→out, 💰 cost - `≈` prefix means estimated/`cost.source !== 'provider'`, no prefix means the provider billed that exact amount, 🕐 finish time, ⏱ response time) rendered from `lastDebug.usage` + a client-stamped `lastDebug.completedAt`. Sits directly under the debug panel's title and is shown **regardless of whether the panel itself is expanded** (`DebugPanel`'s `hasUsage` check) - the whole point is not needing to open raw JSON to see what a call cost |
-| `useSunoStage.js`'s `elapsedSeconds` / `sunoError` | `elapsedSeconds`: a `setInterval`-driven ticking counter, started/stopped by a `sunoLoading` effect (not managed inside `generateSuno()` itself, so it can't drift out of sync with the loading spinner) — shown next to the "⏳ Генерация текста и стиля..." line while a generate call is in flight. `sunoError`: unlike the toast (which auto-dismisses after a few seconds), this is rendered in the same spot the loading line occupies and **persists until the next `generateSuno()` call** clears it — a timeout or provider error stays visible instead of flashing past. Both the toast and this persistent line show the same message (`err.detail`, see below); the failure is also `console.error`'d for devtools visibility. `useTitleCardStage.js`'s `elapsedSeconds`/`titleCardError` mirror this exact pattern (keyed off `generating` instead of `sunoLoading`), rendered under the "Сгенерировать афишу" button in `TitleCardStage.jsx` |
+| `useSunoStage.js`'s `elapsedSeconds` / `sunoError` | `elapsedSeconds`: a `setInterval`-driven ticking counter, started/stopped by a `sunoLoading` effect (not managed inside `generateSuno()` itself, so it can't drift out of sync with the loading spinner) — shown next to the "⏳ Генерация текста и стиля..." line while a generate call is in flight. `sunoError`: unlike the toast (which auto-dismisses after a few seconds), this is rendered in the same spot the loading line occupies and **persists until the next `generateSuno()` call** clears it — a timeout or provider error stays visible instead of flashing past. Both the toast and this persistent line show the same message (`err.detail`, see below); the failure is also `console.error`'d for devtools visibility. `useTitleCardStage.js`'s `elapsedSeconds`/`titleCardError` mirror this exact pattern (keyed off `generating` instead of `sunoLoading`), rendered under the "Сгенерировать заголовок" button in `TitleCardStage.jsx` |
 
 **Navigation note.** The Usage screen is reachable from all three top-level
 screens (home/workflow/settings), including Settings itself. `App.jsx` keeps
@@ -336,6 +336,24 @@ Stub/no-network fallbacks (`suno.generate`'s and `scenes.generate`'s
 no-model/no-key branch) call neither function - nothing is printed for a
 request that never actually went out, matching the ledger's own "don't bill
 what didn't happen" rule.
+
+Both functions print via `console_log._safe_print`, which writes real UTF-8
+bytes straight to `sys.stdout.buffer` if a plain `print()` fails - `npm run
+dev`'s `concurrently` wrapper (piping this process's stdout, prefixing it
+`[BACKEND]`) sees `sys.stdout.encoding` as a legacy codepage even though the
+terminal actually rendering the merged output is UTF-8, so re-encoding
+through that codepage used to turn emoji/Cyrillic into `?`/mojibake.
+
+## HTTP access log: `backend/app/request_log.py`
+
+`RequestLogMiddleware` (registered in `main.py`) replaces uvicorn's default
+per-request access log (`INFO:     127.0.0.1:54321 - "GET /api/x HTTP/1.1"
+200 OK` — client IP, no useful distinction between endpoints) with one line
+per request: `HH:MM:SS <method emoji> METHOD path -> status (duration ms)`,
+colored by outcome (dim gray for 2xx/3xx, yellow for 4xx, red for 5xx or an
+unhandled exception) instead of a level word — no client IP, no date.
+`main.py` disables the built-in `uvicorn.access` logger at import time so
+requests aren't logged twice.
 
 ## Known gaps / not implemented
 

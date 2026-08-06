@@ -68,7 +68,7 @@ def context(task: str, project_id: str | None = None, settings: dict | None = No
 def record(ctx: dict | None, *, model: str, kind: str, status: str, duration_ms: int,
            units: dict | None = None, prompt: str = '', response: str = '',
            provider_cost: float | None = None, error: str | None = None,
-           meta: dict | None = None) -> None:
+           meta: dict | None = None, debug: dict | None = None) -> None:
     """Appends one call to the ledger. `ctx=None` means "don't record" (used
     by no-network fallback paths, e.g. suno.generate()'s stub branch, which
     cost nothing and never happened as far as billing is concerned).
@@ -76,9 +76,20 @@ def record(ctx: dict | None, *, model: str, kind: str, status: str, duration_ms:
     `provider_cost`, when given (e.g. OpenRouter's `usage.cost`), always wins
     over the catalog - a provider-reported price is a fact, a catalog price
     is an estimate.
+
+    `debug`, when given, is `{'request': ..., 'response': ...}` (whatever the
+    caller already built for its own in-app debug panel, redacted of raw
+    binary payloads) - printed to the console via `console_log.log_debug` so
+    every provider call's actual request/response JSON is visible without
+    re-running anything, regardless of whether the ledger write itself
+    succeeds.
     """
     if not ctx:
         return
+    debug = debug or {}
+    console_log.log_debug(model, kind, ctx.get('task'),
+                           request=debug.get('request'), response=debug.get('response'),
+                           error=error if status != 'ok' else None)
     try:
         _write(ctx, model=model, kind=kind, status=status, duration_ms=duration_ms,
                units=units, prompt=prompt, response=response, provider_cost=provider_cost,

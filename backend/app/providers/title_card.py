@@ -337,29 +337,62 @@ _GENERATORS = {
 _jobs: dict[str, dict] = {}
 
 
+_replicate_bg_remover_version: str | None = None
+
+
+async def _resolve_bg_remover_version(api_key: str) -> str:
+    """`851-labs/background-remover` is a community (non-"official") model -
+    unlike the models `images.py`'s `_generate_replicate` calls, Replicate's
+    shorthand `models/{owner}/{name}/predictions` route 404s for it (confirmed
+    live, 2026-08: the shorthand route returned `{"detail": "The requested
+    resource could not be found."}` while the versioned `/v1/predictions`
+    route with an explicit `version` succeeded against the same input). So the
+    latest version id must be resolved once and POSTed to `/v1/predictions`
+    instead. Cached module-level for the process lifetime - the version
+    changes rarely enough that a dev-server restart picking up a new one is
+    fine, and this avoids an extra GET on every single button click."""
+    global _replicate_bg_remover_version
+    if _replicate_bg_remover_version:
+        return _replicate_bg_remover_version
+    headers = {'Authorization': f'Bearer {api_key}'}
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        resp = await http_client.get(f'{_REPLICATE_BASE}/models/{_REPLICATE_BG_REMOVER_ID}', headers=headers)
+    if resp.status_code != 200:
+        raise RuntimeError(f'Replicate API (модель) вернул {resp.status_code}: {resp.text[:300]}')
+    version = ((resp.json().get('latest_version') or {}).get('id'))
+    if not version:
+        raise RuntimeError('Replicate: не удалось определить версию модели background-remover')
+    _replicate_bg_remover_version = version
+    return version
+
+
 async def _generate_background_remover(
-    image_bytes: bytes, ext: str, api_key: str, usage_out: dict | None = None,
+    image_bytes: bytes, ext: str, api_key: str, usage_out: dict | None = None, params: dict | None = None,
 ) -> tuple[bytes, str]:
     """Replicate's `851-labs/background-remover` (see the memory note this
     feature was planned from): a single `image` input (URL or base64 data
-    URI), `background_type: 'rgba'` for a transparent cutout. Same
-    predict-and-poll shape as `images.py`'s `_generate_replicate` - the
-    shorthand `models/{owner}/{name}/predictions` endpoint needs no `version`
-    field for an official model id."""
+    URI) plus `background_type`/`format`/`threshold`/`reverse` (defaults
+    below match the model's own schema defaults; `params` is
+    `settings.background_remover_params`, see routers/settings.py). See
+    `_resolve_bg_remover_version`'s docstring for why this goes through the
+    versioned `/v1/predictions` endpoint rather than the shorthand one
+    `images.py`'s official-model calls use."""
     if not api_key:
         raise RuntimeError('Нет API-ключа Replicate')
+    version = await _resolve_bg_remover_version(api_key)
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     data_uri = f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(image_bytes).decode()}'
-    input_body = {'image': data_uri, 'background_type': 'rgba', 'format': 'png'}
+    defaults = {'background_type': 'rgba', 'format': 'png', 'threshold': 0, 'reverse': False}
+    input_body = {**defaults, **(params or {}), 'image': data_uri}
     debug_request = {
-        'url': f'{_REPLICATE_BASE}/models/{_REPLICATE_BG_REMOVER_ID}/predictions',
+        'url': f'{_REPLICATE_BASE}/predictions', 'version': version,
         'input': {**input_body, 'image': f'<image data, {len(image_bytes)} bytes>'},
     }
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         resp = await http_client.post(
-            f'{_REPLICATE_BASE}/models/{_REPLICATE_BG_REMOVER_ID}/predictions',
-            headers=headers, json={'input': input_body},
+            f'{_REPLICATE_BASE}/predictions',
+            headers=headers, json={'version': version, 'input': input_body},
         )
     if resp.status_code not in (200, 201):
         if usage_out is not None:
@@ -422,7 +455,8 @@ async def _run_job(
         )
     except Exception as exc:
         usage.record(usage_ctx, model=model, kind='image', status='error',
-                     duration_ms=int((time.monotonic() - started) * 1000), prompt=prompt, error=str(exc))
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=prompt, error=str(exc),
+                     debug=provider_usage.get('debug'))
         _jobs[job_id] = {'status': 'failed', 'variant': None, 'error': str(exc), 'debug': provider_usage.get('debug')}
         return
 
@@ -459,7 +493,7 @@ async def _run_job(
     usage.record(usage_ctx, model=model, kind='image', status='ok',
                  duration_ms=int((time.monotonic() - started) * 1000),
                  units=units, prompt=prompt, response=variant['file_path'],
-                 provider_cost=provider_cost)
+                 provider_cost=provider_cost, debug=debug_info)
     _jobs[job_id] = {'status': 'completed', 'variant': variant, 'error': None, 'debug': debug_info}
 
 
@@ -520,17 +554,19 @@ async def remove_background(
     file_path = storage.project_dir(slug) / source['file_path']
     ext = file_path.suffix.removeprefix('.').lower() or 'png'
     api_key = (settings.get('api_keys') or {}).get('replicate', '')
+    params = settings.get('background_remover_params')
 
     started = time.monotonic()
     provider_usage: dict = {}
     try:
         console_log.log_request_start(_BG_REMOVE_MODEL, 'image', usage_ctx.get('task') if usage_ctx else None)
         content, out_ext = await _generate_background_remover(
-            file_path.read_bytes(), ext, api_key, usage_out=provider_usage,
+            file_path.read_bytes(), ext, api_key, usage_out=provider_usage, params=params,
         )
     except Exception as exc:
         usage.record(usage_ctx, model=_BG_REMOVE_MODEL, kind='image', status='error',
-                     duration_ms=int((time.monotonic() - started) * 1000), prompt=source['file_path'], error=str(exc))
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=source['file_path'], error=str(exc),
+                     debug=provider_usage.get('debug'))
         raise RuntimeError(str(exc)) from exc
 
     titlecard_dir = storage.project_dir(slug) / 'titlecard'
@@ -559,7 +595,8 @@ async def remove_background(
         project['updated_at'] = _now()
         storage.save_project(slug, project)
 
+    debug_info = provider_usage.get('debug')
     usage.record(usage_ctx, model=_BG_REMOVE_MODEL, kind='image', status='ok',
                  duration_ms=int((time.monotonic() - started) * 1000),
-                 units=units, prompt=source['file_path'], response=new_variant['file_path'])
-    return {'variant': new_variant, 'variants': current_variants}
+                 units=units, prompt=source['file_path'], response=new_variant['file_path'], debug=debug_info)
+    return {'variant': new_variant, 'variants': current_variants, 'debug': debug_info}

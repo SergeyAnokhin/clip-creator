@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, ImagePlus, Loader2, Mic, MicOff, Minus, Plus, Sparkles, Upload, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ImagePlus, Layers, Loader2, Mic, MicOff, Minus, Plus, Sparkles, Upload, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import ModelPicker from './ModelPicker.jsx';
 import TitleCardGallery from './TitleCardGallery.jsx';
+import PosterGallery from './PosterGallery.jsx';
+import PosterConstructor from './PosterConstructor.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
 import { sortByUseCount } from '../../lib/wishes.js';
 
@@ -179,6 +181,7 @@ export default function TitleCardStage({
   titleCardWishText, wishLoading, titleCardWishLibrary, lastDebug,
   isRecordingTitleCardWish, recordingSeconds, voiceSupported,
   elapsedSeconds, titleCardError, removingBgIds,
+  posters, posterConstructorOpen, editingPoster, posterSaving, logos,
   actions,
 }) {
   const [pickerSlot, setPickerSlot] = useState(null);
@@ -403,6 +406,36 @@ export default function TitleCardStage({
         initialIndex={lightboxIndex || 0}
         onClose={() => setLightboxIndex(null)}
       />
+
+      <div style={{ marginTop: 24, marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="scene-prompt-label">{L.poster_postersLabel}</div>
+        <button
+          className="btn btn-accent-soft" style={{ padding: '7px 14px', fontSize: 12.5 }}
+          disabled={!variants.length}
+          onClick={() => actions.openConstructor(null)}
+        >
+          <Layers size={13} />
+          {L.poster_openConstructor}
+        </button>
+      </div>
+      {!variants.length ? (
+        <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>{L.poster_needTitleCardFirst}</div>
+      ) : posters.length === 0 ? (
+        <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>{L.poster_noPostersYet}</div>
+      ) : (
+        <PosterGallery
+          L={L} projectId={project.id} posters={posters}
+          onEdit={actions.openConstructor} onDelete={actions.deletePoster} onSelectMain={actions.selectMainPoster}
+        />
+      )}
+
+      {posterConstructorOpen && (
+        <PosterConstructor
+          L={L} projectId={project.id} candidates={candidates} variants={variants} logos={logos || []}
+          initialPoster={editingPoster} saving={posterSaving}
+          onSave={actions.savePoster} onClose={actions.closeConstructor}
+        />
+      )}
 
       <DebugPanel L={L} lastDebug={lastDebug} />
     </>

@@ -9,6 +9,7 @@ import { useSunoStage } from './hooks/useSunoStage.js';
 import { useScenesStage } from './hooks/useScenesStage.js';
 import { useImagesStage } from './hooks/useImagesStage.js';
 import { useTitleCardStage } from './hooks/useTitleCardStage.js';
+import { usePosterConstructor } from './hooks/usePosterConstructor.js';
 import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
@@ -63,6 +64,9 @@ function App() {
     onAiCall: usage.actions.refreshToday,
     onTitleCardWishLibraryChange: settings.actions.setTitleCardWishLibrary,
     onTitleCardWishUsed: settings.actions.bumpTitleCardWishUse,
+  });
+  const posterConstructor = usePosterConstructor({
+    activeProject, setActiveProject, updateProject, showToast, L,
   });
   // Depends on suno's refinement box, scenes' wish box and title card's wish box, so it must be created after them.
   const voice = useVoice({
@@ -177,8 +181,12 @@ function App() {
     isRecordingTitleCardWish: voice.recordingKind === 'titleCardWish',
     recordingSeconds: voice.recordingSeconds,
     voiceSupported: voice.isSupported,
+    posters: posterConstructor.posters, posterConstructorOpen: posterConstructor.constructorOpen,
+    editingPoster: posterConstructor.editingPoster, posterSaving: posterConstructor.saving,
+    logos: settings.logos,
     actions: {
       ...titleCard.actions,
+      ...posterConstructor.actions,
       updateTitleCardBasePrompt: settings.actions.updateTitleCardBasePrompt,
       saveTitleCardBasePromptPreset: settings.actions.saveTitleCardBasePromptPreset,
       loadTitleCardBasePromptPreset: settings.actions.loadTitleCardBasePromptPreset,
@@ -233,6 +241,7 @@ function App() {
           requestTimeoutSeconds={settings.requestTimeoutSeconds}
           sceneBasePromptNarrative={settings.sceneBasePromptNarrative} sceneBasePromptAbstract={settings.sceneBasePromptAbstract}
           sceneWishLibrary={settings.sceneWishLibrary}
+          backgroundRemoverParams={settings.backgroundRemoverParams} logos={settings.logos}
           pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           onClose={closeSettings} onOpenUsage={openUsage}

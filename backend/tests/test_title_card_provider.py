@@ -53,6 +53,15 @@ def _no_real_sleep(monkeypatch):
     monkeypatch.setattr(title_card.asyncio, 'sleep', _FastSleep())
 
 
+@pytest.fixture(autouse=True)
+def _reset_bg_remover_version_cache(monkeypatch):
+    # _generate_background_remover resolves+caches the model's latest version
+    # id at module scope (see _resolve_bg_remover_version) - reset it per
+    # test so each test's mocked response sequence starts from the same GET
+    # /models/... call instead of a previous test's cached version.
+    monkeypatch.setattr(title_card, '_replicate_bg_remover_version', None)
+
+
 def _install(monkeypatch, responses):
     fake_client = _FakeAsyncClient(responses)
     monkeypatch.setattr(title_card.httpx, 'AsyncClient', lambda **kwargs: fake_client)
@@ -282,6 +291,7 @@ def test_get_job_unknown_id_returns_none():
 
 def test_generate_background_remover_sends_data_uri_and_polls_to_completion(monkeypatch):
     fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'latest_version': {'id': 'version-abc'}}),
         _FakeResponse(200, {'id': 'p1', 'status': 'starting', 'urls': {'get': 'https://api.replicate.com/v1/predictions/p1'}}),
         _FakeResponse(200, {'status': 'succeeded', 'output': 'https://cdn.example/out.png', 'urls': {'get': 'https://x'}}),
         _FakeResponse(200, content=b'PNGDATA', headers={'content-type': 'image/png'}),
@@ -291,11 +301,17 @@ def test_generate_background_remover_sends_data_uri_and_polls_to_completion(monk
 
     assert content == b'PNGDATA'
     assert ext == 'png'
-    first_call = fake_client.calls[0]
-    assert first_call['url'] == 'https://api.replicate.com/v1/models/851-labs/background-remover/predictions'
-    assert first_call['headers']['Authorization'] == 'Bearer test-key'
-    assert first_call['json']['input']['background_type'] == 'rgba'
-    assert first_call['json']['input']['image'].startswith('data:image/png;base64,')
+    version_call = fake_client.calls[0]
+    assert version_call['url'] == 'https://api.replicate.com/v1/models/851-labs/background-remover'
+    predict_call = fake_client.calls[1]
+    # 851-labs/background-remover is a community model - the shorthand
+    # models/{owner}/{name}/predictions route 404s for it (confirmed live,
+    # 2026-08), so this must go through the versioned endpoint instead.
+    assert predict_call['url'] == 'https://api.replicate.com/v1/predictions'
+    assert predict_call['headers']['Authorization'] == 'Bearer test-key'
+    assert predict_call['json']['version'] == 'version-abc'
+    assert predict_call['json']['input']['background_type'] == 'rgba'
+    assert predict_call['json']['input']['image'].startswith('data:image/png;base64,')
 
 
 def test_generate_background_remover_missing_key_raises():
@@ -324,6 +340,7 @@ def test_remove_background_appends_copy_and_leaves_source_untouched(tmp_path, mo
     storage.save_project('poem-a', {'id': 'poem-a', 'title_card': {'variants': [source_variant]}})
 
     _install(monkeypatch, [
+        _FakeResponse(200, {'latest_version': {'id': 'version-abc'}}),
         _FakeResponse(200, {'id': 'p1', 'status': 'succeeded', 'output': 'https://cdn.example/out.png', 'urls': {'get': 'https://x'}}),
         _FakeResponse(200, content=b'REMOVEDBG', headers={'content-type': 'image/png'}),
     ])

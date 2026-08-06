@@ -101,4 +101,25 @@ export const api = {
   getTitleCardJob: (id, jobId) => request(`${projectPath(id)}/title-card/jobs/${encodeURIComponent(jobId)}`),
   deleteTitleCardVariant: (id, variantId) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}`, { method: 'DELETE' }),
   removeTitleCardBackground: (id, variantId) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}/remove-background`, { method: 'POST' }),
+
+  uploadLogo: (name, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('name', name || '');
+    return requestForm('/api/settings/logos', { method: 'POST', body: form });
+  },
+  deleteLogo: (logoId) => request(`/api/settings/logos/${encodeURIComponent(logoId)}`, { method: 'DELETE' }),
+
+  saveTitleCardPoster: (id, { blob, backgroundPath, titleCardVariantId, logoId, canvasSize, layers, posterId }) => {
+    const form = new FormData();
+    form.append('file', blob, 'poster.png');
+    form.append('background_path', backgroundPath);
+    form.append('title_card_variant_id', titleCardVariantId);
+    form.append('logo_id', logoId || '');
+    form.append('canvas_size', JSON.stringify(canvasSize));
+    form.append('layers', JSON.stringify(layers));
+    form.append('poster_id', posterId || '');
+    return requestForm(`${projectPath(id)}/title-card/poster`, { method: 'POST', body: form });
+  },
+  deleteTitleCardPoster: (id, posterId) => request(`${projectPath(id)}/title-card/poster/${encodeURIComponent(posterId)}`, { method: 'DELETE' }),
 };

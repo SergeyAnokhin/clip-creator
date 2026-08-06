@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2, Upload } from 'lucide-react';
-import { api } from '../../api/client.js';
+import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2, Upload, X } from 'lucide-react';
+import { api, mediaUrl } from '../../api/client.js';
 import { modelPriceMap } from '../../lib/pricing.js';
 import { downloadJSON } from '../../lib/download.js';
 import { sortByUseCount } from '../../lib/wishes.js';
@@ -34,12 +34,15 @@ const MODEL_PROVIDERS = [
 // only offered for the image-model favorites panel, not text/simple ones.
 const IMAGE_MODEL_PROVIDERS = [...MODEL_PROVIDERS, { id: 'krea', name: 'Krea AI' }];
 
-const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes'];
+const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes', 'logos'];
+
+const BG_REMOVER_BACKGROUND_TYPES = ['rgba', 'white', 'green', 'blur', 'overlay', 'map'];
 
 export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
   sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
   sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
+  backgroundRemoverParams, logos,
   pricing, usageToday, usagePeriodTotals,
   onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
@@ -86,7 +89,7 @@ export default function SettingsScreen({
       suno_reference_examples: referenceExamples, suno_wish_library: wishLibrary,
       request_timeout_seconds: requestTimeoutSeconds,
       scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
-      scene_wish_library: sceneWishLibrary,
+      scene_wish_library: sceneWishLibrary, background_remover_params: backgroundRemoverParams,
     });
   }
   function handleApiKeysFile(e) {
@@ -171,7 +174,19 @@ export default function SettingsScreen({
   const tabLabels = {
     general: L.settings_tab_general, providers: L.settings_tab_providers, models: L.settings_tab_models,
     prices: L.settings_tab_prices, prompts: L.settings_tab_prompts, wishes: L.settings_tab_wishes,
+    logos: L.settings_tab_logos,
   };
+
+  const logoFileRef = useRef(null);
+  const [logoNameDraft, setLogoNameDraft] = useState('');
+  function handleLogoFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) {
+      actions.uploadLogo(logoNameDraft, file);
+      setLogoNameDraft('');
+    }
+  }
 
   async function refreshModels() {
     setRefreshingModels(true);
@@ -324,6 +339,53 @@ export default function SettingsScreen({
                       onChange={handleApiKeysFile}
                     />
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'providers' && (
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.settings_bgRemover}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverHint}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="settings-row">
+                  <span className="settings-row-name">{L.settings_bgRemoverType}</span>
+                  <select
+                    className="field"
+                    value={backgroundRemoverParams.background_type}
+                    onChange={(e) => actions.setBackgroundRemoverParam('background_type', e.target.value)}
+                  >
+                    {BG_REMOVER_BACKGROUND_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-name">{L.settings_bgRemoverFormat}</span>
+                  <select
+                    className="field"
+                    value={backgroundRemoverParams.format}
+                    onChange={(e) => actions.setBackgroundRemoverParam('format', e.target.value)}
+                  >
+                    <option value="png">png</option>
+                    <option value="jpg">jpg</option>
+                  </select>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-name">{L.settings_bgRemoverThreshold}</span>
+                  <input
+                    className="field" type="number" min="0" max="1" step="0.05"
+                    style={{ maxWidth: 120 }}
+                    value={backgroundRemoverParams.threshold}
+                    onChange={(e) => actions.setBackgroundRemoverParam('threshold', Number(e.target.value) || 0)}
+                  />
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>{L.settings_bgRemoverReverse}</span>
+                  <input
+                    type="checkbox"
+                    checked={!!backgroundRemoverParams.reverse}
+                    onChange={(e) => actions.setBackgroundRemoverParam('reverse', e.target.checked)}
+                  />
                 </div>
               </div>
             </div>
@@ -694,6 +756,58 @@ export default function SettingsScreen({
               </div>
             </div>
             </>
+          )}
+
+          {activeTab === 'logos' && (
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.settings_logosLabel}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_logosHint}</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                {(logos || []).map((logo) => (
+                  <div key={logo.id} style={{ width: 84 }}>
+                    <div
+                      style={{
+                        position: 'relative', width: 84, height: 84, borderRadius: 8, overflow: 'hidden',
+                        background: 'repeating-conic-gradient(#2a2a2a 0% 25%, #363636 0% 50%) 50% / 12px 12px',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      <img src={mediaUrl(logo.file_path)} alt={logo.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                      <button
+                        className="icon-btn" style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20 }}
+                        title={L.settings_logosDelete}
+                        onClick={() => actions.deleteLogo(logo.id)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                    {logo.name && (
+                      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 4, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {logo.name}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="field" style={{ flex: 1 }}
+                  value={logoNameDraft}
+                  onChange={(e) => setLogoNameDraft(e.target.value)}
+                  placeholder={L.settings_logosNamePlaceholder}
+                />
+                <button className="btn btn-accent-soft" onClick={() => logoFileRef.current?.click()}>
+                  <Upload size={13} /> {L.settings_logosUpload}
+                </button>
+                <input
+                  ref={logoFileRef}
+                  type="file"
+                  accept="image/png,image/webp"
+                  style={{ display: 'none' }}
+                  onChange={handleLogoFile}
+                />
+              </div>
+            </div>
           )}
 
           <button className="btn btn-gradient" style={{ justifyContent: 'center', padding: 12, fontSize: 14 }} onClick={actions.onSave}>

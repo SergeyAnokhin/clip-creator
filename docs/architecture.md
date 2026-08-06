@@ -73,11 +73,14 @@ blocks     style +   storyboard        images per scene,    poster text in the
 5. **Title Card** (`stage: 'title_card'`) — picks up to 4 already-generated
    scene images (or uploads) as style references, takes a title/author text
    block, and asks a reference-capable image model to render that text baked
-   into the references' visual style — a poster/cover-text graphic, not a
-   scene. Auto-picks the 4 highest-rated images across every scene on first
+   into the references' visual style — a typographic overlay, not a full
+   poster. Auto-picks the 4 highest-rated images across every scene on first
    open (`lib/titleCard.js`'s `pickTopReferenceImages`), any slot swappable or
    replaceable with an upload. See `providers/title_card.py` below for why
-   this needs its own provider seam instead of reusing `images.py`.
+   this needs its own provider seam instead of reusing `images.py`. The
+   **Poster constructor** (same stage, below the variants gallery) is the
+   step that turns one of these overlays into an actual poster — see
+   "Poster constructor" below.
 
 Both stages also share a `hideMotionPrompt` toggle (a `settings.json`
 preference, not per-project) that hides every `motion_prompt` field when a
@@ -423,13 +426,22 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     .../title-card/variants/{variant_id}/remove-background`, `title_card.
     remove_background`) sends one existing variant's image bytes to
     Replicate's `851-labs/background-remover` (base64 data URI in,
-    `background_type: 'rgba'`, same predict-and-poll shape as `images.py`'s
-    `_generate_replicate`) and **appends** the transparent-background result
-    as a new variant — `source_variant_id` points back at the original,
-    which is left untouched. Awaited directly by the route (no job/poll
-    round-trip on the frontend, since it's one call, not `count` of them);
-    priced off `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover`
-    row, ledger task `title_card_bg_remove`.
+    params from `settings.background_remover_params` — `background_type`,
+    `format`, `threshold`, `reverse`, editable in Settings → Providers) and
+    **appends** the transparent-background result as a new variant —
+    `source_variant_id` points back at the original, which is left untouched.
+    Awaited directly by the route (no job/poll round-trip on the frontend,
+    since it's one call, not `count` of them); priced off
+    `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover` row,
+    ledger task `title_card_bg_remove`. Unlike every other Replicate call in
+    this app, this goes through the **versioned** `POST /v1/predictions`
+    endpoint (`{version, input}`), not the shorthand
+    `/v1/models/{owner}/{name}/predictions` route `images.py`'s
+    `_generate_replicate` uses — `851-labs/background-remover` is a
+    community (non-"official") model, and the shorthand route 404s for it
+    (confirmed live, 2026-08). `_resolve_bg_remover_version` fetches and
+    caches the model's `latest_version.id` once per process via `GET
+    /v1/models/851-labs/background-remover`.
   - A completed job writes to `titlecard/{shorthex}.{png|jpg|webp}` (parallel
     to `images/`/`references/`) and appends a variant — same
     `rating`/`is_selected`/`model`/`aspect_ratio`/`cost` fields as a scene
@@ -460,9 +472,54 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
   - Each generator writes a redacted `{request, response}` debug snapshot into
     `usage_out['debug']` (reference-image bytes and any inline base64 result
     data replaced with a short `<... bytes>` placeholder; plain URLs are kept
-    as-is) — `_run_job` threads it onto the job record so the stage's
-    collapsible debug panel (same pattern as Scenes'/Suno's) can show exactly
-    what was sent/received without dumping raw image bytes into the UI.
+    as-is) — `_run_job`/`remove_background` thread it onto the job record (and
+    `remove_background`'s HTTP response) so the stage's collapsible debug
+    panel (same pattern as Scenes'/Suno's) can show exactly what was
+    sent/received without dumping raw image bytes into the UI. `usage.record`
+    now also takes this same `debug` dict app-wide (every provider seam —
+    `title_card.py`, `suno.py`, `scenes.py`, `images.py`, `text_models.py`,
+    `translate.py` — passes it) and always prints it to the backend console
+    via `console_log.log_debug` (any string value over 100 chars truncated,
+    see `console_log._truncate`) — not just on failure, so a paid call's
+    actual request/response JSON is visible in the dev console without
+    reproducing it through the UI's debug panel.
+
+### Poster constructor
+
+Below the Title Card variants gallery, "Assemble poster" opens a
+`react-konva`-based editor (`PosterConstructor.jsx`) that composites a
+background (any already-generated scene/reference image), one Title Card
+variant (typically a background-removed one) and an optional logo into a
+draggable/resizable layout, flattened to PNG client-side
+(`stage.toBlob()` — no server-side image library needed) and saved as a new
+`project.title_card.posters[]` entry:
+
+```
+{ poster_id, file_path,                 # flattened PNG
+  background_path, title_card_variant_id, logo_id,
+  canvas_size: {width, height},         # background's natural size
+  layers: { title_card: {x,y,scaleX,scaleY,rotation}, logo: {...}|null },
+  rating, is_selected, generated_at }
+```
+
+Saving stores the layer transforms alongside the flattened image (not just
+the PNG), so `PosterGallery.jsx`'s "Edit" reopens the exact same arrangement
+in `PosterConstructor` for further adjustment — re-saving with the same
+`poster_id` re-renders in place rather than creating a new entry.
+
+- `POST /api/projects/{id}/title-card/poster` (multipart: `file` PNG +
+  `background_path`, `title_card_variant_id`, `logo_id`, `layers` (JSON),
+  `canvas_size` (JSON), optional `poster_id` to update in place) validates
+  `background_path` the same way reference paths are validated elsewhere and
+  that `title_card_variant_id` exists on the project, writes the PNG under
+  `titlecard/posters/`, and upserts the poster into `project.title_card.posters`.
+- `DELETE /api/projects/{id}/title-card/poster/{poster_id}` removes one.
+- Logos are a **global** (cross-project) library — `settings.logos: [{id,
+  name, file_path}]`, files under `app_data/logos/` (served at
+  `/media/logos/...` — the `/media` mount is `storage.get_data_root()`, the
+  same mount every project's `images/`/`references/`/`titlecard/` files go
+  through, see `main.py`), managed from Settings → Logos
+  (`POST/DELETE /api/settings/logos[/{id}]`, PNG/WebP only).
 
 ## AI usage & cost tracking
 

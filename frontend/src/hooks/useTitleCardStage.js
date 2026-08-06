@@ -238,7 +238,9 @@ export function useTitleCardStage({
       setActiveProject((p) => ({
         ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), variants: result.variants },
       }));
+      if (result.debug) setLastDebug({ ...result.debug, completedAt: new Date().toISOString() });
     } catch (err) {
+      console.error('[Title Card remove background] request failed:', err);
       showToast(err?.detail || 'Не удалось удалить фон');
     } finally {
       setRemovingBgIds((s) => { const next = new Set(s); next.delete(variant.variant_id); return next; });

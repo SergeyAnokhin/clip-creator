@@ -14,6 +14,8 @@ app_data/
       images/scene_{n}_{shorthex}.{png|jpg|webp}
       references/ref_{uuid}.{ext}
       titlecard/{shorthex}.{png|jpg|webp}
+      titlecard/posters/{shorthex}.png   # Poster constructor output (flattened)
+  logos/logo_{shorthex}.{png|webp}       # global, cross-project - see settings.logos
   usage/
     YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
 ```
@@ -39,7 +41,7 @@ app_data/
 | `reference_images` | str[] | Paths relative to `app_data/`, e.g. `projects/<slug>/references/ref_ab12cd34.png` |
 | `scenes` | Scene[] | `[]` until the storyboard is generated |
 | `source_url` | str | Original URL, if the project came from one |
-| `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{reference_image_paths: [], variants: []}` (`text_block` is seeded lazily on first stage visit, see below) |
+| `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{reference_image_paths: [], variants: [], posters: []}` (`text_block` is seeded lazily on first stage visit, see below) |
 | `active_title_card_wish_ids` | str[] | Ids of `settings.title_card_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (poster wishes vs. scene/imagery ones) |
 
 **Block**: `{id, type, importance, content}` — `type` is
@@ -55,7 +57,7 @@ backward compatibility, never read or edited.
 extension depends on the provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly
 one `is_selected` per scene once anything is rated.
 
-**TitleCard**: `{text_block, reference_image_paths, variants}` — `text_block`
+**TitleCard**: `{text_block, reference_image_paths, variants, posters}` — `text_block`
 is one free-text field the user edits directly (not separate title/author
 inputs the server wraps in quotes), lazily seeded to `'"Заголовок"\n"Автор"'`
 the first time the stage loads for a project (`useTitleCardStage.js`'s
@@ -75,6 +77,20 @@ on a "remove background" result (`title_card.remove_background` — see the API
 table below): it points at the original variant's `variant_id`, and the
 original is left untouched — background removal always **appends** a new
 variant rather than replacing one.
+
+**Poster**: `{poster_id, file_path, background_path, title_card_variant_id,
+logo_id, canvas_size{width,height}, layers{title_card{x,y,scaleX,scaleY,rotation},
+logo{...}|null}, rating, is_selected, generated_at}` — the Poster
+constructor's output: `background_path` (a scene/reference image path,
+same shape as `TitleCard.reference_image_paths` entries) and
+`title_card_variant_id` (points into `variants[]`) are the two source
+layers, `logo_id` optionally points into the global `settings.logos[]`;
+`file_path` is the flattened PNG (composited client-side, see
+`architecture.md`'s "Poster constructor"), `layers` the per-layer
+drag/scale/rotate transform, kept so `PosterConstructor.jsx` can reopen and
+re-edit the exact same arrangement. `posters` is append-only like `variants`
+except re-saving with an existing `poster_id` updates that entry in place
+(new flattened PNG, same id/file path) instead of appending.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
@@ -106,7 +122,11 @@ simple_models{favorites[],default}, image_models{favorites[],default}, image_mod
 special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[],
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
-title_card_wish_library[]}`. `google_free` is a second Google Gemini API key (see `architecture.md`'s
+title_card_wish_library[], background_remover_params{background_type,format,threshold,reverse}, logos[]}`.
+`background_remover_params` feeds `851-labs/background-remover`'s input directly (Settings → Providers;
+defaults match the model's own schema defaults). `logos` is `[{id, name, file_path}]` — the global,
+cross-project logo library for the Poster constructor (Settings → Logos;
+`POST/DELETE /api/settings/logos[/{id}]`, files under `app_data/logos/`). `google_free` is a second Google Gemini API key (see `architecture.md`'s
 provider-seams section) - same models/calls as `google`, but always priced at `$0`/`source: 'free'`
 in the usage ledger (see [usage-tracking.md](usage-tracking.md)) since it's a free-tier key, not a
 discount. Reads and
@@ -288,7 +308,11 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |
 | `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', variant: TitleCardVariant\|null, error: str\|null, debug: {request, response}\|null}` — polled every 1.5s by the frontend (`useTitleCardStage.js`), same in-memory-only job state as scene images (a separate `title_card._jobs` dict). `debug` is a redacted snapshot of the actual provider request/response (reference-image bytes and inline result data replaced with `<... bytes>` placeholders; plain URLs kept) for the stage's debug panel |
 | `DELETE /api/projects/{id}/title-card/variants/{variant_id}` | → `{variants}` — removes one result from `project.title_card.variants` and deletes its file |
-| `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | → `{variant, variants}` — runs the variant through Replicate's `851-labs/background-remover` (`title_card.remove_background`) and **appends** the result as a new variant (`source_variant_id` pointing back at the original, which is left untouched); `404` if `variant_id` doesn't exist, `502` on a provider failure |
+| `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | → `{variant, variants, debug: {request, response}\|null}` — runs the variant through Replicate's `851-labs/background-remover` (`title_card.remove_background`, params from `settings.background_remover_params`) and **appends** the result as a new variant (`source_variant_id` pointing back at the original, which is left untouched); `404` if `variant_id` doesn't exist, `502` on a provider failure |
+| `POST /api/projects/{id}/title-card/poster` | multipart: `file` (flattened PNG) + `background_path`, `title_card_variant_id`, `logo_id?`, `layers` (JSON), `canvas_size` (JSON), `poster_id?` → `{poster, posters}`. Creates a new `Poster`, or re-renders one in place (same `file_path`) when `poster_id` matches an existing entry. `422` if `background_path`/`title_card_variant_id` don't resolve |
+| `DELETE /api/projects/{id}/title-card/poster/{poster_id}` | → `{posters}` — removes one from `project.title_card.posters` and deletes its file |
+| `POST /api/settings/logos` | multipart `file` (png/webp) + `name?` → `{logos}` — appends to the global `settings.logos`, file under `app_data/logos/` |
+| `DELETE /api/settings/logos/{logo_id}` | → `{logos}` |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |
 | `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |
