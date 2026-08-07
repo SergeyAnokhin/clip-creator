@@ -71,6 +71,14 @@ DEFAULT_SETTINGS = {
         'background_type': 'rgba', 'format': 'png', 'threshold': 0, 'reverse': False,
     },
     'logos': [],
+    # Reusable poster layouts (Poster constructor "save as template") -
+    # {id, name, layers: {logo_id, logo, glass, text}, created_at}, global
+    # (cross-project) like title_card_base_prompt_presets above - plain
+    # array CRUD'd entirely via this partial-merge PUT, no dedicated
+    # endpoint needed. Deliberately excludes background_path/
+    # title_card_variant_id/title_card layers - those are specific to the
+    # poem the poster was built for, not part of the reusable layout.
+    'poster_templates': [],
     # UI-only preference (Scenes/Images stage): hides every motion_prompt
     # field/label when the scene mainly needs a static image right now -
     # doesn't touch the underlying scene data, just what's rendered.

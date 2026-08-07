@@ -108,13 +108,22 @@ wraps it into a one-item array on load (`normalizeLayers` in
 
 Each layer's `effects` is opaque to the backend (stored and round-tripped
 as-is, no schema validation) — `PosterConstructor.jsx` currently writes
-`{glow{enabled,color,blur,distance,opacity}, opacity}`, `glow` rendered
-client-side as a Konva shadow on the overlay image's own alpha shape and
-`opacity` applied directly to the image; both are baked into the flattened
-PNG at save time, same as position/scale/rotation/crop. (An earlier
-`backdrop` effect — a feathered filled `Rect` behind the image — was dropped
-in favor of the plain `opacity` control; old saved posters with a `backdrop`
-key simply lose that effect on next load, no migration.)
+`{glow{enabled,color,blur,distance,opacity}, clone{enabled,offsetX,offsetY,opacity,blur}, opacity}`,
+`glow` rendered client-side as a Konva shadow on the overlay's own alpha
+shape, `clone` an offset second copy of the same layer rendered behind the
+real one (a cheap fake-depth "double object" look; it renders with the same
+`glow` as the real layer, plus its own `opacity` and an optional `blur` -
+Konva filter, needs `.cache()` - that only ever applies to this back copy),
+and `opacity` applied directly to the image; all are baked into the
+flattened PNG at save time, same as position/scale/rotation/crop.
+`glow.opacity` is stored 0-5 (the constructor's intensity slider shows it as
+0-100%, i.e. `glow.opacity/5*100` - a single Konva shadow pass caps its
+visible strength once `shadowOpacity` reaches ~1, so values above the old
+1.0/100% ceiling render as several stacked shadow passes instead of one,
+see `glowPasses` in `PosterConstructor.jsx`). (An earlier `backdrop` effect
+— a feathered filled `Rect` behind the image — was dropped in favor of the
+plain `opacity` control; old saved posters with a `backdrop` key simply
+lose that effect on next load, no migration.)
 
 Unlike `title_card`/`logo`, `glass` is not tied to a picked source image —
 it's a standalone decorative rounded-rect panel (a simulated "frosted glass"
@@ -133,9 +142,9 @@ lines (title / author), parsed by `parseTextBlock`. `fontFamily` is one of
 Oswald, Roboto Condensed, Rubik, Playfair Display — all verified to include
 cyrillic glyphs except Lato, kept only for latin text since poster text is
 typically Russian). `fontSize`/`color` and, for `badge`, `bgColor` are plain
-per-layer style fields; `effects` reuses the exact same
-`{glow{enabled,color,blur,distance,opacity}, opacity}` shape as `title_card`/
-`logo` layers.
+per-layer style fields; `align` is `'left'\|'center'\|'right'` (defaults to
+`'left'` on any older layer missing the key); `effects` reuses the exact
+same `{glow{...}, clone{...}, opacity}` shape as `title_card`/`logo` layers.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
@@ -168,7 +177,7 @@ special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[]
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
 title_card_wish_library[], background_remover_method, background_remover_local_params{bg,threshold},
-background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse}, logos[]}`.
+background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse}, logos[], poster_templates[]}`.
 The Title Card stage's "remove background" button offers 3 interchangeable methods (see `architecture.md`),
 each with its own param group here (Settings → Providers): `background_remover_method` is which one the
 button defaults to when no `method` is passed per-call (`'local'\|'fal'\|'replicate'`, default `'replicate'`);
@@ -177,7 +186,16 @@ cutout; `background_remover_fal_params.model` picks between FAL's `fal-ai/bria/b
 `fal-ai/imageutils/rembg`; `background_remover_params` feeds Replicate's `851-labs/background-remover`'s input
 directly (defaults match the model's own schema defaults). `logos` is `[{id, name, file_path}]` — the global,
 cross-project logo library for the Poster constructor (Settings → Logos;
-`POST/DELETE /api/settings/logos[/{id}]`, files under `app_data/logos/`). `google_free` is a second Google Gemini API key (see `architecture.md`'s
+`POST/DELETE /api/settings/logos[/{id}]`, files under `app_data/logos/`).
+`poster_templates` is `[{id, name, layers{logo_id, logo[], glass, text[]}, created_at}]`
+— reusable poster layouts saved from the constructor ("Сохранить как
+шаблон"/"Save as template"), global like `logos` but plain-array CRUD'd
+through the regular partial-merge `PUT` (no dedicated endpoint, same
+pattern as `title_card_base_prompt_presets`). `layers` deliberately omits
+`background_path`/`title_card_variant_id`/`title_card` layers - those are
+specific to the poem the poster was originally built for; applying a
+template only restores the logo, glass panel, and text layers (with fresh
+ids) onto whatever background/title-card is already picked. `google_free` is a second Google Gemini API key (see `architecture.md`'s
 provider-seams section) - same models/calls as `google`, but always priced at `$0`/`source: 'free'`
 in the usage ledger (see [usage-tracking.md](usage-tracking.md)) since it's a free-tier key, not a
 discount. Reads and

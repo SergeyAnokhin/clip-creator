@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ChevronDown, ChevronUp, Copy, Crop, Maximize2, Minimize2, Minus, Plus, Redo2, RotateCcw, Save, Square, Trash2,
-  Type, Undo2, X,
+  AlignCenter, AlignLeft, AlignRight, ChevronDown, ChevronUp, Copy, Crop, Maximize2, Minimize2, Minus, Plus,
+  Redo2, RotateCcw, Save, Square, Trash2, Type, Undo2, X,
 } from 'lucide-react';
 import Konva from 'konva';
 import { Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text, Transformer } from 'react-konva';
@@ -74,14 +74,72 @@ function genId() {
 function makeDefaultEffects() {
   return {
     glow: { enabled: false, color: '#000000', blur: 12, distance: 6, opacity: 0.8 },
+    // "Клон" - a second copy of the same layer rendered behind the real one,
+    // offset by (offsetX, offsetY) - a cheap fake-3D/depth look (same trick
+    // as a CSS double text-shadow). It renders with the same glow as the
+    // real layer (so both copies get the halo, per the ask), plus its own
+    // opacity and an optional blur that only ever applies to this back copy.
+    clone: { enabled: false, offsetX: 14, offsetY: 14, opacity: 0.55, blur: 0 },
     opacity: 1,
   };
+}
+
+/** A single Konva shadow pass caps its visible strength at `shadowOpacity`
+ * ~1 (the shadow color's alpha is clamped to [0,1] by the canvas itself, so
+ * anything above that had no effect - the old 0-500% slider's 100-500%
+ * range was dead). To let the intensity slider (now 0-100%, stored as
+ * `glow.opacity` 0-5 - same numeric field as before, only the UI mapping
+ * changed) go up to a genuine 5x boost, values above the single-pass max
+ * (glow.opacity > 1) are rendered as several identical stacked shadow
+ * passes instead of one - each pass's shadow alpha-composites over the
+ * previous, so the halo actually gets denser/stronger past the old
+ * ceiling. Below that ceiling (glow.opacity <= 1) this returns exactly one
+ * pass at the configured opacity, i.e. pixel-identical to the old
+ * single-shadow render. Note: every pass also redraws the layer's own
+ * fill, so this intentionally keeps each pass at the layer's configured
+ * opacity rather than decoupling fill from shadow (which would need an
+ * offscreen-cache render) - with a non-default (reduced) layer opacity, a
+ * maxed-out glow will read a little more solid/opaque than the opacity
+ * slider alone implies. Accepted trade-off for a simple, low-risk render
+ * path; the common case (layer opacity at/near 100%) is unaffected. */
+function glowPasses(glow) {
+  if (!glow.enabled) return { count: 1, perPassOpacity: 0 };
+  const count = Math.max(1, Math.ceil(glow.opacity));
+  return { count, perPassOpacity: glow.opacity / count };
+}
+
+/** Blurring the "clone" back-copy (see `makeDefaultEffects`'s `clone`) needs
+ * Konva's cache+filter pipeline - a canvas shadow/image can't be blurred
+ * directly, only a rasterized node can. Re-caches the clone Group whenever
+ * blur is on and something that affects its look changes; clears the cache
+ * when blur is dialed back to 0 so the clone goes back to rendering live
+ * like every other node (cheaper, and always pixel-crisp). A fixed
+ * `pixelRatio` is generous enough for a blurred (inherently soft) effect
+ * without tracking the stage's current zoom/export scale. */
+function useCloneBlur(ref, clone, deps) {
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (clone?.enabled && clone.blur > 0) {
+      node.cache({ pixelRatio: 3 });
+      node.filters([Konva.Filters.Blur]);
+      node.blurRadius(clone.blur);
+    } else if (node.isCached()) {
+      node.clearCache();
+    }
+    node.getLayer()?.batchDraw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clone?.enabled, clone?.blur, clone?.offsetX, clone?.offsetY, ...deps]);
 }
 
 function migrateEffects(effects) {
   const base = makeDefaultEffects();
   if (!effects) return base;
-  return { glow: { ...base.glow, ...(effects.glow || {}) }, opacity: effects.opacity ?? 1 };
+  return {
+    glow: { ...base.glow, ...(effects.glow || {}) },
+    clone: { ...base.clone, ...(effects.clone || {}) },
+    opacity: effects.opacity ?? 1,
+  };
 }
 
 function makeLayer(overrides) {
@@ -119,6 +177,7 @@ function normalizeTextLayers(raw) {
     kind: 'text', textType: l.textType === 'badge' ? 'badge' : 'halo',
     text: l.text || '', fontFamily: l.fontFamily || FONT_OPTIONS[0].value,
     fontSize: l.fontSize || 48, color: l.color || '#ffffff', bgColor: l.bgColor || '#000000',
+    align: ['left', 'center', 'right'].includes(l.align) ? l.align : 'left',
     effects: migrateEffects(l.effects),
   }));
 }
@@ -145,12 +204,12 @@ function makeTextLayer(textType, bg, defaults, fallback) {
     kind: 'text', textType,
     text: (isBadge ? defaults.author : defaults.title) || (isBadge ? fallback.author : fallback.title),
     fontFamily: isBadge ? FONT_OPTIONS[0].value : "'Montserrat', sans-serif",
-    fontSize, color: '#ffffff', bgColor: '#000000',
+    fontSize, color: '#ffffff', bgColor: '#000000', align: 'left',
     x: bg.width * (isBadge ? 0.3 : 0.15),
     y: bg.height * (isBadge ? 0.82 : 0.08),
     effects: isBadge
       ? makeDefaultEffects()
-      : { glow: { enabled: true, color: '#1a1a1a', blur: 10, distance: 8, opacity: 0.65 }, opacity: 1 },
+      : { ...makeDefaultEffects(), glow: { enabled: true, color: '#1a1a1a', blur: 10, distance: 8, opacity: 0.65 } },
   });
 }
 
@@ -225,6 +284,7 @@ function OverlayImage({
   const trRef = useRef(null);
   const cropRectRef = useRef(null);
   const cropTrRef = useRef(null);
+  const cloneRef = useRef(null);
 
   useEffect(() => {
     if (isSelected && !isCropEditing && trRef.current && groupRef.current) {
@@ -240,9 +300,11 @@ function OverlayImage({
     }
   }, [isCropEditing]);
 
+  const effects = layer?.effects || makeDefaultEffects();
+  const { glow, clone } = effects;
+  useCloneBlur(cloneRef, clone, [image, layer?.crop]);
+
   if (!image || !layer) return null;
-  const effects = layer.effects || makeDefaultEffects();
-  const { glow } = effects;
   const opacity = effects.opacity ?? 1;
   const naturalW = image.width;
   const naturalH = image.height;
@@ -250,6 +312,7 @@ function OverlayImage({
   const boxW = crop ? crop.width : naturalW;
   const boxH = crop ? crop.height : naturalH;
   const glowOffset = glow.distance * 0.7071;
+  const { count: glowPassCount, perPassOpacity: glowPassOpacity } = glowPasses(glow);
 
   function clampCropNode(node) {
     const w = Math.max(10, Math.min(node.width() * node.scaleX(), naturalW));
@@ -282,16 +345,36 @@ function OverlayImage({
           onChange({ x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY(), rotation: node.rotation() });
         }}
       >
-        <KonvaImage
-          image={image}
-          crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
-          width={boxW} height={boxH}
-          opacity={opacity}
-          shadowEnabled={glow.enabled}
-          shadowColor={glow.color} shadowBlur={glow.blur}
-          shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
-          shadowOpacity={glow.opacity}
-        />
+        {clone.enabled && (
+          <Group ref={cloneRef} name="clone-blur" x={clone.offsetX} y={clone.offsetY}>
+            {Array.from({ length: glowPassCount }).map((_, i) => (
+              <KonvaImage
+                key={i}
+                image={image}
+                crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
+                width={boxW} height={boxH}
+                opacity={clone.opacity}
+                shadowEnabled={glow.enabled}
+                shadowColor={glow.color} shadowBlur={glow.blur}
+                shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+                shadowOpacity={glowPassOpacity}
+              />
+            ))}
+          </Group>
+        )}
+        {Array.from({ length: glowPassCount }).map((_, i) => (
+          <KonvaImage
+            key={i}
+            image={image}
+            crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
+            width={boxW} height={boxH}
+            opacity={opacity}
+            shadowEnabled={glow.enabled}
+            shadowColor={glow.color} shadowBlur={glow.blur}
+            shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+            shadowOpacity={glowPassOpacity}
+          />
+        ))}
         {isCropEditing && (
           <>
             <KonvaImage name="crop-editor" image={image} width={naturalW} height={naturalH} opacity={0.3} listening={false} />
@@ -424,6 +507,7 @@ function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight,
   const groupRef = useRef(null);
   const textRef = useRef(null);
   const trRef = useRef(null);
+  const cloneRef = useRef(null);
   const [box, setBox] = useState({ w: 10, h: 10 });
 
   useEffect(() => {
@@ -436,21 +520,27 @@ function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight,
   useEffect(() => {
     function measure() {
       const node = textRef.current;
-      if (node) setBox({ w: node.width(), h: node.height() });
+      // getTextWidth()/height() read the text's actual rendered size,
+      // ignoring the `width` we feed the node below to make `align` work -
+      // width() would otherwise just echo that fed-in value back.
+      if (node) setBox({ w: node.getTextWidth(), h: node.height() });
     }
     measure();
     if (document.fonts?.ready) document.fonts.ready.then(measure);
   }, [layer.text, layer.fontFamily, layer.fontSize]);
 
+  const effects = layer?.effects || makeDefaultEffects();
+  const { glow, clone } = effects;
+  useCloneBlur(cloneRef, clone, [layer?.text, layer?.fontFamily, layer?.fontSize, box.w, box.h]);
+
   if (!layer) return null;
   const isBadge = layer.textType === 'badge';
-  const effects = layer.effects || makeDefaultEffects();
-  const { glow } = effects;
   const opacity = effects.opacity ?? 1;
   const glowOffset = glow.distance * 0.7071;
   const padX = isBadge ? layer.fontSize * 0.6 : 0;
   const padY = isBadge ? layer.fontSize * 0.38 : 0;
   const pillH = box.h + padY * 2;
+  const { count: glowPassCount, perPassOpacity: glowPassOpacity } = glowPasses(glow);
 
   return (
     <>
@@ -470,21 +560,47 @@ function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight,
           onChange({ x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY(), rotation: node.rotation() });
         }}
       >
+        {clone.enabled && (
+          <Group ref={cloneRef} name="clone-blur" x={clone.offsetX} y={clone.offsetY} opacity={clone.opacity}>
+            {isBadge && (
+              <Rect width={box.w + padX * 2} height={pillH} cornerRadius={pillH / 2} fill={layer.bgColor} />
+            )}
+            {Array.from({ length: isBadge ? 1 : glowPassCount }).map((_, i) => (
+              <Text
+                key={i}
+                x={padX} y={padY}
+                width={box.w} wrap="none" align={layer.align || 'left'}
+                text={layer.text}
+                fontFamily={layer.fontFamily}
+                fontSize={layer.fontSize}
+                fill={layer.color}
+                shadowEnabled={!isBadge && glow.enabled}
+                shadowColor={glow.color} shadowBlur={glow.blur}
+                shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+                shadowOpacity={glowPassOpacity}
+              />
+            ))}
+          </Group>
+        )}
         {isBadge && (
           <Rect width={box.w + padX * 2} height={pillH} cornerRadius={pillH / 2} fill={layer.bgColor} />
         )}
-        <Text
-          ref={textRef}
-          x={padX} y={padY}
-          text={layer.text}
-          fontFamily={layer.fontFamily}
-          fontSize={layer.fontSize}
-          fill={layer.color}
-          shadowEnabled={!isBadge && glow.enabled}
-          shadowColor={glow.color} shadowBlur={glow.blur}
-          shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
-          shadowOpacity={glow.opacity}
-        />
+        {Array.from({ length: isBadge ? 1 : glowPassCount }).map((_, i, arr) => (
+          <Text
+            key={i}
+            ref={i === arr.length - 1 ? textRef : undefined}
+            x={padX} y={padY}
+            width={box.w} wrap="none" align={layer.align || 'left'}
+            text={layer.text}
+            fontFamily={layer.fontFamily}
+            fontSize={layer.fontSize}
+            fill={layer.color}
+            shadowEnabled={!isBadge && glow.enabled}
+            shadowColor={glow.color} shadowBlur={glow.blur}
+            shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+            shadowOpacity={glowPassOpacity}
+          />
+        ))}
       </Group>
       {isSelected && (
         <Transformer
@@ -531,9 +647,10 @@ function ColorField({ label, value, onChange }) {
  * the image's own alpha shape - color/blur/distance/intensity). Mirrors
  * Canva's shadow-effect controls, which is what glow was modeled after. */
 function EffectsPanel({ label, effects, onChange, L }) {
-  const { glow } = effects;
+  const { glow, clone } = effects;
   const opacity = effects.opacity ?? 1;
   const patchGlow = (p) => onChange({ ...effects, glow: { ...glow, ...p } });
+  const patchClone = (p) => onChange({ ...effects, clone: { ...clone, ...p } });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10, borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)' }}>
@@ -555,9 +672,27 @@ function EffectsPanel({ label, effects, onChange, L }) {
             <EffectSlider label={L.poster_effect_blur} value={glow.blur} min={0} max={250} onChange={(v) => patchGlow({ blur: v })} />
             <EffectSlider label={L.poster_effect_distance} value={glow.distance} min={0} max={200} onChange={(v) => patchGlow({ distance: v })} />
             <EffectSlider
-              label={L.poster_effect_intensity} value={Math.round(glow.opacity * 100)} min={0} max={500} unit="%"
-              onChange={(v) => patchGlow({ opacity: v / 100 })}
+              label={L.poster_effect_intensity} value={Math.round((glow.opacity / 5) * 100)} min={0} max={100} unit="%"
+              onChange={(v) => patchGlow({ opacity: (v / 100) * 5 })}
             />
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+          <input type="checkbox" checked={clone.enabled} onChange={(e) => patchClone({ enabled: e.target.checked })} />
+          {L.poster_effect_clone}
+        </label>
+        {clone.enabled && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 20 }}>
+            <EffectSlider label={L.poster_effect_cloneOffsetX} value={clone.offsetX} min={-100} max={100} unit="px" onChange={(v) => patchClone({ offsetX: v })} />
+            <EffectSlider label={L.poster_effect_cloneOffsetY} value={clone.offsetY} min={-100} max={100} unit="px" onChange={(v) => patchClone({ offsetY: v })} />
+            <EffectSlider
+              label={L.poster_effect_cloneOpacity} value={Math.round(clone.opacity * 100)} min={5} max={100} unit="%"
+              onChange={(v) => patchClone({ opacity: v / 100 })}
+            />
+            <EffectSlider label={L.poster_effect_cloneBlur} value={clone.blur} min={0} max={40} onChange={(v) => patchClone({ blur: v })} />
           </div>
         )}
       </div>
@@ -650,6 +785,30 @@ function TextLayerPanel({ layer, onChange, L }) {
           background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff',
         }}
       />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-dim)' }}>
+        {L.poster_textAlignLabel}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[
+            { value: 'left', Icon: AlignLeft, title: L.poster_alignLeft },
+            { value: 'center', Icon: AlignCenter, title: L.poster_alignCenter },
+            { value: 'right', Icon: AlignRight, title: L.poster_alignRight },
+          ].map(({ value, Icon, title }) => (
+            <button
+              key={value}
+              className="icon-btn"
+              style={{
+                width: 28, height: 26,
+                background: (layer.align || 'left') === value ? 'rgba(255,157,92,0.25)' : undefined,
+                border: (layer.align || 'left') === value ? '1px solid #ff9d5c' : undefined,
+              }}
+              title={title}
+              onClick={() => onChange({ align: value })}
+            >
+              <Icon size={13} />
+            </button>
+          ))}
+        </div>
+      </div>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-dim)' }}>
         {L.poster_fontLabel}
         <select
@@ -729,6 +888,7 @@ function PickerThumb({ selected, onClick, title, children }) {
  * `onEdit` can reopen this exact same arrangement later. */
 export default function PosterConstructor({
   L, projectId, candidates, variants, logos, initialPoster, saving, onSave, onClose, textBlock,
+  posterTemplates = [], onSaveTemplate, onDeleteTemplate,
 }) {
   const [backgroundPath, setBackgroundPath] = useState(initialPoster?.background_path || candidates[0] || null);
   const [titleCardVariantId, setTitleCardVariantId] = useState(initialPoster?.title_card_variant_id || variants[0]?.variant_id || null);
@@ -746,6 +906,7 @@ export default function PosterConstructor({
   const [guides, setGuides] = useState({ v: false, h: false });
   const [past, setPast] = useState([]);
   const [future, setFuture] = useState([]);
+  const [templateNameDraft, setTemplateNameDraft] = useState('');
   const lastCommitAt = useRef(0);
   const stageRef = useRef(null);
 
@@ -918,6 +1079,33 @@ export default function PosterConstructor({
     });
   }
 
+  /** Applies a saved poster template (logo + glass + text layers only -
+   * see settings.py's `poster_templates` doc comment for why the background
+   * and title-card layers are deliberately excluded, they're specific to
+   * the poem this poster happens to be for). Regenerates fresh layer ids so
+   * the applied copies are independently editable from whatever the
+   * template itself might still be re-applied onto later. */
+  function applyTemplate(id) {
+    const tpl = posterTemplates.find((t) => t.id === id);
+    if (!tpl?.layers) return;
+    commit(() => {
+      const { layers } = tpl;
+      setLogoId(layers.logo_id ?? null);
+      setLogoLayers(normalizeLayers(layers.logo).map((l) => ({ ...l, id: genId() })));
+      setGlassLayer(layers.glass ? { ...layers.glass } : null);
+      setTextLayers(normalizeTextLayers(layers.text).map((l) => ({ ...l, id: genId() })));
+      setSelected(null);
+      setCropEditing(null);
+    });
+  }
+
+  function saveCurrentAsTemplate() {
+    const trimmed = templateNameDraft.trim();
+    if (!trimmed || !onSaveTemplate) return;
+    onSaveTemplate(trimmed, { logo_id: logoId, logo: logoLayers, glass: glassLayer, text: textLayers });
+    setTemplateNameDraft('');
+  }
+
   function layerListFor(kind) {
     if (kind === 'title') return [titleLayers, setTitleLayers];
     if (kind === 'logo') return [logoLayers, setLogoLayers];
@@ -938,7 +1126,7 @@ export default function PosterConstructor({
       if (!src) return;
       const copy = {
         ...src, id: genId(), x: src.x + 24, y: src.y + 24,
-        effects: { glow: { ...src.effects.glow }, opacity: src.effects.opacity },
+        effects: { glow: { ...src.effects.glow }, clone: { ...src.effects.clone }, opacity: src.effects.opacity },
         ...(kind !== 'text' ? { crop: src.crop ? { ...src.crop } : null } : {}),
       };
       setList([...list, copy]);
@@ -1118,9 +1306,7 @@ export default function PosterConstructor({
           style={{ position: 'absolute', left: -overflowMargin, top: -overflowMargin }}
           scaleX={effectiveScale} scaleY={effectiveScale}
           x={stagePos.x} y={stagePos.y}
-          draggable
           onWheel={handleWheel}
-          onDragEnd={(e) => { if (e.target === e.target.getStage()) setStagePos({ x: e.target.x(), y: e.target.y() }); }}
           onMouseDown={(e) => { if (e.target === e.target.getStage()) setSelected(null); }}
           onTouchStart={(e) => { if (e.target === e.target.getStage()) setSelected(null); }}
         >
@@ -1330,6 +1516,42 @@ export default function PosterConstructor({
                 <Type size={13} />
                 {L.poster_addTextHalo}
               </button>
+            </PickerRow>
+
+            <PickerRow label={L.poster_templatesLabel} collapsible defaultOpen={false}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+                {posterTemplates.length > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {posterTemplates.map((t) => (
+                      <span key={t.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <button className="chip" onClick={() => applyTemplate(t.id)} title={L.poster_applyTemplate}>{t.name}</button>
+                        <button
+                          className="icon-btn" style={{ width: 20, height: 20 }}
+                          title={L.poster_deleteTemplate}
+                          onClick={() => onDeleteTemplate?.(t.id)}
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    className="field" style={{ flex: 1, fontSize: 12 }}
+                    value={templateNameDraft}
+                    onChange={(e) => setTemplateNameDraft(e.target.value)}
+                    placeholder={L.poster_templateNamePlaceholder}
+                  />
+                  <button
+                    className="btn btn-accent-soft" style={{ fontSize: 11.5, padding: '5px 9px', gap: 5, flexShrink: 0 }}
+                    onClick={saveCurrentAsTemplate} disabled={!templateNameDraft.trim()}
+                  >
+                    <Save size={12} />
+                    {L.poster_saveTemplate}
+                  </button>
+                </div>
+              </div>
             </PickerRow>
 
             <div style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{L.poster_dragHint}</div>

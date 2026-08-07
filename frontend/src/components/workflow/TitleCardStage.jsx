@@ -181,7 +181,7 @@ export default function TitleCardStage({
   titleCardWishText, wishLoading, titleCardWishLibrary, lastDebug,
   isRecordingTitleCardWish, recordingSeconds, voiceSupported,
   elapsedSeconds, titleCardError, removingBgIds,
-  posters, posterConstructorOpen, editingPoster, posterSaving, logos,
+  posters, posterConstructorOpen, editingPoster, posterSaving, logos, posterTemplates,
   actions,
 }) {
   const [pickerSlot, setPickerSlot] = useState(null);
@@ -445,6 +445,8 @@ export default function TitleCardStage({
           L={L} projectId={project.id} candidates={candidates} variants={variants} logos={logos || []}
           initialPoster={editingPoster} saving={posterSaving} textBlock={textBlock}
           onSave={actions.savePoster} onClose={actions.closeConstructor}
+          posterTemplates={posterTemplates || []}
+          onSaveTemplate={actions.savePosterTemplate} onDeleteTemplate={actions.deletePosterTemplate}
         />
       )}
 

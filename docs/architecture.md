@@ -588,9 +588,34 @@ one-item array on load, so both shapes still open correctly.
 
 Each layer also carries an `effects` bag, edited via `EffectsPanel` in
 `PosterConstructor.jsx` when that layer is selected: the layer's own
-**opacity** (a plain 5–100% slider) and an optional **glow**
+**opacity** (a plain 5–100% slider), an optional **glow**
 (`{enabled,color,blur,distance,opacity}`, rendered as a Konva shadow on the
-overlay image itself — the shadow follows the image's own alpha shape).
+overlay image itself — the shadow follows the image's own alpha shape), and
+an optional **clone** (`{enabled,offsetX,offsetY,opacity,blur}`) - a second
+copy of the same layer rendered behind the real one, offset a few px, for a
+cheap fake-depth "double object" look. The clone renders with the *same*
+glow as the real layer (so both copies get the halo, doubling the sense of
+volume), plus its own opacity and an optional blur (`useCloneBlur` -
+`.cache()` + `Konva.Filters.Blur`, only engaged once `clone.blur > 0`, so
+the common no-blur case stays a plain, un-cached, pixel-crisp render) that
+only ever applies to this back copy.
+
+The glow **intensity** slider shows 0–100%, but a single Konva shadow pass
+physically caps out around there - `shadowOpacity` composites into the
+shadow color's alpha, which the canvas clamps to 1, so pushing the
+underlying value further has no visible effect in one pass. `glow.opacity`
+is still stored 0–5 internally (old data, and the slider's real range,
+unchanged) - `glowPasses()` in `PosterConstructor.jsx` turns any value past
+that single-pass ceiling (`glow.opacity > 1`) into several identical
+stacked shadow passes instead, so dialing past the old ceiling keeps
+visibly deepening the halo (up to 5 stacked passes at 100%) rather than
+silently doing nothing above the old slider's 100% mark. Trade-off: every
+pass also redraws the layer's own fill at its own opacity, so a
+heavily-transparent layer with a maxed-out glow will read a little more
+solid than the opacity slider alone implies - accepted for a simple,
+low-risk render path, since the common case (opacity at/near 100%) is
+unaffected.
+
 Both bake into the flattened PNG at save time; the backend stores `effects`
 opaquely inside `layers` (no schema validation), see `docs/data-model.md`'s
 **Poster** entry. (Earlier versions of this panel had a **backdrop** effect
@@ -635,26 +660,33 @@ the poster edge stays visible instead of getting clipped mid-edit;
 so the exported poster is always exactly `canvas_size`.
 
 Independent of that fit-to-container scale, the picture area also supports
-interactive zoom/pan — a `−`/percentage/`+` row docked at the top of the
-tools panel (not floating over the picture, so it never sits on top of the
-poster content), plus mouse-wheel zoom anchored at the cursor (the standard
-Konva "zoom to pointer" recipe: read the pointer's position in stage space
-at the old scale, then solve for the stage offset that keeps that same
-point under the cursor at the new scale). This is layered on top of the
-auto-fit `scale` as a separate `zoom` multiplier plus a `stagePos` pan
-offset, both reset whenever the background image or fullscreen state
-changes (a pan computed under a since-resized view doesn't mean anything
-any more). `handleSave` briefly resets the Stage's actual `scale`/`position`
-to the neutral fit-scale/origin before capturing (matching the crop/margin
-math, which assumes exactly that state) and restores the interactive
-zoom/pan afterward, so the exported poster is never affected by whatever the
-user happened to be zoomed/panned to while editing.
+interactive zoom — a `−`/percentage/`+` row docked at the top of the tools
+panel (not floating over the picture, so it never sits on top of the poster
+content), plus mouse-wheel zoom anchored at the cursor (the standard Konva
+"zoom to pointer" recipe: read the pointer's position in stage space at the
+old scale, then solve for the stage offset that keeps that same point under
+the cursor at the new scale). This is layered on top of the auto-fit
+`scale` as a separate `zoom` multiplier plus a `stagePos` offset, both reset
+whenever the background image or fullscreen state changes (an offset
+computed under a since-resized view doesn't mean anything any more).
+`handleSave` briefly resets the Stage's actual `scale`/`position` to the
+neutral fit-scale/origin before capturing (matching the crop/margin math,
+which assumes exactly that state) and restores the interactive zoom
+afterward, so the exported poster is never affected by whatever the user
+happened to be zoomed to while editing. The `Stage` itself is **not**
+draggable (removed - it used to double as a pan gesture, but a plain drag
+anywhere off an overlay reads as "grabbing the poster" and had no undo,
+which was confusing since every other mutation goes through `commit`); the
+background layer was already `listening={false}` and non-interactive, so
+with Stage panning gone there's no way to move the background at all, by
+design - only the wheel/button zoom (which still adjusts `stagePos` to
+zoom on the cursor) repositions the view.
 
-The four picker rows (background/title card/logo/objects) are individually
-collapsible (`PickerRow`'s `collapsible` prop, chevron toggle, open/closed
-state kept local to each row) so the fixed-width panel stays manageable
-once several sections have content — logo and objects default closed since
-they're touched less often than background/title card.
+The five picker rows (background/title card/logo/objects/templates) are
+individually collapsible (`PickerRow`'s `collapsible` prop, chevron toggle,
+open/closed state kept local to each row) so the fixed-width panel stays
+manageable once several sections have content — logo, objects and templates
+default closed since they're touched less often than background/title card.
 
 **Text layers.** The "Объекты" row also offers two freely-editable text
 layer types, rendered by `OverlayText` (the same drag/Transformer/select
@@ -674,9 +706,15 @@ specimen page) to ship cyrillic glyphs, since poster text is typically
 Russian — Forum, Montserrat, PT Sans, Oswald, Roboto Condensed, Rubik,
 Playfair Display all do; Lato does not and is kept in the list only for
 latin content, never as a default. The badge's pill `Rect` auto-sizes to
-the rendered text (read back from the Konva `Text` node's `width()`/
+the rendered text (read back from the Konva `Text` node's `getTextWidth()`/
 `height()` after paint, re-measured once more on `document.fonts.ready` in
-case the paint raced the Google Fonts `<link>` in `index.html`).
+case the paint raced the Google Fonts `<link>` in `index.html`). Each text
+layer also has `align` (`'left'\|'center'\|'right'`, defaults `'left'`) -
+Konva only honors `Text`'s `align` prop once it's given an explicit `width`
+(otherwise the node auto-sizes to its content and alignment has no visible
+effect), so the node is fed `width={box.w}` (the same measured natural
+width used for the badge pill) plus `wrap="none"` (so a manual `\n` line
+break still only breaks where typed, not re-wrapped to that width).
 
 **Undo/redo.** A single document snapshot —
 `{backgroundPath, titleCardVariantId, logoId, titleLayers, logoLayers,
@@ -719,6 +757,23 @@ Snapping only applies to dragging, not resizing/rotating.
   same mount every project's `images/`/`references/`/`titlecard/` files go
   through, see `main.py`), managed from Settings → Logos
   (`POST/DELETE /api/settings/logos[/{id}]`, PNG/WebP only).
+
+**Templates.** The "Шаблоны"/"Templates" picker row lets a poster's
+logo/glass/text layout be saved and reapplied across any poem or project -
+`settings.poster_templates: [{id, name, layers{logo_id, logo[], glass,
+text[]}, created_at}]`, no file involved (unlike `logos`) so it's plain
+array CRUD through the ordinary partial-merge `PUT /api/settings`, same
+pattern as `title_card_base_prompt_presets` (`savePosterTemplate`/
+`deletePosterTemplate` in `useSettings.js`). "Сохранить как шаблон"/"Save as
+template" snapshots exactly `{logoId, logoLayers, glassLayer, textLayers}` -
+deliberately **not** `backgroundPath`/`titleCardVariantId`/`titleLayers`,
+since those are specific to the poem this poster happens to be for, while
+the logo/glass/text arrangement is the reusable, poem-independent part of
+the layout. `applyTemplate` restores that saved `layers` object onto
+whatever background/title-card is currently picked, regenerating a fresh
+`id` on every logo/text layer (`genId()`) so the applied copies are
+independently editable from the template itself (and from any earlier
+application of it) rather than aliasing the same ids.
 
 ## AI usage & cost tracking
 

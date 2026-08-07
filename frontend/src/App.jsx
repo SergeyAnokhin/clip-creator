@@ -183,7 +183,7 @@ function App() {
     voiceSupported: voice.isSupported,
     posters: posterConstructor.posters, posterConstructorOpen: posterConstructor.constructorOpen,
     editingPoster: posterConstructor.editingPoster, posterSaving: posterConstructor.saving,
-    logos: settings.logos,
+    logos: settings.logos, posterTemplates: settings.posterTemplates,
     actions: {
       ...titleCard.actions,
       ...posterConstructor.actions,
@@ -192,6 +192,8 @@ function App() {
       loadTitleCardBasePromptPreset: settings.actions.loadTitleCardBasePromptPreset,
       deleteTitleCardBasePromptPreset: settings.actions.deleteTitleCardBasePromptPreset,
       onDeleteTitleCardWish: settings.actions.removeTitleCardWishSnippet,
+      savePosterTemplate: settings.actions.savePosterTemplate,
+      deletePosterTemplate: settings.actions.deletePosterTemplate,
       startVoice: voice.startVoice,
     },
   };

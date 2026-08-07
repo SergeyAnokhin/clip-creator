@@ -42,6 +42,7 @@ export function useSettings({ showToast, onAiCall }) {
   const [backgroundRemoverLocalParams, setBackgroundRemoverLocalParams] = useState(DEFAULT_BG_REMOVER_LOCAL_PARAMS);
   const [backgroundRemoverFalParams, setBackgroundRemoverFalParams] = useState(DEFAULT_BG_REMOVER_FAL_PARAMS);
   const [logos, setLogos] = useState([]);
+  const [posterTemplates, setPosterTemplates] = useState([]);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -68,6 +69,7 @@ export function useSettings({ showToast, onAiCall }) {
       setBackgroundRemoverLocalParams(s.background_remover_local_params || DEFAULT_BG_REMOVER_LOCAL_PARAMS);
       setBackgroundRemoverFalParams(s.background_remover_fal_params || DEFAULT_BG_REMOVER_FAL_PARAMS);
       setLogos(s.logos || []);
+      setPosterTemplates(s.poster_templates || []);
     }).catch(() => {});
     api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
   }, []);
@@ -235,6 +237,23 @@ export function useSettings({ showToast, onAiCall }) {
     const next = titleCardBasePromptPresets.filter((p) => p.id !== id);
     setTitleCardBasePromptPresets(next);
     api.putSettings({ title_card_base_prompt_presets: next }).catch(() => {});
+  }
+
+  // Poster constructor "save as template" (logo/glass/text layout, reusable
+  // across every poem/project) - same plain-array-CRUD-via-partial-PUT
+  // pattern as the title-card base-prompt presets above.
+  function savePosterTemplate(name, layers) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const template = { id: crypto.randomUUID(), name: trimmed, layers, created_at: new Date().toISOString() };
+    const next = [...posterTemplates, template];
+    setPosterTemplates(next);
+    api.putSettings({ poster_templates: next }).catch(() => {});
+  }
+  function deletePosterTemplate(id) {
+    const next = posterTemplates.filter((t) => t.id !== id);
+    setPosterTemplates(next);
+    api.putSettings({ poster_templates: next }).catch(() => {});
   }
 
   // Shared Scenes/Images-stage UI toggle (hide motion_prompt fields) -
@@ -432,7 +451,7 @@ export function useSettings({ showToast, onAiCall }) {
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
     titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
     backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams,
-    logos, setLogos,
+    logos, setLogos, posterTemplates,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
@@ -450,6 +469,7 @@ export function useSettings({ showToast, onAiCall }) {
       updateTitleCardBasePrompt, saveTitleCardBasePromptPreset, loadTitleCardBasePromptPreset, deleteTitleCardBasePromptPreset,
       setTitleCardWishLibrary, removeTitleCardWishSnippet,
       bumpWishUse, bumpSceneWishUse, bumpTitleCardWishUse,
+      savePosterTemplate, deletePosterTemplate,
     },
   };
 }
