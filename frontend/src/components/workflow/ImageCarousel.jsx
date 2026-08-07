@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Star, Trash2, Upload } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Crop, Star, Trash2, Upload } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 
 /** Single-image "hero" preview for a scene's `images` array - fills its
@@ -20,11 +20,13 @@ import { mediaUrl } from '../../api/client.js';
  * neither) - `onSelectMain`/`onRate` always act on the currently shown
  * image. `onDropFile`/`onDropUrl` are optional (Images stage only) -
  * dropping a local file or a dragged image URL onto the frame adds a custom
- * image the same way the Upload button does. */
+ * image the same way the Upload button does. `onCrop` is likewise
+ * Images-stage-only (opens `ImageCropEditor.jsx` on the current image) -
+ * deliberately not offered on Title Card variants or reference images. */
 export default function ImageCarousel({
   L, projectId, images, currentIndex, onIndexChange, onExpand,
   onDelete, showSelectMain, onSelectMain, showStars, onRate,
-  onDropFile, onDropUrl,
+  onDropFile, onDropUrl, onCrop,
 }) {
   const [broken, setBroken] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -105,6 +107,15 @@ export default function ImageCarousel({
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
           >
             <Trash2 size={11} />
+          </button>
+        )}
+        {showImage && onCrop && (
+          <button
+            className="image-carousel-crop-btn"
+            title={L.imageCrop_title}
+            onClick={(e) => { e.stopPropagation(); onCrop(); }}
+          >
+            <Crop size={12} />
           </button>
         )}
         {showImage && showStars && (

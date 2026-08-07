@@ -544,6 +544,103 @@
   color: var(--text-faint);
 }
 
+/* ---------- Crop/outpaint editor (ImageCropEditor.jsx) ---------- */
+
+.crop-editor-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+}
+
+.crop-editor-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.crop-editor-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.crop-editor-stage {
+  position: relative;
+  width: 100%;
+  height: 66vh;
+  border-radius: 12px;
+  overflow: hidden;
+  background: repeating-conic-gradient(rgba(255, 255, 255, 0.04) 0% 25%, transparent 0% 50%) 50% / 20px 20px;
+}
+
+.crop-editor-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+
+.crop-editor-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.crop-editor-quality {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.crop-editor-quality button {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.crop-editor-quality button.is-active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.crop-editor-indicator {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.crop-editor-indicator.is-active {
+  color: #ff9d5c;
+}
+
+.crop-editor-indicator.is-error {
+  color: #ef4444;
+}
+
+.crop-editor-error {
+  font-size: 12px;
+  color: #ef4444;
+  flex-basis: 100%;
+}
+
+.crop-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
 /* ---------- Workflow shell ---------- */
 
 .workflow-header {
@@ -1265,6 +1362,27 @@
   background: #ef4444;
 }
 
+.image-carousel-crop-btn {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.image-carousel-crop-btn:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 .image-thumb-stars {
   display: flex;
   gap: 2px;
@@ -1501,6 +1619,108 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---------- Mureka stage (real audio generation) ---------- */
+
+.mureka-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.mureka-track-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 2px solid rgba(255, 255, 255, 0.12);
+}
+
+.mureka-track-card.is-main {
+  border-color: var(--accent);
+}
+
+.mureka-track-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mureka-track-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.mureka-track-duration {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.mureka-track-header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mureka-track-audio {
+  width: 100%;
+  height: 34px;
+}
+
+.mureka-reference-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 2;
+  margin-top: 4px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+}
+
+.mureka-reference-menu button {
+  text-align: left;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mureka-reference-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mureka-reference-menu button.is-active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.mureka-reference-menu-row {
+  display: flex;
+  align-items: center;
+}
+
+.mureka-reference-menu-row button:first-child {
+  flex: 1;
 }
 
 /* ---------- Settings ---------- */

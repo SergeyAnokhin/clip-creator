@@ -27,7 +27,7 @@ DEFAULT_SETTINGS = {
     'lang': 'ru',
     'api_keys': {
         'replicate': '', 'google': '', 'google_free': '', 'fal': '', 'openrouter': '', 'deepseek': '',
-        'krea': '', 'google_translate': '',
+        'krea': '', 'google_translate': '', 'mureka': '',
     },
     'text_models': {'favorites': [], 'default': 'google:gemini-2.5-flash'},
     'simple_models': {'favorites': [], 'default': ''},
@@ -70,6 +70,11 @@ DEFAULT_SETTINGS = {
     'background_remover_params': {
         'background_type': 'rgba', 'format': 'png', 'threshold': 0, 'reverse': False,
     },
+    # Default for the scene-image crop editor's fast/cheap vs quality/
+    # expensive outpaint mode (ImageCropEditor.jsx) - overridable per-save,
+    # same shape as background_remover_method above. See providers/images.py's
+    # _outpaint_with_quality for what 'quality' actually changes.
+    'outpaint_quality_mode': 'fast',
     'logos': [],
     # Reusable poster layouts (Poster constructor "save as template") -
     # {id, name, layers: {logo_id, logo, glass, text}, created_at}, global
@@ -83,6 +88,12 @@ DEFAULT_SETTINGS = {
     # field/label when the scene mainly needs a static image right now -
     # doesn't touch the underlying scene data, just what's rendered.
     'hide_motion_prompt': False,
+    # Mureka stage (providers/mureka.py) - user-defined quality-review tags
+    # ({id, label}) assignable to generated tracks (e.g. "плохое произношение",
+    # "перепутан пол голоса"). Flat array, CRUD'd entirely via this
+    # partial-merge PUT - same convention as poster_templates above, no
+    # dedicated endpoint needed since no LLM call is involved.
+    'music_tags': [],
 }
 
 

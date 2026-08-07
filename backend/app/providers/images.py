@@ -48,6 +48,7 @@ the project by the time its status is polled as 'completed'.
 
 import asyncio
 import base64
+import io
 import ipaddress
 import socket
 import time
@@ -56,8 +57,10 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
+from PIL import Image as PILImage
 
 from .. import console_log, pricing, storage, usage
+from . import fal_client
 
 # Cap for user-pasted/dropped image URLs (scene-image upload endpoint) - not
 # applied to `_download` above, which only ever fetches URLs a trusted
@@ -69,6 +72,25 @@ _REPLICATE_BASE = 'https://api.replicate.com/v1'
 _FAL_BASE = 'https://queue.fal.run'
 _GOOGLE_PREDICT_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:predict'
 _OPENROUTER_IMAGES_URL = 'https://openrouter.ai/api/v1/images'
+
+# Crop/outpaint (ImageCropEditor.jsx) - see the FAL outpainting memory this
+# was implemented from. Priced per output megapixel (fal.ai/models/fal-ai/
+# flux-2-pro/outpaint, 2026-08), which the `pricing.py` catalog schema
+# doesn't model (only per-image) - computed directly here and threaded
+# through `usage_out['cost']`, same bypass `_generate_openrouter` uses.
+_FAL_OUTPAINT_ID = 'fal-ai/flux-2-pro/outpaint'
+_FAL_OUTPAINT_MODEL = f'fal:{_FAL_OUTPAINT_ID}'
+_OUTPAINT_PRICE_PER_MEGAPIXEL = 0.03
+# FAL rejects an outpaint call whose output exceeds this on either side.
+_OUTPAINT_MAX_CANVAS_SIDE = 2560
+
+
+class OutpaintTooLargeError(ValueError):
+    """Raised by `crop_image` when the requested selection would outpaint
+    past `_OUTPAINT_MAX_CANVAS_SIDE` - a `ValueError` subclass so existing
+    generic `except ValueError` handling still works, but distinguishable
+    from a plain "not found" `ValueError` so the route can map it to 400
+    instead of 404."""
 
 _POLL_INTERVAL = 2.0
 _JOB_TIMEOUT = 300.0
@@ -291,51 +313,15 @@ async def _generate_fal(
 ) -> tuple[bytes, str]:
     if not api_key:
         raise RuntimeError('Нет API-ключа FAL')
-    headers = {'Authorization': f'Key {api_key}', 'Content-Type': 'application/json'}
     body = {'prompt': prompt}
     if aspect_ratio:
         body['image_size'] = _FAL_IMAGE_SIZE[aspect_ratio]
     debug_request = {'url': f'{_FAL_BASE}/{model_id}', 'model': model_id, 'body': body}
 
-    async with httpx.AsyncClient(timeout=30) as http_client:
-        resp = await http_client.post(f'{_FAL_BASE}/{model_id}', headers=headers, json=body)
-    if resp.status_code >= 400:
-        if usage_out is not None:
-            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
-        raise RuntimeError(f'FAL API вернул {resp.status_code}: {resp.text[:300]}')
-    submitted = resp.json()
-    status_url = submitted['status_url']
-    response_url = submitted['response_url']
-
-    deadline = time.monotonic() + _JOB_TIMEOUT
-    status = submitted.get('status')
-    while status != 'COMPLETED':
-        if status == 'FAILED':
-            if usage_out is not None:
-                usage_out['debug'] = {'request': debug_request, 'response': {'status': 'FAILED'}}
-            raise RuntimeError('FAL: задание завершилось с ошибкой')
-        if time.monotonic() > deadline:
-            raise RuntimeError('FAL: превышено время ожидания генерации')
-        await asyncio.sleep(_POLL_INTERVAL)
-        async with httpx.AsyncClient(timeout=30) as http_client:
-            poll = await http_client.get(status_url, headers=headers)
-        # FAL's status endpoint replies 202 Accepted (not 200) while a job is
-        # still IN_QUEUE/IN_PROGRESS - only >=400 is a real HTTP-level error,
-        # the job's own status field (checked below) is what decides whether
-        # to keep polling.
-        if poll.status_code >= 400:
-            if usage_out is not None:
-                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
-            raise RuntimeError(f'FAL API (poll) вернул {poll.status_code}: {poll.text[:300]}')
-        status = poll.json().get('status')
-
-    async with httpx.AsyncClient(timeout=30) as http_client:
-        result = await http_client.get(response_url, headers=headers)
-    if result.status_code >= 400:
-        if usage_out is not None:
-            usage_out['debug'] = {'request': debug_request, 'response': {'status': result.status_code, 'text': result.text[:500]}}
-        raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
-    payload = result.json()
+    payload = await fal_client.submit_poll_fetch(
+        _FAL_BASE, model_id, body, api_key, debug_request,
+        usage_out=usage_out, poll_interval=_POLL_INTERVAL, job_timeout=_JOB_TIMEOUT,
+    )
     images = payload.get('images') or []
     if usage_out is not None:
         redacted_response = {**payload, 'images': [{'url': img.get('url')} for img in images]}
@@ -513,3 +499,215 @@ def start_jobs(
 
 def get_job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
+
+
+async def _call_outpaint_fal(
+    image_bytes: bytes, ext: str, api_key: str, expand: dict, usage_out: dict | None = None,
+) -> tuple[bytes, str]:
+    """Single fal-ai/flux-2-pro/outpaint call - same submit/poll/fetch shape
+    as title_card.py's FAL calls (data URI in directly, no upload step), but
+    this model's own request shape (`expand_left/right/top/bottom` in pixels)
+    and response shape (`images[0].url`, like the reference-image FAL model,
+    not the single `image` object the bg-remover uses). `expand` is
+    `{left, right, top, bottom}`, 0 for any side that shouldn't grow. Sets
+    `usage_out['cost']` from the actual output pixel count (see the
+    per-megapixel pricing note above) rather than a fixed per-image price."""
+    if not api_key:
+        raise RuntimeError('Нет API-ключа FAL')
+    data_uri = f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(image_bytes).decode()}'
+    body = {
+        'image_url': data_uri,
+        'expand_left': expand['left'], 'expand_right': expand['right'],
+        'expand_top': expand['top'], 'expand_bottom': expand['bottom'],
+    }
+    debug_request = {
+        'url': f'{_FAL_BASE}/{_FAL_OUTPAINT_ID}', 'model': _FAL_OUTPAINT_ID, 'expand': expand,
+        'body': {'image_url': f'<image data, {len(image_bytes)} bytes>'},
+    }
+
+    payload = await fal_client.submit_poll_fetch(
+        _FAL_BASE, _FAL_OUTPAINT_ID, body, api_key, debug_request,
+        usage_out=usage_out, poll_interval=_POLL_INTERVAL, job_timeout=_JOB_TIMEOUT,
+    )
+    out_images = payload.get('images') or []
+    if usage_out is not None:
+        redacted_response = {**payload, 'images': [{'url': img.get('url')} for img in out_images]}
+        usage_out['debug'] = {'request': debug_request, 'response': redacted_response}
+    if not out_images:
+        raise RuntimeError('FAL: результат не содержит изображений')
+    if (payload.get('has_nsfw_concepts') or [False])[0]:
+        raise RuntimeError('FAL: изображение заблокировано модерацией (обнаружен NSFW-контент)')
+    content, out_ext = await _download(out_images[0]['url'])
+    if usage_out is not None:
+        out_w, out_h = PILImage.open(io.BytesIO(content)).size
+        usage_out['cost'] = round(_OUTPAINT_PRICE_PER_MEGAPIXEL * (out_w * out_h) / 1_000_000, 6)
+    return content, out_ext
+
+
+async def _outpaint_with_quality(
+    image_bytes: bytes, ext: str, api_key: str, expand: dict, quality: str, usage_out: dict | None = None,
+) -> tuple[bytes, str]:
+    """Fast mode (or no left overflow): one `_call_outpaint_fal` call with
+    all four expand amounts. Quality mode with a left overflow: two calls,
+    per the FAL outpainting memory's Mode B - FLUX extends right/top/bottom
+    reliably in one call but the left edge comes back weak, so the left
+    strip is generated separately on a horizontally-flipped copy (where it
+    becomes a "right" expand, the model's strong side) and mirrored back.
+    Known limitation: the two calls generate their top/bottom extensions
+    independently, so combining a quality-mode left expand with top/bottom
+    expand can leave a faint seam at the top-left/bottom-left corners - an
+    accepted trade-off of generalizing the documented (left/right-only)
+    recipe, not something top/bottom-only or fast mode ever hits. When left
+    is the *only* overflowing side, the "primary" (right/top/bottom) call
+    would just be asking FAL to expand by 0px on every side - skipped
+    entirely in favor of using the source image as-is for that half of the
+    composite."""
+    if quality != 'quality' or expand['left'] <= 0:
+        call_usage: dict = {}
+        content, out_ext = await _call_outpaint_fal(image_bytes, ext, api_key, expand, usage_out=call_usage)
+        if usage_out is not None:
+            usage_out['cost'] = call_usage.get('cost', 0.0)
+            usage_out['debug'] = call_usage.get('debug')
+        return content, out_ext
+
+    primary_expand = {**expand, 'left': 0}
+    primary_usage: dict = {}
+    if primary_expand['right'] or primary_expand['top'] or primary_expand['bottom']:
+        primary_content, _primary_ext = await _call_outpaint_fal(
+            image_bytes, ext, api_key, primary_expand, usage_out=primary_usage,
+        )
+    else:
+        # Nothing to expand on this side (left is the only overflow) - no
+        # point spending an API call to ask FAL to outpaint by 0px, just use
+        # the source image as-is for the primary half of the composite.
+        primary_content = image_bytes
+
+    src_img = PILImage.open(io.BytesIO(image_bytes))
+    flipped = src_img.transpose(PILImage.FLIP_LEFT_RIGHT)
+    flipped_io = io.BytesIO()
+    flipped.save(flipped_io, format='PNG')
+    flip_expand = {'left': 0, 'right': expand['left'], 'top': expand['top'], 'bottom': expand['bottom']}
+    left_usage: dict = {}
+    flip_content, _flip_ext = await _call_outpaint_fal(
+        flipped_io.getvalue(), 'png', api_key, flip_expand, usage_out=left_usage,
+    )
+    left_result = PILImage.open(io.BytesIO(flip_content)).transpose(PILImage.FLIP_LEFT_RIGHT).convert('RGBA')
+    left_strip = left_result.crop((0, 0, expand['left'], left_result.height))
+
+    primary_result = PILImage.open(io.BytesIO(primary_content)).convert('RGBA')
+    composed = PILImage.new('RGBA', (primary_result.width + expand['left'], primary_result.height))
+    composed.paste(left_strip, (0, 0))
+    composed.paste(primary_result, (expand['left'], 0))
+
+    out = io.BytesIO()
+    composed.convert('RGB').save(out, format='PNG')
+    if usage_out is not None:
+        usage_out['cost'] = primary_usage.get('cost', 0.0) + left_usage.get('cost', 0.0)
+        usage_out['debug'] = {'calls': [primary_usage.get('debug'), left_usage.get('debug')]}
+    return out.getvalue(), 'png'
+
+
+async def crop_image(
+    slug: str, scene_index: int, image_id: str, crop_box: dict, settings: dict,
+    usage_ctx: dict | None = None, quality: str | None = None,
+) -> dict:
+    """Crops (and, when the requested box extends past an edge, outpaints)
+    one scene image - modeled on title_card.py's `remove_background`:
+    appends a **new** `images` entry (`source_image_id` pointing back at the
+    original, which is left untouched). `crop_box` is `{x, y, width,
+    height}` in the source image's own natural-pixel coordinates - x/y may
+    be negative and x+width/y+height may exceed the source's size, meaning
+    "outpaint this side by that many pixels". A box fully inside the source
+    is a free, instant, local PIL crop (`model: 'local:crop'`, cost 0) - no
+    FAL call at all, mirroring the free 'local' background-remover method's
+    synthetic model id. Raises `ValueError` for a missing project/scene/
+    image or a selection whose outpainted canvas would exceed FAL's
+    `_OUTPAINT_MAX_CANVAS_SIDE` limit (both map to 4xx in the route)."""
+    project = storage.load_project(slug)
+    if project is None:
+        raise ValueError('Project not found')
+    scene_list = project.get('scenes', [])
+    if scene_index < 0 or scene_index >= len(scene_list):
+        raise ValueError('Scene not found')
+    scene_images = scene_list[scene_index].get('images', [])
+    source = next((img for img in scene_images if img.get('image_id') == image_id), None)
+    if source is None:
+        raise ValueError('Image not found')
+
+    file_path = storage.project_dir(slug) / source['file_path']
+    ext = file_path.suffix.removeprefix('.').lower() or 'png'
+    image_bytes = file_path.read_bytes()
+    width, height = PILImage.open(io.BytesIO(image_bytes)).size
+
+    x, y, box_w, box_h = crop_box['x'], crop_box['y'], crop_box['width'], crop_box['height']
+    over_left = max(0, -x)
+    over_top = max(0, -y)
+    over_right = max(0, x + box_w - width)
+    over_bottom = max(0, y + box_h - height)
+
+    if width + over_left + over_right > _OUTPAINT_MAX_CANVAS_SIDE or height + over_top + over_bottom > _OUTPAINT_MAX_CANVAS_SIDE:
+        raise OutpaintTooLargeError(
+            f'Область выбора слишком велика (максимум {_OUTPAINT_MAX_CANVAS_SIDE}px по стороне после дорисовки)',
+        )
+
+    started = time.monotonic()
+    provider_usage: dict = {}
+    quality = quality if quality in ('fast', 'quality') else (settings.get('outpaint_quality_mode') or 'fast')
+    model = 'local:crop'
+
+    try:
+        if not (over_left or over_top or over_right or over_bottom):
+            cropped = PILImage.open(io.BytesIO(image_bytes)).convert('RGBA').crop((x, y, x + box_w, y + box_h))
+            out = io.BytesIO()
+            cropped.save(out, 'PNG')
+            content, out_ext = out.getvalue(), 'png'
+        else:
+            model = _FAL_OUTPAINT_MODEL
+            api_key = (settings.get('api_keys') or {}).get('fal', '')
+            console_log.log_request_start(model, 'image', usage_ctx.get('task') if usage_ctx else None)
+            expand = {'left': over_left, 'top': over_top, 'right': over_right, 'bottom': over_bottom}
+            expanded_content, _expanded_ext = await _outpaint_with_quality(
+                image_bytes, ext, api_key, expand, quality, usage_out=provider_usage,
+            )
+            expanded_img = PILImage.open(io.BytesIO(expanded_content)).convert('RGBA')
+            final_x, final_y = x + over_left, y + over_top
+            cropped = expanded_img.crop((final_x, final_y, final_x + box_w, final_y + box_h))
+            out = io.BytesIO()
+            cropped.save(out, 'PNG')
+            content, out_ext = out.getvalue(), 'png'
+    except Exception as exc:
+        usage.record(usage_ctx, model=model, kind='image', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=source['file_path'], error=str(exc),
+                     debug=provider_usage.get('debug'))
+        raise RuntimeError(str(exc)) from exc
+
+    images_dir = storage.project_dir(slug) / 'images'
+    images_dir.mkdir(parents=True, exist_ok=True)
+    new_image_id = f'img_{uuid4().hex[:8]}'
+    filename = f'scene_{scene_index + 1}_{new_image_id.removeprefix("img_")}.{out_ext}'
+    (images_dir / filename).write_bytes(content)
+
+    cost = provider_usage.get('cost', 0.0)
+    new_image = {
+        'image_id': new_image_id, 'file_path': f'images/{filename}',
+        'rating': 0, 'is_selected': False, 'generated_at': _now(),
+        'model': model, 'aspect_ratio': source.get('aspect_ratio'), 'cost': cost,
+        'source_image_id': image_id,
+    }
+
+    current_images = scene_images
+    async with storage.project_lock(slug):
+        project = storage.load_project(slug)
+        if project is not None:
+            scene_list = project.get('scenes', [])
+            if 0 <= scene_index < len(scene_list):
+                current_images = [*scene_list[scene_index].get('images', []), new_image]
+                scene_list[scene_index]['images'] = current_images
+                project['updated_at'] = _now()
+                storage.save_project(slug, project)
+
+    debug_info = provider_usage.get('debug')
+    usage.record(usage_ctx, model=model, kind='image', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000),
+                 units={'images': 1}, prompt=source['file_path'], response=new_image['file_path'], debug=debug_info)
+    return {'image': new_image, 'images': current_images, 'debug': debug_info}

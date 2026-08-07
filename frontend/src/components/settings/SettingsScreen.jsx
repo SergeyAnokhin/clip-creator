@@ -19,6 +19,7 @@ const API_KEY_ROWS = [
   { key: 'deepseek', name: 'DeepSeek' },
   { key: 'krea', name: 'Krea AI' },
   { key: 'google_translate', name: 'Google Translate' },
+  { key: 'mureka', name: 'Mureka' },
 ];
 
 const MODEL_PROVIDERS = [
@@ -43,6 +44,7 @@ export default function SettingsScreen({
   sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
   sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
   backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams, logos,
+  outpaintQualityMode, musicTags,
   pricing, usageToday, usagePeriodTotals,
   onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
@@ -55,6 +57,8 @@ export default function SettingsScreen({
   const [editingWishId, setEditingWishId] = useState(null);
   const [editWishTitle, setEditWishTitle] = useState('');
   const [editWishText, setEditWishText] = useState('');
+  const [newMusicTagDraft, setNewMusicTagDraft] = useState('');
+  const [editingMusicTagId, setEditingMusicTagId] = useState(null);
   const [newSceneWishDraft, setNewSceneWishDraft] = useState('');
   const [editingSceneWishId, setEditingSceneWishId] = useState(null);
   const [editSceneWishTitle, setEditSceneWishTitle] = useState('');
@@ -92,6 +96,7 @@ export default function SettingsScreen({
       scene_wish_library: sceneWishLibrary, background_remover_params: backgroundRemoverParams,
       background_remover_method: backgroundRemoverMethod, background_remover_local_params: backgroundRemoverLocalParams,
       background_remover_fal_params: backgroundRemoverFalParams,
+      outpaint_quality_mode: outpaintQualityMode, music_tags: musicTags,
     });
   }
   function handleApiKeysFile(e) {
@@ -121,6 +126,24 @@ export default function SettingsScreen({
     }
     setEditingTagIndex(null);
     setNewTagDraft('');
+  }
+
+  function startEditMusicTag(tag) {
+    setEditingMusicTagId(tag.id);
+    setNewMusicTagDraft(tag.label);
+  }
+  function cancelEditMusicTag() {
+    setEditingMusicTagId(null);
+    setNewMusicTagDraft('');
+  }
+  function submitMusicTagDraft() {
+    if (editingMusicTagId !== null) {
+      actions.updateMusicTag(editingMusicTagId, newMusicTagDraft);
+    } else {
+      actions.addMusicTag(newMusicTagDraft);
+    }
+    setEditingMusicTagId(null);
+    setNewMusicTagDraft('');
   }
 
   function startEditExample(index) {
@@ -450,6 +473,24 @@ export default function SettingsScreen({
             </div>
           )}
 
+          {activeTab === 'providers' && (
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.settings_outpaint}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_outpaintHint}</div>
+              <div className="settings-row">
+                <span className="settings-row-name">{L.settings_outpaintMode}</span>
+                <select
+                  className="field"
+                  value={outpaintQualityMode}
+                  onChange={(e) => actions.setOutpaintQualityMode(e.target.value)}
+                >
+                  <option value="fast">{L.settings_outpaintModeFast}</option>
+                  <option value="quality">{L.settings_outpaintModeQuality}</option>
+                </select>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'models' && (
             <>
               <div className="settings-panel">
@@ -549,6 +590,48 @@ export default function SettingsScreen({
                   </button>
                   {editingTagIndex !== null && (
                     <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditTag}>
+                      {L.cancel}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="settings-panel">
+                <div className="settings-panel-label">{L.settings_musicTags}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_musicTagsHint}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {musicTags.map((tag) => (
+                    <div
+                      className="settings-row"
+                      key={tag.id}
+                      style={tag.id === editingMusicTagId ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
+                    >
+                      <span
+                        className="settings-row-name"
+                        style={{ width: 'auto', flex: 1, cursor: 'pointer' }}
+                        title={L.settings_clickToEdit}
+                        onClick={() => startEditMusicTag(tag)}
+                      >
+                        {tag.label}
+                      </span>
+                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeMusicTag(tag.id)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <input
+                    className="field"
+                    value={newMusicTagDraft}
+                    onChange={(e) => setNewMusicTagDraft(e.target.value)}
+                    placeholder={L.settings_musicTagsPlaceholder}
+                  />
+                  <button className="btn btn-accent-soft" onClick={submitMusicTagDraft}>
+                    {editingMusicTagId !== null ? L.save : L.add}
+                  </button>
+                  {editingMusicTagId !== null && (
+                    <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditMusicTag}>
                       {L.cancel}
                     </button>
                   )}

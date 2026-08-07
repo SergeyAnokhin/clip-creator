@@ -13,6 +13,7 @@ const DEFAULT_BG_REMOVER_PARAMS = { background_type: 'rgba', format: 'png', thre
 const DEFAULT_BG_REMOVER_METHOD = 'replicate';
 const DEFAULT_BG_REMOVER_LOCAL_PARAMS = { bg: 'black', threshold: 40 };
 const DEFAULT_BG_REMOVER_FAL_PARAMS = { model: 'fal-ai/bria/background/remove' };
+const DEFAULT_OUTPAINT_QUALITY_MODE = 'fast';
 
 /** App settings (language, API keys, default models, Suno meta-tags), loaded
  * from the backend on mount. Owns `lang`, and therefore the `L` dictionary
@@ -41,8 +42,10 @@ export function useSettings({ showToast, onAiCall }) {
   const [backgroundRemoverMethod, setBackgroundRemoverMethodState] = useState(DEFAULT_BG_REMOVER_METHOD);
   const [backgroundRemoverLocalParams, setBackgroundRemoverLocalParams] = useState(DEFAULT_BG_REMOVER_LOCAL_PARAMS);
   const [backgroundRemoverFalParams, setBackgroundRemoverFalParams] = useState(DEFAULT_BG_REMOVER_FAL_PARAMS);
+  const [outpaintQualityMode, setOutpaintQualityModeState] = useState(DEFAULT_OUTPAINT_QUALITY_MODE);
   const [logos, setLogos] = useState([]);
   const [posterTemplates, setPosterTemplates] = useState([]);
+  const [musicTags, setMusicTags] = useState([]);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -68,8 +71,10 @@ export function useSettings({ showToast, onAiCall }) {
       setBackgroundRemoverMethodState(s.background_remover_method || DEFAULT_BG_REMOVER_METHOD);
       setBackgroundRemoverLocalParams(s.background_remover_local_params || DEFAULT_BG_REMOVER_LOCAL_PARAMS);
       setBackgroundRemoverFalParams(s.background_remover_fal_params || DEFAULT_BG_REMOVER_FAL_PARAMS);
+      setOutpaintQualityModeState(s.outpaint_quality_mode || DEFAULT_OUTPAINT_QUALITY_MODE);
       setLogos(s.logos || []);
       setPosterTemplates(s.poster_templates || []);
+      setMusicTags(s.music_tags || []);
     }).catch(() => {});
     api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
   }, []);
@@ -89,6 +94,19 @@ export function useSettings({ showToast, onAiCall }) {
     const trimmed = text.trim();
     if (!trimmed) return;
     setSpecialTags((prev) => prev.map((t, i) => (i === index ? trimmed : t)));
+  }
+  function addMusicTag(label) {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setMusicTags((prev) => [...prev, { id: `mtag_${Math.random().toString(36).slice(2, 10)}`, label: trimmed }]);
+  }
+  function removeMusicTag(id) {
+    setMusicTags((prev) => prev.filter((t) => t.id !== id));
+  }
+  function updateMusicTag(id, label) {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setMusicTags((prev) => prev.map((t) => (t.id === id ? { ...t, label: trimmed } : t)));
   }
   function addReferenceExample(text) {
     const trimmed = text.trim();
@@ -277,6 +295,9 @@ export function useSettings({ showToast, onAiCall }) {
   function setBackgroundRemoverFalParam(key, value) {
     setBackgroundRemoverFalParams((prev) => ({ ...prev, [key]: value }));
   }
+  function setOutpaintQualityMode(value) {
+    setOutpaintQualityModeState(value);
+  }
 
   async function uploadLogo(name, file) {
     try {
@@ -397,6 +418,8 @@ export function useSettings({ showToast, onAiCall }) {
         background_remover_method: src.background_remover_method ?? backgroundRemoverMethod,
         background_remover_local_params: src.background_remover_local_params ?? backgroundRemoverLocalParams,
         background_remover_fal_params: src.background_remover_fal_params ?? backgroundRemoverFalParams,
+        outpaint_quality_mode: src.outpaint_quality_mode ?? outpaintQualityMode,
+        music_tags: src.music_tags ?? musicTags,
       };
       setLang(next.lang);
       setTextModels(next.text_models);
@@ -418,6 +441,8 @@ export function useSettings({ showToast, onAiCall }) {
       setBackgroundRemoverMethodState(next.background_remover_method);
       setBackgroundRemoverLocalParams(next.background_remover_local_params);
       setBackgroundRemoverFalParams(next.background_remover_fal_params);
+      setOutpaintQualityModeState(next.outpaint_quality_mode);
+      setMusicTags(next.music_tags);
       await api.putSettings(next);
       showToast(L.toast_imported);
     } catch {
@@ -437,6 +462,7 @@ export function useSettings({ showToast, onAiCall }) {
         title_card_base_prompt: titleCardBasePrompt, title_card_base_prompt_presets: titleCardBasePromptPresets,
         background_remover_params: backgroundRemoverParams, background_remover_method: backgroundRemoverMethod,
         background_remover_local_params: backgroundRemoverLocalParams, background_remover_fal_params: backgroundRemoverFalParams,
+        outpaint_quality_mode: outpaintQualityMode, music_tags: musicTags,
       });
       showToast(L.toast_saved);
     } catch {
@@ -451,11 +477,13 @@ export function useSettings({ showToast, onAiCall }) {
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
     titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
     backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams,
-    logos, setLogos, posterTemplates,
+    outpaintQualityMode,
+    logos, setLogos, posterTemplates, musicTags,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
       setBackgroundRemoverParam, setBackgroundRemoverMethod, setBackgroundRemoverLocalParam, setBackgroundRemoverFalParam,
+      setOutpaintQualityMode,
       uploadLogo, deleteLogo,
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings, setHideMotionPrompt,
       addSpecialTag, removeSpecialTag, updateSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
@@ -470,6 +498,7 @@ export function useSettings({ showToast, onAiCall }) {
       setTitleCardWishLibrary, removeTitleCardWishSnippet,
       bumpWishUse, bumpSceneWishUse, bumpTitleCardWishUse,
       savePosterTemplate, deletePosterTemplate,
+      addMusicTag, removeMusicTag, updateMusicTag,
     },
   };
 }

@@ -5,6 +5,7 @@ import ImageCarousel from './ImageCarousel.jsx';
 import TranslateButton from './TranslateButton.jsx';
 import CopyButton from './CopyButton.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
+import ImageCropEditor from './ImageCropEditor.jsx';
 
 /** Images stage's per-scene card - same prompt/mic/translate/copy layout as
  * SceneTextCard.jsx, laid out as two blocks side by side (`.scene-row`): the
@@ -14,9 +15,11 @@ import ImageLightbox from './ImageLightbox.jsx';
  * the whole remaining block, edge-to-edge, with select-main/star-rating
  * overlaid directly on it - see ImageCarousel.jsx's docstring. */
 export default function SceneCard({
-  L, projectId, scene, index, isRecording, recordingSeconds, voiceSupported, isLoading, columns, hideMotionPrompt, actions,
+  L, projectId, scene, index, isRecording, recordingSeconds, voiceSupported, isLoading, columns, hideMotionPrompt,
+  outpaintQualityMode, actions,
 }) {
   const [lightboxIndex, setLightboxIndex] = useState(null);
+  const [cropEditIndex, setCropEditIndex] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(Math.max(0, scene.images.length - 1));
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadUrl, setUploadUrl] = useState('');
@@ -181,6 +184,7 @@ export default function SceneCard({
           onRate={(rating) => actions.onRate(index, boundedIndex, rating)}
           onDropFile={(file) => actions.onUploadImageFile(index, file)}
           onDropUrl={(url) => actions.onUploadImageUrl(index, url)}
+          onCrop={() => setCropEditIndex(boundedIndex)}
         />
       </div>
 
@@ -190,6 +194,16 @@ export default function SceneCard({
         initialIndex={lightboxIndex || 0}
         onClose={() => setLightboxIndex(null)}
       />
+
+      {cropEditIndex != null && scene.images[cropEditIndex] && (
+        <ImageCropEditor
+          L={L} projectId={projectId}
+          image={scene.images[cropEditIndex]}
+          defaultQuality={outpaintQualityMode}
+          onSave={(cropBox, quality) => actions.onCropImage(index, cropEditIndex, cropBox, quality)}
+          onClose={() => setCropEditIndex(null)}
+        />
+      )}
     </div>
   );
 }

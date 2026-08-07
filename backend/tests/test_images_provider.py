@@ -1,7 +1,10 @@
 import asyncio
 import base64
+import io
 
+import numpy as np
 import pytest
+from PIL import Image
 
 from app.providers import images
 
@@ -624,4 +627,126 @@ def test_save_uploaded_image_writes_file_with_upload_marker(tmp_path, monkeypatc
     assert image['is_selected'] is False
     written = storage.project_dir('poem-a') / image['file_path']
     assert written.is_file()
-    assert written.read_bytes() == b'fake-bytes'
+
+
+def _png(width, height, rgb=(30, 60, 90)):
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[:, :, :] = rgb
+    out = io.BytesIO()
+    Image.fromarray(arr, 'RGB').save(out, 'PNG')
+    return out.getvalue()
+
+
+def _save_scene_image(slug, image_bytes, image_id='img_src1', scene_index=0):
+    """Seeds a minimal project with one scene whose `images` holds one real
+    PNG on disk - `crop_image` always PIL-opens the source, so (unlike
+    `remove_background`'s tests) arbitrary non-image bytes won't do here."""
+    from app import storage
+    images_dir = storage.project_dir(slug) / 'images'
+    images_dir.mkdir(parents=True, exist_ok=True)
+    filename = f'scene_{scene_index + 1}_src.png'
+    (images_dir / filename).write_bytes(image_bytes)
+    source_image = {
+        'image_id': image_id, 'file_path': f'images/{filename}', 'rating': 0, 'is_selected': False,
+        'generated_at': '', 'model': 'google:imagen-4.0-generate-001', 'aspect_ratio': '1:1', 'cost': 0.02,
+    }
+    scenes = [{'images': []} for _ in range(scene_index)] + [{'images': [source_image]}]
+    storage.save_project(slug, {'id': slug, 'scenes': scenes})
+    return source_image
+
+
+def test_crop_image_inbounds_makes_no_network_call_and_appends_free_crop(tmp_path, monkeypatch, usage_ledger):
+    from app import storage
+    source = _save_scene_image('poem-a', _png(10, 10))
+
+    def _no_client(**kwargs):
+        raise AssertionError('in-bounds crop must not open an HTTP client')
+    monkeypatch.setattr(images.httpx, 'AsyncClient', _no_client)
+
+    ctx = usage_ledger.context('scene_image_crop', 'poem-a', {})
+    result = asyncio.run(images.crop_image(
+        'poem-a', 0, source['image_id'], {'x': 2, 'y': 2, 'width': 4, 'height': 4}, {'api_keys': {}}, usage_ctx=ctx,
+    ))
+
+    new_image = result['image']
+    assert new_image['model'] == 'local:crop'
+    assert new_image['cost'] == 0.0
+    assert new_image['source_image_id'] == source['image_id']
+    new_file = storage.project_dir('poem-a') / new_image['file_path']
+    with Image.open(new_file) as cropped:
+        assert cropped.size == (4, 4)
+    project = storage.load_project('poem-a')
+    assert project['scenes'][0]['images'] == [source, new_image]
+
+
+def test_crop_image_right_overflow_fast_mode_calls_outpaint_once(tmp_path, monkeypatch, usage_ledger):
+    from app import storage
+    source = _save_scene_image('poem-a', _png(10, 10))
+
+    _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'COMPLETED'}),
+        _FakeResponse(200, {'images': [{'url': 'https://cdn.example/out.png'}]}),
+        _FakeResponse(200, content=_png(14, 10), headers={'content-type': 'image/png'}),
+    ])
+
+    ctx = usage_ledger.context('scene_image_crop', 'poem-a', {})
+    result = asyncio.run(images.crop_image(
+        'poem-a', 0, source['image_id'], {'x': 0, 'y': 0, 'width': 14, 'height': 10}, {'api_keys': {'fal': 'k'}},
+        usage_ctx=ctx, quality='fast',
+    ))
+
+    new_image = result['image']
+    assert new_image['model'] == 'fal:fal-ai/flux-2-pro/outpaint'
+    assert new_image['cost'] > 0
+    new_file = storage.project_dir('poem-a') / new_image['file_path']
+    with Image.open(new_file) as cropped:
+        assert cropped.size == (14, 10)
+
+
+def test_crop_image_quality_mode_with_only_left_overflow_skips_primary_call(tmp_path, monkeypatch, usage_ledger):
+    """Only the left side overflows, so the "primary" (right/top/bottom)
+    outpaint call would be asking FAL to expand by 0px on every side -
+    `_outpaint_with_quality` skips it and reuses the source image directly,
+    so only one FAL call (the mirrored left-edge one) happens; the 3-item
+    fake queue below would under-run if a second call were made."""
+    from app import storage
+    source = _save_scene_image('poem-a', _png(10, 10))
+
+    _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'COMPLETED'}),
+        _FakeResponse(200, {'images': [{'url': 'https://cdn.example/left.png'}]}),
+        _FakeResponse(200, content=_png(13, 10), headers={'content-type': 'image/png'}),
+    ])
+
+    ctx = usage_ledger.context('scene_image_crop', 'poem-a', {})
+    result = asyncio.run(images.crop_image(
+        'poem-a', 0, source['image_id'], {'x': -3, 'y': 0, 'width': 13, 'height': 10}, {'api_keys': {'fal': 'k'}},
+        usage_ctx=ctx, quality='quality',
+    ))
+
+    new_image = result['image']
+    assert new_image['model'] == 'fal:fal-ai/flux-2-pro/outpaint'
+    new_file = storage.project_dir('poem-a') / new_image['file_path']
+    with Image.open(new_file) as cropped:
+        assert cropped.size == (13, 10)
+
+
+def test_crop_image_missing_image_raises_value_error(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import storage
+    storage.save_project('poem-a', {'id': 'poem-a', 'scenes': [{'images': []}]})
+
+    with pytest.raises(ValueError, match='Image not found'):
+        asyncio.run(images.crop_image(
+            'poem-a', 0, 'does-not-exist', {'x': 0, 'y': 0, 'width': 4, 'height': 4}, {'api_keys': {}},
+        ))
+
+
+def test_crop_image_too_large_selection_raises_outpaint_too_large_error(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    source = _save_scene_image('poem-a', _png(10, 10))
+
+    with pytest.raises(images.OutpaintTooLargeError):
+        asyncio.run(images.crop_image(
+            'poem-a', 0, source['image_id'], {'x': 0, 'y': 0, 'width': 3000, 'height': 10}, {'api_keys': {}},
+        ))

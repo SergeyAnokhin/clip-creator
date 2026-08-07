@@ -5,13 +5,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from .. import storage, usage
-from ..providers import images, scenes, suno, title_card, wish_library
+from ..providers import images, mureka, scenes, suno, title_card, wish_library
 from .projects import migrate_legacy_project
 from .settings import DEFAULT_SETTINGS
 
 router = APIRouter(prefix='/api/projects', tags=['generation'])
 
 _ALLOWED_REFERENCE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.gif'}
+_ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.m4a'}
 
 
 def _now() -> str:
@@ -202,6 +203,27 @@ async def delete_scene_image(project_id: str, scene_index: int, image_id: str):
         file_path.unlink()
 
     return {'images': remaining}
+
+
+@router.post('/{project_id}/scenes/{scene_index}/images/{image_id}/crop')
+async def crop_scene_image(project_id: str, scene_index: int, image_id: str, body: dict = Body(default={})):
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('scene_image_crop', project_id, settings, scene_index=scene_index)
+    crop_box = body.get('crop') or {}
+    if not all(k in crop_box for k in ('x', 'y', 'width', 'height')):
+        raise HTTPException(400, 'Missing crop box')
+    try:
+        result = await images.crop_image(
+            project_id, scene_index, image_id, crop_box, settings,
+            usage_ctx=usage_ctx, quality=body.get('quality'),
+        )
+    except images.OutpaintTooLargeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return result
 
 
 @router.post('/{project_id}/scenes/{scene_index}/images/upload')
@@ -504,3 +526,129 @@ async def delete_title_card_poster(project_id: str, poster_id: str):
         file_path.unlink()
 
     return {'posters': remaining}
+
+
+# ---------- Mureka stage (real audio generation, see providers/mureka.py) ----------
+# Rating/tag/primary-flag edits on a track go through the generic
+# `PATCH /api/projects/{id}` route (client sends the whole recomputed
+# `mureka.tracks` array) - same convention as scene-image rating/selection in
+# useImagesStage.js, no dedicated endpoint needed for those. Only actions that
+# also touch disk (starting a job, deleting a track/reference file) get their
+# own route here.
+
+@router.post('/{project_id}/mureka/generate')
+async def generate_mureka(project_id: str, body: dict = Body(default={})):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+
+    style = body.get('style', '')
+    lyrics = (body.get('lyrics') or '').strip()
+    if not lyrics:
+        raise HTTPException(422, 'lyrics is required')
+    model = body.get('model', 'auto')
+    n = body.get('n', 2)
+    gender = body.get('gender')
+    reference_id = body.get('reference_id')
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('mureka_generate', project_id, settings, model=model, n=n)
+    job_id = mureka.start_job(project_id, style, lyrics, model, n, gender, reference_id, settings, usage_ctx=usage_ctx)
+    return {'job_id': job_id}
+
+
+@router.get('/{project_id}/mureka/jobs/{job_id}')
+async def get_mureka_job(project_id: str, job_id: str):
+    job = mureka.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    return job
+
+
+@router.delete('/{project_id}/mureka/tracks/{track_id}')
+async def delete_mureka_track(project_id: str, track_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        mureka_field = project.get('mureka') or {}
+        tracks = mureka_field.get('tracks', [])
+        target = next((t for t in tracks if t.get('track_id') == track_id), None)
+        if target is None:
+            raise HTTPException(404, 'Track not found')
+
+        remaining = [t for t in tracks if t.get('track_id') != track_id]
+        mureka_field['tracks'] = remaining
+        project['mureka'] = mureka_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'tracks': remaining}
+
+
+@router.post('/{project_id}/mureka/reference-audio')
+async def upload_mureka_reference_audio(project_id: str, file: UploadFile = File(...)):
+    suffix = ('.' + file.filename.rsplit('.', 1)[-1].lower()) if file.filename and '.' in file.filename else ''
+    if suffix not in _ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(415, 'Unsupported audio type')
+    contents = await file.read()
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    api_key = (settings.get('api_keys') or {}).get('mureka', '')
+    try:
+        uploaded = await mureka.upload_reference_audio(contents, file.filename or f'reference{suffix}', api_key)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+
+        references_dir = storage.project_dir(project_id) / 'music' / 'references'
+        references_dir.mkdir(parents=True, exist_ok=True)
+        filename = f'ref_{uuid4().hex[:8]}{suffix}'
+        (references_dir / filename).write_bytes(contents)
+
+        mureka_field = project.get('mureka') or {}
+        reference_audio = [
+            *mureka_field.get('reference_audio', []),
+            {
+                'id': f'mref_{uuid4().hex[:8]}', 'mureka_file_id': uploaded.get('id'),
+                'file_path': f'music/references/{filename}', 'filename': file.filename,
+                'uploaded_at': _now(),
+            },
+        ]
+        mureka_field['reference_audio'] = reference_audio
+        project['mureka'] = mureka_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+    return {'reference_audio': reference_audio}
+
+
+@router.delete('/{project_id}/mureka/reference-audio/{ref_id}')
+async def delete_mureka_reference_audio(project_id: str, ref_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        mureka_field = project.get('mureka') or {}
+        reference_audio = mureka_field.get('reference_audio', [])
+        target = next((r for r in reference_audio if r.get('id') == ref_id), None)
+        if target is None:
+            raise HTTPException(404, 'Reference audio not found')
+
+        remaining = [r for r in reference_audio if r.get('id') != ref_id]
+        mureka_field['reference_audio'] = remaining
+        project['mureka'] = mureka_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'reference_audio': remaining}

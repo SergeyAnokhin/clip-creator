@@ -1,7 +1,10 @@
+import io
 import os
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock
+
+from PIL import Image
 
 from app.routers import generation as generation_router
 
@@ -488,6 +491,69 @@ def test_upload_scene_image_out_of_range_scene_returns_404(client):
     assert resp.status_code == 404
 
 
+def _tiny_png(width=10, height=10):
+    out = io.BytesIO()
+    Image.new('RGB', (width, height), (40, 80, 120)).save(out, 'PNG')
+    return out.getvalue()
+
+
+def test_crop_scene_image_inbounds_appends_new_image_and_keeps_original(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    source = client.post(
+        f'/api/projects/{pid}/scenes/2/images/upload',
+        files={'file': ('mine.png', _tiny_png(10, 10), 'image/png')},
+    ).json()['image']
+
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/2/images/{source["image_id"]}/crop',
+        json={'crop': {'x': 1, 'y': 1, 'width': 4, 'height': 4}},
+    )
+
+    assert resp.status_code == 200
+    new_image = resp.json()['image']
+    assert new_image['model'] == 'local:crop'
+    assert new_image['source_image_id'] == source['image_id']
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    new_file = data_root / 'projects' / pid / new_image['file_path']
+    assert new_file.is_file()
+    with Image.open(new_file) as cropped:
+        assert cropped.size == (4, 4)
+
+    saved_images = client.get(f'/api/projects/{pid}').json()['scenes'][2]['images']
+    assert saved_images[-1]['image_id'] == new_image['image_id']
+    assert saved_images[0]['image_id'] == source['image_id']
+
+
+def test_crop_scene_image_missing_crop_body_returns_400(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(f'/api/projects/{pid}/scenes/2/images/whatever/crop', json={})
+    assert resp.status_code == 400
+
+
+def test_crop_scene_image_missing_image_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/2/images/does-not-exist/crop',
+        json={'crop': {'x': 0, 'y': 0, 'width': 4, 'height': 4}},
+    )
+    assert resp.status_code == 404
+
+
+def test_crop_scene_image_too_large_selection_returns_400(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    source = client.post(
+        f'/api/projects/{pid}/scenes/2/images/upload',
+        files={'file': ('mine.png', _tiny_png(10, 10), 'image/png')},
+    ).json()['image']
+
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/2/images/{source["image_id"]}/crop',
+        json={'crop': {'x': 0, 'y': 0, 'width': 3000, 'height': 10}},
+    )
+    assert resp.status_code == 400
+
+
 def test_upload_scene_image_from_url_uses_download_helper(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     fake_download = AsyncMock(return_value=(b'downloaded-bytes', 'jpg'))
@@ -698,3 +764,210 @@ def test_delete_title_card_variant_removes_file_and_entry(client, monkeypatch):
 def test_delete_title_card_variant_missing_returns_404(client):
     pid = client.get('/api/projects').json()[0]['id']
     assert client.delete(f'/api/projects/{pid}/title-card/variants/does-not-exist').status_code == 404
+
+
+# ---------- Mureka stage (real audio generation) ----------
+
+def test_generate_mureka_requires_lyrics(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(f'/api/projects/{pid}/mureka/generate', json={'style': 's', 'lyrics': '  '})
+    assert resp.status_code == 422
+
+
+def test_generate_mureka_starts_job_and_forwards_fields(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    captured = {}
+
+    def fake_start_job(slug, style, lyrics, model, n, gender, reference_id, settings, usage_ctx=None):
+        captured.update(slug=slug, style=style, lyrics=lyrics, model=model, n=n, gender=gender, reference_id=reference_id)
+        return 'job_1'
+
+    monkeypatch.setattr(generation_router.mureka, 'start_job', fake_start_job)
+
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/generate',
+        json={'style': 'synthwave', 'lyrics': 'la la la', 'model': 'mureka-8', 'n': 3, 'gender': 'female', 'reference_id': 'file_x'},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {'job_id': 'job_1'}
+    assert captured == {
+        'slug': pid, 'style': 'synthwave', 'lyrics': 'la la la', 'model': 'mureka-8',
+        'n': 3, 'gender': 'female', 'reference_id': 'file_x',
+    }
+
+
+def test_generate_mureka_missing_project_returns_404(client):
+    resp = client.post('/api/projects/does-not-exist/mureka/generate', json={'lyrics': 'x'})
+    assert resp.status_code == 404
+
+
+def test_get_mureka_job_returns_status(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    track = {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'rating': 0, 'is_selected': False, 'tag_ids': []}
+    monkeypatch.setattr(generation_router.mureka, 'get_job', lambda job_id: {'status': 'completed', 'tracks': [track], 'error': None})
+
+    resp = client.get(f'/api/projects/{pid}/mureka/jobs/job_1')
+
+    assert resp.status_code == 200
+    assert resp.json() == {'status': 'completed', 'tracks': [track], 'error': None}
+
+
+def test_get_mureka_job_missing_returns_404(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(generation_router.mureka, 'get_job', lambda job_id: None)
+
+    resp = client.get(f'/api/projects/{pid}/mureka/jobs/does-not-exist')
+
+    assert resp.status_code == 404
+
+
+def test_generate_mureka_end_to_end_writes_file_and_persists(client, monkeypatch):
+    """Exercises the real job pipeline (router -> mureka.start_job -> background
+    task -> disk write -> project persistence) with only the Mureka HTTP calls
+    mocked - see test_mureka_provider.py for request/response shape coverage."""
+    pid = client.get('/api/projects').json()[0]['id']
+    settings = client.get('/api/settings').json()
+    settings['api_keys']['mureka'] = 'test-key'
+    client.put('/api/settings', json=settings)
+
+    async def _fast_sleep(*args, **kwargs):
+        pass
+    monkeypatch.setattr(generation_router.mureka.asyncio, 'sleep', _fast_sleep)
+
+    fake_client = _FakeImagesAsyncClient([
+        _FakeImagesResponse(200, {'id': 'task_1', 'status': 'preparing'}),
+        _FakeImagesResponse(200, {'status': 'succeeded', 'choices': [
+            {'index': 0, 'id': 'c0', 'url': 'https://cdn.mureka.ai/c0.mp3', 'duration': 42000},
+        ]}),
+    ])
+    monkeypatch.setattr(generation_router.mureka.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(generation_router.mureka, '_download', AsyncMock(return_value=b'MP3DATA'))
+
+    resp = client.post(f'/api/projects/{pid}/mureka/generate', json={'style': 's', 'lyrics': 'la la', 'model': 'auto', 'n': 1})
+    assert resp.status_code == 200
+    job_id = resp.json()['job_id']
+
+    deadline = time.monotonic() + 5.0
+    job = None
+    while time.monotonic() < deadline:
+        job = client.get(f'/api/projects/{pid}/mureka/jobs/{job_id}').json()
+        if job['status'] != 'pending':
+            break
+        time.sleep(0.05)
+    assert job['status'] == 'completed'
+    track = job['tracks'][0]
+    assert track['file_path'].startswith('music/') and track['file_path'].endswith('.mp3')
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / track['file_path']
+    assert written.is_file()
+    assert written.read_bytes() == b'MP3DATA'
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['mureka']['tracks'][-1]['track_id'] == track['track_id']
+
+
+def test_delete_mureka_track_removes_file_and_entry(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    music_dir = data_root / 'projects' / pid / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    (music_dir / 'trk_x.mp3').write_bytes(b'MP3DATA')
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'rating': 0, 'is_selected': False, 'tag_ids': []},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.delete(f'/api/projects/{pid}/mureka/tracks/trk_x')
+
+    assert resp.status_code == 200
+    assert resp.json()['tracks'] == []
+    assert not (music_dir / 'trk_x.mp3').is_file()
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['mureka']['tracks'] == []
+
+
+def test_delete_mureka_track_missing_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.delete(f'/api/projects/{pid}/mureka/tracks/does-not-exist').status_code == 404
+
+
+def test_upload_mureka_reference_audio_writes_file_and_appends(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(
+        generation_router.mureka, 'upload_reference_audio',
+        AsyncMock(return_value={'id': 'mureka_file_1', 'filename': 'ref.mp3'}),
+    )
+
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-audio',
+        files={'file': ('ref.mp3', b'fake-mp3-bytes', 'audio/mpeg')},
+    )
+
+    assert resp.status_code == 200
+    refs = resp.json()['reference_audio']
+    assert len(refs) == 1
+    assert refs[0]['mureka_file_id'] == 'mureka_file_1'
+    assert refs[0]['file_path'].startswith('music/references/ref_') and refs[0]['file_path'].endswith('.mp3')
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / refs[0]['file_path']
+    assert written.is_file()
+    assert written.read_bytes() == b'fake-mp3-bytes'
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['mureka']['reference_audio'] == refs
+
+
+def test_upload_mureka_reference_audio_rejects_bad_extension(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-audio',
+        files={'file': ('notes.txt', b'hello', 'text/plain')},
+    )
+    assert resp.status_code == 415
+
+
+def test_upload_mureka_reference_audio_provider_failure_returns_502(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(
+        generation_router.mureka, 'upload_reference_audio',
+        AsyncMock(side_effect=RuntimeError('Mureka API вернул 500')),
+    )
+
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-audio',
+        files={'file': ('ref.mp3', b'fake-mp3-bytes', 'audio/mpeg')},
+    )
+
+    assert resp.status_code == 502
+
+
+def test_delete_mureka_reference_audio_removes_file_and_entry(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(
+        generation_router.mureka, 'upload_reference_audio',
+        AsyncMock(return_value={'id': 'mureka_file_1', 'filename': 'ref.mp3'}),
+    )
+    upload = client.post(
+        f'/api/projects/{pid}/mureka/reference-audio',
+        files={'file': ('ref.mp3', b'fake-mp3-bytes', 'audio/mpeg')},
+    )
+    ref_id = upload.json()['reference_audio'][0]['id']
+    file_path = upload.json()['reference_audio'][0]['file_path']
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / file_path
+    assert written.is_file()
+
+    resp = client.delete(f'/api/projects/{pid}/mureka/reference-audio/{ref_id}')
+
+    assert resp.status_code == 200
+    assert resp.json()['reference_audio'] == []
+    assert not written.is_file()
+
+
+def test_delete_mureka_reference_audio_missing_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.delete(f'/api/projects/{pid}/mureka/reference-audio/does-not-exist').status_code == 404

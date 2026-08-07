@@ -1,7 +1,8 @@
 # clip-creator (Versecraft)
 
 A workflow tool that turns a poem into song lyrics/style for a music-generation
-service (Suno, Mureka, ...) and an AI-generated scene/image storyboard. See
+service (Suno, Mureka, ...), real audio tracks via the Mureka API, and an
+AI-generated scene/image storyboard. See
 [`docs/specs/`](docs/specs/) for the original product specification (reference
 only, not kept in sync with the code — see [CLAUDE.md](CLAUDE.md)).
 

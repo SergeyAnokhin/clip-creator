@@ -69,6 +69,7 @@ export const api = {
   generateSceneImages: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/images`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getSceneImageJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/jobs/${encodeURIComponent(jobId)}`),
   deleteSceneImage: (id, sceneIndex, imageId) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/${encodeURIComponent(imageId)}`, { method: 'DELETE' }),
+  cropSceneImage: (id, sceneIndex, imageId, crop, quality) => request(`${projectPath(id)}/scenes/${sceneIndex}/images/${encodeURIComponent(imageId)}/crop`, { method: 'POST', body: JSON.stringify({ crop, quality }) }),
   uploadSceneImageFile: (id, sceneIndex, file) => {
     const form = new FormData();
     form.append('file', file);
@@ -122,4 +123,14 @@ export const api = {
     return requestForm(`${projectPath(id)}/title-card/poster`, { method: 'POST', body: form });
   },
   deleteTitleCardPoster: (id, posterId) => request(`${projectPath(id)}/title-card/poster/${encodeURIComponent(posterId)}`, { method: 'DELETE' }),
+
+  generateMureka: (id, body) => request(`${projectPath(id)}/mureka/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  getMurekaJob: (id, jobId) => request(`${projectPath(id)}/mureka/jobs/${encodeURIComponent(jobId)}`),
+  deleteMurekaTrack: (id, trackId) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}`, { method: 'DELETE' }),
+  uploadMurekaReferenceAudio: (id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return requestForm(`${projectPath(id)}/mureka/reference-audio`, { method: 'POST', body: form });
+  },
+  deleteMurekaReferenceAudio: (id, refId) => request(`${projectPath(id)}/mureka/reference-audio/${encodeURIComponent(refId)}`, { method: 'DELETE' }),
 };

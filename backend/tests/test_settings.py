@@ -27,7 +27,7 @@ def test_get_settings_returns_defaults(client):
     body = resp.json()
     assert body['api_keys'] == {
         'replicate': '', 'google': '', 'google_free': '', 'fal': '', 'openrouter': '', 'deepseek': '',
-        'krea': '', 'google_translate': '',
+        'krea': '', 'google_translate': '', 'mureka': '',
     }
     assert body['text_models'] == {'favorites': [], 'default': 'google:gemini-2.5-flash'}
     assert body['simple_models'] == {'favorites': [], 'default': ''}

@@ -9,7 +9,7 @@ const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16'];
 
 export default function ImagesStage({
   L, project, isMobile, imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
-  variantCount, referenceUploading, hideMotionPrompt, aspectRatio,
+  variantCount, referenceUploading, hideMotionPrompt, aspectRatio, outpaintQualityMode,
   sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, voiceSupported, actions,
 }) {
   const fileInputRef = useRef(null);
@@ -136,6 +136,7 @@ export default function ImagesStage({
               isLoading={sceneLoadingIdx === index}
               columns={isMobile ? '1fr' : hideMotionPrompt ? '1fr' : '1fr 1fr'}
               hideMotionPrompt={hideMotionPrompt}
+              outpaintQualityMode={outpaintQualityMode}
               actions={actions}
             />
           ))}

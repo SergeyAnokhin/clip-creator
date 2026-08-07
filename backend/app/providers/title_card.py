@@ -63,6 +63,7 @@ import numpy as np
 from PIL import Image
 
 from .. import console_log, pricing, storage, usage
+from . import fal_client
 
 _GOOGLE_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
 _KREA_BASE = 'https://api.krea.ai'
@@ -232,7 +233,6 @@ async def _generate_fal(
         raise RuntimeError('Нет API-ключа FAL')
     if model_id != _FAL_NANO_BANANA_EDIT_ID:
         raise RuntimeError(f'FAL: модель {model_id} не поддерживает референсные изображения')
-    headers = {'Authorization': f'Key {api_key}', 'Content-Type': 'application/json'}
     image_urls = [
         f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(content).decode()}'
         for content, ext in reference_images
@@ -243,39 +243,10 @@ async def _generate_fal(
         'image_urls': [f'<{ext} image, {len(content)} bytes>' for content, ext in reference_images],
     }
 
-    async with httpx.AsyncClient(timeout=30) as http_client:
-        resp = await http_client.post(f'{_FAL_BASE}/{model_id}', headers=headers, json=body)
-    if resp.status_code >= 400:
-        if usage_out is not None:
-            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
-        raise RuntimeError(f'FAL API вернул {resp.status_code}: {resp.text[:300]}')
-    submitted = resp.json()
-    status_url = submitted['status_url']
-    response_url = submitted['response_url']
-
-    deadline = time.monotonic() + _JOB_TIMEOUT
-    status = submitted.get('status')
-    while status != 'COMPLETED':
-        if status == 'FAILED':
-            if usage_out is not None:
-                usage_out['debug'] = {'request': debug_request, 'response': {'status': 'FAILED'}}
-            raise RuntimeError('FAL: задание завершилось с ошибкой')
-        if time.monotonic() > deadline:
-            raise RuntimeError('FAL: превышено время ожидания генерации')
-        await asyncio.sleep(_POLL_INTERVAL)
-        async with httpx.AsyncClient(timeout=30) as http_client:
-            poll = await http_client.get(status_url, headers=headers)
-        if poll.status_code >= 400:
-            if usage_out is not None:
-                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
-            raise RuntimeError(f'FAL API (poll) вернул {poll.status_code}: {poll.text[:300]}')
-        status = poll.json().get('status')
-
-    async with httpx.AsyncClient(timeout=30) as http_client:
-        result = await http_client.get(response_url, headers=headers)
-    if result.status_code >= 400:
-        raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
-    payload = result.json()
+    payload = await fal_client.submit_poll_fetch(
+        _FAL_BASE, model_id, body, api_key, debug_request,
+        usage_out=usage_out, poll_interval=_POLL_INTERVAL, job_timeout=_JOB_TIMEOUT,
+    )
     images = payload.get('images') or []
     if usage_out is not None:
         redacted_response = {**payload, 'images': [{'url': img.get('url')} for img in images]}
@@ -422,7 +393,6 @@ async def _generate_background_remover_fal(
     if not api_key:
         raise RuntimeError('Нет API-ключа FAL')
     model_id = (params or {}).get('model') or _FAL_BG_REMOVER_DEFAULT
-    headers = {'Authorization': f'Key {api_key}', 'Content-Type': 'application/json'}
     data_uri = f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(image_bytes).decode()}'
     body = {'image_url': data_uri}
     debug_request = {
@@ -430,41 +400,10 @@ async def _generate_background_remover_fal(
         'body': {'image_url': f'<image data, {len(image_bytes)} bytes>'},
     }
 
-    async with httpx.AsyncClient(timeout=30) as http_client:
-        resp = await http_client.post(f'{_FAL_BASE}/{model_id}', headers=headers, json=body)
-    if resp.status_code >= 400:
-        if usage_out is not None:
-            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
-        raise RuntimeError(f'FAL API вернул {resp.status_code}: {resp.text[:300]}')
-    submitted = resp.json()
-    status_url = submitted['status_url']
-    response_url = submitted['response_url']
-
-    deadline = time.monotonic() + _JOB_TIMEOUT
-    status = submitted.get('status')
-    while status != 'COMPLETED':
-        if status == 'FAILED':
-            if usage_out is not None:
-                usage_out['debug'] = {'request': debug_request, 'response': {'status': 'FAILED'}}
-            raise RuntimeError('FAL: задание завершилось с ошибкой')
-        if time.monotonic() > deadline:
-            raise RuntimeError('FAL: превышено время ожидания генерации')
-        await asyncio.sleep(_POLL_INTERVAL)
-        async with httpx.AsyncClient(timeout=30) as http_client:
-            poll = await http_client.get(status_url, headers=headers)
-        if poll.status_code >= 400:
-            if usage_out is not None:
-                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
-            raise RuntimeError(f'FAL API (poll) вернул {poll.status_code}: {poll.text[:300]}')
-        status = poll.json().get('status')
-
-    async with httpx.AsyncClient(timeout=30) as http_client:
-        result = await http_client.get(response_url, headers=headers)
-    if result.status_code >= 400:
-        if usage_out is not None:
-            usage_out['debug'] = {'request': debug_request, 'response': {'status': result.status_code, 'text': result.text[:500]}}
-        raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
-    payload = result.json()
+    payload = await fal_client.submit_poll_fetch(
+        _FAL_BASE, model_id, body, api_key, debug_request,
+        usage_out=usage_out, poll_interval=_POLL_INTERVAL, job_timeout=_JOB_TIMEOUT,
+    )
     image = payload.get('image') or {}
     url = image.get('url')
     if usage_out is not None:

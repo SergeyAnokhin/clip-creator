@@ -33,13 +33,13 @@ value) so it doesn't need editing when the frontend's port changes.
 
 ## The workflow
 
-A project moves through five stages, all inside one workflow screen:
+A project moves through six stages, all inside one workflow screen:
 
 ```text
-Lyrics  →  Music  →  Scenes        →  Images            →  Title Card
-blocks     style +   storyboard        images per scene,    poster text in the
-           lyrics    (text only)       rated, top pick =    style of 4 picked
-                                       main                 reference images
+Lyrics  →  Music  →  Music gen  →  Scenes        →  Images            →  Title Card
+blocks     style +   real audio     storyboard        images per scene,    poster text in the
+           lyrics    tracks via     (text only)       rated, top pick =    style of 4 picked
+                      Mureka                           main                 reference images
 ```
 
 1. **Lyrics** — a poem (pasted text or a parsed URL) is split into blocks on
@@ -52,7 +52,20 @@ blocks     style +   storyboard        images per scene,    poster text in the
    reusable "AI-wish" cards (or dictate a new one), then generate a `style` +
    `lyrics` pair to paste into whichever music service (Suno, Mureka, ...)
    the user is targeting.
-3. **Scenes** (`stage: 'scenes'`) — turn the lyrics into `scene_count` scenes
+3. **Music generation** (labeled "Генерация музыки"/"Music generation",
+   `stage: 'mureka'` internally) — the real counterpart to the previous
+   stage: sends style + lyrics (seeded from the Music stage's output, then
+   freely editable — this *is* the "what goes to the model" preview) to the
+   Mureka API and gets back playable tracks. Optionally conditions the
+   generation on an uploaded reference track (30s mp3/m4a). Every generated
+   track is downloaded to disk immediately (Mureka's own URLs expire after 30
+   days), rateable (0-5 stars) and taggable with user-defined quality-review
+   labels (`settings.music_tags`, e.g. "плохое произношение"), with one
+   manually-flagged `is_selected` primary pick per project — deliberately
+   **not** auto-promoted from the rating the way scene images are, since
+   quality rating and "the one I'll use" are treated as independent
+   judgments here. See `providers/mureka.py` below.
+4. **Scenes** (`stage: 'scenes'`) — turn the lyrics into `scene_count` scenes
    (default 10), each `{lyric_segment, scene_description, static_prompt,
    motion_prompt}` (`scene_description`: a short Russian caption of what the
    shot shows, e.g. "женщина стоит в пол-оборота" — shown in the scene card's
@@ -61,7 +74,7 @@ blocks     style +   storyboard        images per scene,    poster text in the
    read as one continuous story; `abstract`: scenes vary one mood/atmosphere
    with no forced plot) — see "The scene prompt" below. Purely text; no image
    is generated here.
-4. **Images** (`stage: 'images'`) — for each scene from the Scenes stage,
+5. **Images** (`stage: 'images'`) — for each scene from the Scenes stage,
    generate one or more image variants (with a cheap/quality model-tier
    toggle) and rate them; the top-rated variant becomes the scene's main
    frame. Also owns the style-reference image upload. The Scenes stage
@@ -70,7 +83,7 @@ blocks     style +   storyboard        images per scene,    poster text in the
    preview next to the prompts, sharing the same `scenes[n].images` array and
    backend endpoint - the full multi-variant/rating workflow still only lives
    here.
-5. **Title Card** (`stage: 'title_card'`) — picks up to 4 already-generated
+6. **Title Card** (`stage: 'title_card'`) — picks up to 4 already-generated
    scene images (or uploads) as style references, takes a title/author text
    block, and asks a reference-capable image model to render that text baked
    into the references' visual style — a typographic overlay, not a full
@@ -99,7 +112,7 @@ without re-running the LLM call that wrote its prompt).
 ## Frontend state
 
 State lives in [`src/hooks/`](../frontend/src/hooks/), one hook per domain
-(toast, viewport, settings, projects, the four stages, voice).
+(toast, viewport, settings, projects, the five stages, voice).
 [`App.jsx`](../frontend/src/App.jsx) is just the composition root: it owns
 navigation, calls the hooks in dependency order, and assembles each stage's
 `{...state, actions}` prop bundle. No state library and no context — every
@@ -115,8 +128,9 @@ each keystroke isn't a request.
 [`providers/suno.py`](../backend/app/providers/suno.py),
 [`text_models.py`](../backend/app/providers/text_models.py),
 [`image_models.py`](../backend/app/providers/image_models.py),
-[`scenes.py`](../backend/app/providers/scenes.py) and
-[`images.py`](../backend/app/providers/images.py) are the seams routers call
+[`scenes.py`](../backend/app/providers/scenes.py),
+[`images.py`](../backend/app/providers/images.py) and
+[`mureka.py`](../backend/app/providers/mureka.py) are the seams routers call
 without knowing whether the result is canned or real. Keys come from
 `app_data/settings.json`.
 
@@ -370,6 +384,47 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     generated image, with `model: 'upload'`, `aspect_ratio: null`, `cost: 0`
     so the rest of the UI — carousel, rating, delete, lightbox — treats it
     identically).
+  - **Crop/outpaint editor** (`ImageCropEditor.jsx`, opened from
+    `ImageCarousel.jsx`'s crop button — scene images only, not Title Card
+    variants or reference images): a fullscreen `react-konva` editor with a
+    draggable/resizable rectangle over the image, in the image's own
+    natural-pixel coordinates (same `Rect`+`Transformer`, resize-only-anchors
+    mechanic `PosterConstructor.jsx`'s crop mode uses, but — unlike that one —
+    the rectangle is allowed to go negative or past the far edge). A
+    view-only zoom (scales the Konva `Stage`, never the rectangle's own
+    coordinates) lets the rectangle be dragged far beyond a shrunk-down image
+    for a large outpaint on every side. `POST
+    /api/projects/{id}/scenes/{n}/images/{image_id}/crop {crop: {x, y,
+    width, height}, quality?}` (`images.crop_image`) computes each side's
+    overflow past the source image's bounds; a selection fully inside the
+    image is a free, instant local PIL crop (`model: 'local:crop'`, cost
+    `0`, no network call) — any overflowing side instead calls FAL's
+    `fal-ai/flux-2-pro/outpaint` (`_call_outpaint_fal`) for just that much
+    expansion, then crops the expanded canvas down to the exact requested
+    box. Like "remove background", this **appends** a new image
+    (`source_image_id` pointing back at the original, which is left
+    untouched) rather than replacing anything; the editor shows a live
+    "will outpaint WxH" indicator once any side overflows, and disables Save
+    once the outpainted canvas would exceed FAL's 2560px-per-side limit
+    (`OutpaintTooLargeError`, mapped to `400`; a missing project/scene/image
+    is a plain `ValueError`, mapped to `404`).
+    `quality` (`'fast'|'quality'`, defaults to `settings.outpaint_quality_mode`,
+    overridable per-save in the editor) only changes behavior when there's a
+    **left**-side overflow: `'fast'` sends one combined call for all four
+    sides; `'quality'` (`_outpaint_with_quality`) additionally mirrors the
+    source horizontally, outpaints the mirrored copy's right edge (FLUX's
+    reliably-strong side) to generate the left strip, mirrors it back, and
+    composites it onto the primary call's result — the FAL outpainting
+    recipe this was implemented from only documents the left/right
+    asymmetry, so top/bottom overflow doesn't get the same treatment; a
+    quality-mode left overflow combined with top/bottom overflow can leave a
+    faint seam at the top-left/bottom-left corners, an accepted limitation
+    of generalizing that recipe rather than a bug. Priced per output
+    megapixel (`_OUTPAINT_PRICE_PER_MEGAPIXEL`, computed directly and
+    threaded through `usage_out['cost']` — the same provider-reported-cost
+    bypass `_generate_openrouter` uses — since `pricing.py`'s catalog schema
+    only models a flat per-image price, not per-megapixel, so there's no
+    `pricing.py` catalog row for this model).
   - A job's background task, on failure (missing API key, non-2xx response,
     unexpected shape, provider-reported failure/timeout), sets `status:
     'failed'` with a Russian `error` string — no silent fallback, matching
@@ -531,6 +586,48 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     see `console_log._truncate`) — not just on failure, so a paid call's
     actual request/response JSON is visible in the dev console without
     reproducing it through the UI's debug panel.
+- `mureka.start_job`/`get_job` is the Music generation stage's provider seam —
+  same in-memory `_jobs`-dict/poll shape as `images.py`/`title_card.py`
+  above, but **one job per generate click**, not one per variant: Mureka's
+  own `song/generate` takes an `n` (1-3) and returns that many songs from a
+  single async task, so `_run_job` submits once, polls
+  `GET /v1/song/query/{task_id}` (confirmed against platform.mureka.ai/docs,
+  2026-08) every 3s (longer than image jobs' 1.5s — Mureka cites 30-90s
+  typical generation time) until a terminal status, then materializes one
+  `MurekaTrack` per `choices[]` entry.
+  - `POST /api/projects/{id}/mureka/generate` (`{style, lyrics, model, n,
+    gender?, reference_id?}`) → `{job_id}` (singular, unlike the scene-image/
+    title-card routes' `{job_ids}`). `GET
+    .../mureka/jobs/{job_id}` polls it, same `{status, ..., error}` shape as
+    the other job endpoints.
+  - On `succeeded`, each `choices[].url` is downloaded and written to
+    `music/{track_id}.mp3` **immediately** — Mureka's own URLs are only valid
+    30 days, unlike this app's other providers whose bytes are fetched once
+    and kept forever anyway. The full `choices[]` entry (incl. `flac_url`/
+    `wav_url`/`lyrics_sections`, never fetched) is kept as `raw` on the track
+    record for reference. All new tracks for one job are appended to
+    `project.mureka.tracks` in a single load-mutate-save, not one write per
+    track.
+  - `POST /api/projects/{id}/mureka/reference-audio` (multipart `file`,
+    mp3/m4a only) does two things: saves a local copy under
+    `music/references/` **and** calls `mureka.upload_reference_audio`
+    (`POST /v1/files/upload`, `purpose=reference` — Mureka trims to exactly
+    30s) to get a Mureka file id, stored as `mureka_file_id` and usable as
+    `reference_id` on a later `generate` call. `DELETE
+    .../mureka/reference-audio/{ref_id}` removes both the local file and the
+    library entry (the Mureka-side upload itself isn't deleted — Mureka has
+    no delete-file endpoint in its current API).
+  - `DELETE /api/projects/{id}/mureka/tracks/{track_id}` removes one track's
+    record and unlinks its `.mp3`, same lock→load→filter→save-then-unlink
+    ordering as every other delete route in this file. Rating/tagging/the
+    `is_selected` primary flag have **no dedicated route** — the frontend
+    recomputes the whole `project.mureka.tracks` array client-side and sends
+    it through the generic `PATCH /api/projects/{id}`, the same convention
+    scene-image rating already uses.
+  - No `pricing.py` catalog row exists for `mureka:*` models — Mureka's API
+    doesn't report a per-call cost, so `usage.record(kind='audio', ...)`
+    resolves to `cost.amount: null`/`'unknown'` by the existing "unknown cost
+    is null, never 0" convention, rather than a guessed number.
 
 ### Poster constructor
 
@@ -1088,6 +1185,19 @@ state, not in any hook.
   and per-image (`image`) billing, not Google Translate's per-character
   pricing, so a translate record's cost always reads "unknown" unless a
   manual override is entered for `google_translate:v2` in Settings → Prices.
+- **A Konva `Stage` sized to fill a dynamic container needs its first size
+  read synchronously, not just from `ResizeObserver`.** `ImageCropEditor.jsx`
+  originally sized its `Stage` purely from a `ResizeObserver` callback on the
+  container `div`; the observer's first callback isn't guaranteed to land in
+  the same frame the component mounts (confirmed 2026-08: it never fired at
+  all in one automated-browser environment, leaving `Stage` permanently
+  `width=0 height=0` and nothing rendered, even though the container had a
+  real on-screen size the whole time). Fixed by reading
+  `containerRef.current.getBoundingClientRect()` synchronously in a
+  `useLayoutEffect` on mount and keeping the `ResizeObserver` only for actual
+  later resizes. Any future Konva editor that fills a container (not a fixed
+  size, unlike `PosterConstructor.jsx`'s background-driven `stageW`/`stageH`)
+  should follow the same pattern.
 
 ## Testing
 

@@ -228,6 +228,7 @@ ones someone has already priced.
 | OpenRouter images (`images.py`) | `data.usage.cost` | Exact USD, `source: 'provider'` — same treatment as OpenRouter text |
 | Replicate background remover (`title_card.py`'s `remove_background`/`_generate_background_remover`) | none | `units: {images: 1}` only, catalog-priced off `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover` row (`$0.00044`/run, replicate.com's own page) — the Title Card stage's "remove background" button, task `title_card_bg_remove` |
 | Google Translate (`providers/translate.py`) | none | `units: {characters: len(text)}` only — `pricing.py` has no per-character row shape, so cost always reads `unknown` unless a manual override is entered for `google_translate:v2` |
+| FAL outpaint (`images.py`'s `crop_image`/`_call_outpaint_fal`, the Images stage's crop/outpaint editor) | none (billed per output megapixel, a shape `pricing.py`'s catalog can't express — only `per_image` exists) | Cost computed directly from the downloaded result's pixel size and set on `usage_out['cost']`, same provider-reported-cost bypass as OpenRouter above — **no `pricing.BUILTIN_PRICING` row**, so don't add one expecting it to be used; a plain in-bounds crop (no outpaint call) is a separate, unrelated `local:crop` model priced at a hardcoded `0.0`, same idea as the local background-remover method |
 
 `text_models.list_models` / `image_models.list_models` (the Settings
 "refresh models" catalog calls) are **not logged** — they're free/no-cost

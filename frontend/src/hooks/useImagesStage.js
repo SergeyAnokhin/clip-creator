@@ -147,6 +147,21 @@ export function useImagesStage({
       showToast('Не удалось загрузить изображение по ссылке');
     }
   }
+  /** Unlike this hook's other actions, deliberately doesn't catch/showToast
+   * - ImageCropEditor.jsx awaits this itself and shows the error inline
+   * (crop/outpaint failures need more room than a toast: quality mode, the
+   * 2560px cap, etc.), so the error is left to propagate there. */
+  async function cropImage(sceneIdx, imgIdx, cropBox, quality) {
+    if (!activeProject) return;
+    const image = activeProject.scenes[sceneIdx]?.images[imgIdx];
+    if (!image) return;
+    const result = await api.cropSceneImage(activeProject.id, sceneIdx, image.image_id, cropBox, quality);
+    setActiveProject((p) => ({
+      ...p,
+      scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, images: result.images } : s)),
+    }));
+    onAiCall?.();
+  }
   function selectMainImage(sceneIdx, imgIdx) {
     updateProject((p) => ({
       ...p,
@@ -181,6 +196,7 @@ export function useImagesStage({
       onGenerate: generateSceneImages,
       onSelectMain: selectMainImage, onRate: rateImage, onDelete: deleteImage,
       onUploadImageFile: uploadSceneImageFile, onUploadImageUrl: uploadSceneImageUrl,
+      onCropImage: cropImage,
     },
   };
 }

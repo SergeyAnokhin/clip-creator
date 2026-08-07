@@ -15,6 +15,8 @@ app_data/
       references/ref_{uuid}.{ext}
       titlecard/{shorthex}.{png|jpg|webp}
       titlecard/posters/{shorthex}.png   # Poster constructor output (flattened)
+      music/{track_id}.mp3               # Mureka-generated tracks, downloaded immediately (see below)
+      music/references/ref_{uuid}.{ext}  # user-uploaded reference audio (mp3/m4a)
   logos/logo_{shorthex}.{png|webp}       # global, cross-project - see settings.logos
   usage/
     YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
@@ -25,7 +27,7 @@ app_data/
 | Field | Type | Notes |
 | --- | --- | --- |
 | `id` | str | = folder slug; collisions get `-2`, `-3`, … |
-| `author`, `title` | str | Fall back to `"Неизвестный автор"` / `"Новое стихотворение"` |
+| `author`, `title` | str | Fall back to `"Неизвестный автор"` / `"Новое стихотворение"`. Editing these later does **not** rename the folder/`id` — the slug is fixed at creation time, so a project's folder name and its current `author`/`title` can legitimately diverge (don't assume the folder name reflects current content when navigating `app_data/projects/` by hand) |
 | `created_at`, `updated_at` | str | ISO-8601 `…Z`; `updated_at` refreshed on every write |
 | `tags` | str[] | Home-screen chips only |
 | `blocks` | Block[] | Source of truth for the lyrics builder |
@@ -43,6 +45,7 @@ app_data/
 | `source_url` | str | Original URL, if the project came from one |
 | `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{reference_image_paths: [], variants: [], posters: []}` (`text_block` is seeded lazily on first stage visit, see below) |
 | `active_title_card_wish_ids` | str[] | Ids of `settings.title_card_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (poster wishes vs. scene/imagery ones) |
+| `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], tracks: []}` |
 
 **Block**: `{id, type, importance, content}` — `type` is
 `intro|verse|chorus|bridge|outro|interlude`; `content` is plain multi-line text.
@@ -52,10 +55,18 @@ backward compatibility, never read or edited.
 
 **Scene**: `{lyric_segment, static_prompt, motion_prompt, images[]}`.
 
-**Image**: `{image_id, file_path, rating, is_selected, generated_at}` —
-`file_path` is relative to the project folder (`images/scene_1_a1b2c3d4.png`;
-extension depends on the provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly
-one `is_selected` per scene once anything is rated.
+**Image**: `{image_id, file_path, rating, is_selected, generated_at, model,
+aspect_ratio, cost, source_image_id?}` — `file_path` is relative to the
+project folder (`images/scene_1_a1b2c3d4.png`; extension depends on the
+provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly one `is_selected` per
+scene once anything is rated. `model` is `'upload'` for a user-uploaded
+image, `'local:crop'` for a plain (no outpainting) crop, or the usual
+`{provider}:{model_id}` composite otherwise (`fal:fal-ai/flux-2-pro/outpaint`
+for an outpainted crop). `source_image_id` is only present on a crop/outpaint
+result (`images.crop_image` — see the API table below): it points at the
+original image's `image_id`, and the original is left untouched — cropping
+always **appends** a new image, mirroring `TitleCardVariant.source_variant_id`
+below.
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` — `text_block`
 is one free-text field the user edits directly (not separate title/author
@@ -146,6 +157,35 @@ per-layer style fields; `align` is `'left'\|'center'\|'right'` (defaults to
 `'left'` on any older layer missing the key); `effects` reuses the exact
 same `{glow{...}, clone{...}, opacity}` shape as `title_card`/`logo` layers.
 
+**Mureka**: `{style_input, lyrics_input, reference_audio[], tracks[]}` — the
+Mureka stage's own state, seeded once (lazily, only if `style_input`/
+`lyrics_input` are `undefined`) from the project's `style`/`lyrics` the first
+time the stage loads (`useMurekaStage.js`'s `resetForProject`), then freely
+editable independent of the Suno-stage originals — this is literally what
+gets sent to Mureka's `song/generate`, so it doubles as the "what goes to the
+model" preview the stage shows. `reference_audio` is
+`[{id, mureka_file_id, file_path, filename, uploaded_at}]` — `file_path` a
+local copy under `music/references/`, `mureka_file_id` the id Mureka's
+`files/upload` returned for it (usable as `reference_id` on a generate call).
+`tracks` is append-only, one entry per generated song:
+
+**MurekaTrack**: `{track_id, task_id, choice_index, file_path, duration_ms,
+model, style, lyrics, params{n, gender, reference_id}, rating, is_selected,
+tag_ids[], generated_at, raw}` — `file_path` under `music/` (always `.mp3`,
+downloaded immediately since Mureka's own `url` expires after 30 days).
+`style`/`lyrics`/`params` are a snapshot of exactly what was sent for this
+track (a "regenerate 3 tracks" call can produce several `MurekaTrack`s from
+one task, one per `choices[]` entry — `choice_index` is that entry's index).
+`rating` (0-5) and `is_selected` mirror `Image`'s shape, but **`is_selected`
+is set only by an explicit user action** (`PATCH /api/projects/{id}` with a
+recomputed `tracks` array — see the API table below) — unlike `Image`, it is
+never auto-promoted from the highest rating; this stage treats "sounds good"
+(rating) and "this is the one I'll use" (`is_selected`) as independent
+judgments. `tag_ids` references `settings.music_tags` entries (see below).
+`raw` is the untouched `choices[]` entry Mureka returned (`url`/`flac_url`/
+`wav_url`/`lyrics_sections`) — kept for reference even though only the plain
+MP3 is downloaded to disk.
+
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
 through any route (`routers/projects.py::migrate_legacy_project`), its
@@ -171,20 +211,25 @@ without polluting any spend total. See [usage-tracking.md](usage-tracking.md).
 
 ## Settings (`settings.json`)
 
-`{lang, api_keys{replicate,google,google_free,fal,openrouter,deepseek,krea,google_translate}, text_models{favorites[],default},
+`{lang, api_keys{replicate,google,google_free,fal,openrouter,deepseek,krea,google_translate,mureka}, text_models{favorites[],default},
 simple_models{favorites[],default}, image_models{favorites[],default}, image_models_simple{favorites[],default},
 special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[],
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
 title_card_wish_library[], background_remover_method, background_remover_local_params{bg,threshold},
-background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse}, logos[], poster_templates[]}`.
+background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse},
+outpaint_quality_mode, logos[], poster_templates[], music_tags[]}`.
 The Title Card stage's "remove background" button offers 3 interchangeable methods (see `architecture.md`),
 each with its own param group here (Settings → Providers): `background_remover_method` is which one the
 button defaults to when no `method` is passed per-call (`'local'\|'fal'\|'replicate'`, default `'replicate'`);
 `background_remover_local_params` (`bg`: `'black'\|'white'`, `threshold`: 0-255) feeds the free pixel-threshold
 cutout; `background_remover_fal_params.model` picks between FAL's `fal-ai/bria/background/remove` and
 `fal-ai/imageutils/rembg`; `background_remover_params` feeds Replicate's `851-labs/background-remover`'s input
-directly (defaults match the model's own schema defaults). `logos` is `[{id, name, file_path}]` — the global,
+directly (defaults match the model's own schema defaults). `outpaint_quality_mode`
+(`'fast'\|'quality'`, default `'fast'`) is the default for the Images stage's crop/outpaint
+editor's fast-vs-quality toggle (see `architecture.md`'s "Crop/outpaint editor" section) —
+overridable per-save in the editor itself, same shape as `background_remover_method` above.
+`logos` is `[{id, name, file_path}]` — the global,
 cross-project logo library for the Poster constructor (Settings → Logos;
 `POST/DELETE /api/settings/logos[/{id}]`, files under `app_data/logos/`).
 `poster_templates` is `[{id, name, layers{logo_id, logo[], glass, text[]}, created_at}]`
@@ -323,6 +368,13 @@ partial merge server-side, so the frontend can persist e.g. just
   [usage-tracking.md](usage-tracking.md)). Saved via its own
   `PUT /api/usage/pricing`, not the general settings `PUT` — **not** included
   in the Settings screen's backup export/import.
+- `music_tags` — user-defined quality-review labels for Mureka tracks,
+  `{id, label}[]`, global (cross-project) and plain-array CRUD'd through the
+  regular partial-merge `PUT` (`useSettings.js`'s `addMusicTag`/
+  `removeMusicTag`/`updateMusicTag`, same pattern as `poster_templates` — no
+  dedicated endpoint, no LLM call). Assigned to a track via its `tag_ids`
+  (see `MurekaTrack` above); edited from Settings → Музыкальные промпты
+  ("Теги для оценки треков"), same inline add/edit/delete UI as `special_tags`.
 - The Settings screen's "Backup" controls (`SettingsScreen.jsx`, general and
   providers tabs) export/import `api_keys` separately from every other
   settings field as downloadable JSON files. This is pure client-side file
@@ -380,6 +432,11 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | `{method?}` (`'local'\|'fal'\|'replicate'`, defaults to `settings.background_remover_method`) → `{variant, variants, debug: {request, response}\|null}` — runs the variant through the chosen background-removal method (`title_card.remove_background`; see `architecture.md` for what each of the 3 does) and **appends** the result as a new variant (`source_variant_id` pointing back at the original, which is left untouched); `404` if `variant_id` doesn't exist, `502` on a provider failure |
 | `POST /api/projects/{id}/title-card/poster` | multipart: `file` (flattened PNG) + `background_path`, `title_card_variant_id`, `logo_id?`, `layers` (JSON), `canvas_size` (JSON), `poster_id?` → `{poster, posters}`. Creates a new `Poster`, or re-renders one in place (same `file_path`) when `poster_id` matches an existing entry. `422` if `background_path`/`title_card_variant_id` don't resolve |
 | `DELETE /api/projects/{id}/title-card/poster/{poster_id}` | → `{posters}` — removes one from `project.title_card.posters` and deletes its file |
+| `POST /api/projects/{id}/mureka/generate` | `{style, lyrics, model, n, gender?, reference_id?}` → `{job_id}` — one job per click (unlike scene images, Mureka's own `n` (1-3) returns several songs from a single task); `422` if `lyrics` is blank |
+| `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', tracks: MurekaTrack[]\|null, error: str\|null, debug}` — polled every 3s (longer than image jobs — Mureka generation runs 30-90s), in-memory-only job state (`providers/mureka.py`'s own `_jobs` dict) |
+| `DELETE /api/projects/{id}/mureka/tracks/{track_id}` | → `{tracks}` — removes one from `project.mureka.tracks` and deletes its `.mp3` file |
+| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) to get the `mureka_file_id` usable as `reference_id`; `415` on a bad extension, `502` if the Mureka upload call fails |
+| `DELETE /api/projects/{id}/mureka/reference-audio/{ref_id}` | → `{reference_audio}` |
 | `POST /api/settings/logos` | multipart `file` (png/webp) + `name?` → `{logos}` — appends to the global `settings.logos`, file under `app_data/logos/` |
 | `DELETE /api/settings/logos/{logo_id}` | → `{logos}` |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
@@ -394,3 +451,8 @@ Every generation route persists its result onto the project before returning,
 so the client never has to `PATCH` afterwards — except the scene-images job
 route, which returns `job_ids` immediately and persists each image
 asynchronously when its background job completes (see `architecture.md`).
+
+A `MurekaTrack`'s `rating`/`is_selected`/`tag_ids` have no dedicated route —
+same convention as scene-image rating/selection — the frontend recomputes
+the whole `project.mureka.tracks` array and sends it through the generic
+`PATCH /api/projects/{id}` above.

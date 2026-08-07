@@ -2,13 +2,14 @@ import WorkflowHeader from './WorkflowHeader.jsx';
 import Sidebar from './Sidebar.jsx';
 import LyricsStage from './LyricsStage.jsx';
 import SunoStage from './SunoStage.jsx';
+import MurekaStage from './MurekaStage.jsx';
 import ScenesStage from './ScenesStage.jsx';
 import ImagesStage from './ImagesStage.jsx';
 import TitleCardStage from './TitleCardStage.jsx';
 
 export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
-  lyricsState, sunoState, scenesState, imagesState, titleCardState, updateProject,
+  lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
 }) {
@@ -46,6 +47,7 @@ export default function WorkflowScreen({
           <div className="workflow-main-inner">
             {activeStage === 'lyrics' && <LyricsStage L={L} project={project} viewport={viewport} {...lyricsState} />}
             {activeStage === 'suno' && <SunoStage L={L} project={project} isMobile={isMobile} {...sunoState} />}
+            {activeStage === 'mureka' && <MurekaStage L={L} project={project} isMobile={isMobile} {...murekaState} />}
             {activeStage === 'scenes' && <ScenesStage L={L} project={project} isMobile={isMobile} {...scenesState} />}
             {activeStage === 'images' && <ImagesStage L={L} project={project} isMobile={isMobile} {...imagesState} />}
             {activeStage === 'title_card' && <TitleCardStage L={L} project={project} isMobile={isMobile} {...titleCardState} />}

@@ -6,6 +6,7 @@ import { useSettings } from './hooks/useSettings.js';
 import { useProjects } from './hooks/useProjects.js';
 import { useLyricsStage } from './hooks/useLyricsStage.js';
 import { useSunoStage } from './hooks/useSunoStage.js';
+import { useMurekaStage } from './hooks/useMurekaStage.js';
 import { useScenesStage } from './hooks/useScenesStage.js';
 import { useImagesStage } from './hooks/useImagesStage.js';
 import { useTitleCardStage } from './hooks/useTitleCardStage.js';
@@ -46,6 +47,10 @@ function App() {
     onWishLibraryChange: settings.actions.setWishLibrary,
     onWishUsed: settings.actions.bumpWishUse,
   });
+  const mureka = useMurekaStage({
+    activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+    onAiCall: usage.actions.refreshToday,
+  });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
     textModels: settings.textModels, imageModelsSimple: settings.imageModelsSimple,
@@ -82,6 +87,7 @@ function App() {
     setActiveStage('lyrics');
     view.resetSidebar();
     suno.resetForProject(project);
+    mureka.resetForProject(project);
     scenes.resetForProject(project);
     images.resetForProject(project);
     titleCard.resetForProject(project);
@@ -132,6 +138,12 @@ function App() {
     },
   };
 
+  const murekaState = {
+    ...mureka.state,
+    musicTags: settings.musicTags,
+    actions: { ...mureka.actions, onOpenSettings: openSettings },
+  };
+
   const scenesState = {
     ...scenes.state,
     sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
@@ -164,6 +176,7 @@ function App() {
     imageModelSimpleFavorites: settings.imageModelsSimple.favorites,
     modelPrices: usage.priceMap,
     hideMotionPrompt: settings.hideMotionPrompt,
+    outpaintQualityMode: settings.outpaintQualityMode,
     actions: {
       ...images.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx),
       setHideMotionPrompt: settings.actions.setHideMotionPrompt,
@@ -223,7 +236,7 @@ function App() {
         <WorkflowScreen
           L={L} langLabel={settings.langLabel} viewport={view.viewport}
           project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
-          lyricsState={lyricsState} sunoState={sunoState} scenesState={scenesState} imagesState={imagesState}
+          lyricsState={lyricsState} sunoState={sunoState} murekaState={murekaState} scenesState={scenesState} imagesState={imagesState}
           titleCardState={titleCardState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
@@ -247,6 +260,7 @@ function App() {
           backgroundRemoverMethod={settings.backgroundRemoverMethod}
           backgroundRemoverLocalParams={settings.backgroundRemoverLocalParams}
           backgroundRemoverFalParams={settings.backgroundRemoverFalParams}
+          outpaintQualityMode={settings.outpaintQualityMode} musicTags={settings.musicTags}
           pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           onClose={closeSettings} onOpenUsage={openUsage}
