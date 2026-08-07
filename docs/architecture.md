@@ -120,6 +120,19 @@ each keystroke isn't a request.
 without knowing whether the result is canned or real. Keys come from
 `app_data/settings.json`.
 
+Every `settings.*_base_prompt` (Suno, Scenes narrative/abstract, Title Card —
+seeded from the matching `providers/*_prompt_defaults.py` constant, see
+`routers/settings.py`'s `DEFAULT_SETTINGS`) is a **one-time seed**, not a
+live default: `get_settings` merges `DEFAULT_SETTINGS` under whatever's
+already in `app_data/settings.json`, so once a key has been written once
+(any `PUT /api/settings`, even one editing an unrelated field, writes the
+whole merged object back — see `put_settings`), it's persisted from then on
+and a later edit to the `*_prompt_defaults.py` source constant has **no
+effect** on that installation until someone edits the prompt in the UI (or
+the stored key) directly. Keep this in mind when changing a base-prompt
+default — an already-running install's `app_data/settings.json` needs its
+own edit (or the user needs to re-save the prompt) to pick up the change.
+
 `google_free` is a second Google Gemini provider id, wired everywhere
 `google` is (same Gemini/Imagen calls, same models) but resolved against its
 own `settings.api_keys.google_free` — lets a free-tier Gemini token and a
