@@ -39,7 +39,7 @@ Price row shapes:
     image: {'kind': 'image', 'per_image': USD per generated image}
 """
 
-PRICING_VERSION = '2026-08-04'
+PRICING_VERSION = '2026-08-07'
 CURRENCY = 'USD'
 
 TOKENS_PER_UNIT = 1_000_000
@@ -160,6 +160,14 @@ BUILTIN_PRICING: dict[str, dict] = {
     'fal:fal-ai/flux-pro/kontext': {'kind': 'image', 'per_image': 0.04},
     'fal:fal-ai/nano-banana': {'kind': 'image', 'per_image': 0.0398},
     'fal:fal-ai/qwen-image': {'kind': 'image', 'per_image': 0.02},
+    # fal.ai/models/fal-ai/bria/background/remove's own page (2026-08): fixed
+    # $0.018/run (Bria RMBG 2.0, commercial license). Used by the Title Card
+    # stage's "remove background" button when the FAL method is selected
+    # (providers/title_card.py's _generate_background_remover_fal). The
+    # guide's other FAL option, fal-ai/imageutils/rembg, is billed per-second
+    # of compute rather than a flat per-run price and doesn't fit this app's
+    # per_image row shape, so it's left unpriced (selectable, shows "price ?").
+    'fal:fal-ai/bria/background/remove': {'kind': 'image', 'per_image': 0.018},
 
     # ---- Krea: krea.ai's model list (pasted by the user, "from $X" floor
     # price used where tiered). Krea has no discovery API - every model is

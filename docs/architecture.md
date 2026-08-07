@@ -423,25 +423,54 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     .../title-card/variants/{variant_id}` removes one result (drops it from
     `project.title_card.variants`, deletes its file).
   - "Remove background" (`POST
-    .../title-card/variants/{variant_id}/remove-background`, `title_card.
-    remove_background`) sends one existing variant's image bytes to
-    Replicate's `851-labs/background-remover` (base64 data URI in,
-    params from `settings.background_remover_params` — `background_type`,
-    `format`, `threshold`, `reverse`, editable in Settings → Providers) and
-    **appends** the transparent-background result as a new variant —
-    `source_variant_id` points back at the original, which is left untouched.
-    Awaited directly by the route (no job/poll round-trip on the frontend,
-    since it's one call, not `count` of them); priced off
-    `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover` row,
-    ledger task `title_card_bg_remove`. Unlike every other Replicate call in
-    this app, this goes through the **versioned** `POST /v1/predictions`
-    endpoint (`{version, input}`), not the shorthand
-    `/v1/models/{owner}/{name}/predictions` route `images.py`'s
-    `_generate_replicate` uses — `851-labs/background-remover` is a
-    community (non-"official") model, and the shorthand route 404s for it
-    (confirmed live, 2026-08). `_resolve_bg_remover_version` fetches and
-    caches the model's `latest_version.id` once per process via `GET
-    /v1/models/851-labs/background-remover`.
+    .../title-card/variants/{variant_id}/remove-background {method?}`,
+    `title_card.remove_background`) sends one existing variant's image bytes
+    through one of **3 interchangeable methods** and **appends** the
+    transparent-background result as a new variant — `source_variant_id`
+    points back at the original, which is left untouched. `method` is
+    `'local' | 'fal' | 'replicate'`, chosen by the user right when the
+    button is clicked (`TitleCardGallery.jsx`'s per-cell method menu); if
+    omitted it falls back to `settings.background_remover_method` (default
+    `'replicate'`, for back-compat with this feature's original
+    single-method behaviour). Awaited directly by the route (no job/poll
+    round-trip on the frontend, since it's one call, not `count` of them).
+    The 3 methods:
+    - **`local`** (free, no API key, no network call) —
+      `_generate_background_remover_local`: a pixel-threshold cutout for a
+      flat solid black/white background only (any pixel whose 3 RGB
+      channels are all below `threshold`, or all above `255-threshold` for
+      white, becomes fully transparent). Params from
+      `settings.background_remover_local_params` (`bg`, `threshold`,
+      editable in Settings → Providers). Priced at a hardcoded `0.0` (no
+      catalog row — the id is synthetic, `local:pixel-threshold`).
+    - **`fal`** — `_generate_background_remover_fal`: FAL's
+      `fal-ai/bria/background/remove` (cleaner cut, commercial license) or
+      `fal-ai/imageutils/rembg` (softer), picked via
+      `settings.background_remover_fal_params.model`. Same queue/poll shape
+      as this module's `_generate_fal` (base64 data URI works directly as
+      `image_url`, no upload step), but the result is a single `image`
+      object, not an `images` list. Priced off
+      `pricing.BUILTIN_PRICING`'s `fal:fal-ai/bria/background/remove` row
+      (the rembg model is billed per-second by FAL, doesn't fit this app's
+      per-image pricing shape, and is left unpriced).
+    - **`replicate`** (the original, still the settings default) —
+      `_generate_background_remover`: Replicate's
+      `851-labs/background-remover` (base64 data URI in, params from
+      `settings.background_remover_params` — `background_type`, `format`,
+      `threshold`, `reverse`, editable in Settings → Providers), priced off
+      `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover`
+      row. Unlike every other Replicate call in this app, this goes through
+      the **versioned** `POST /v1/predictions` endpoint (`{version, input}`),
+      not the shorthand `/v1/models/{owner}/{name}/predictions` route
+      `images.py`'s `_generate_replicate` uses — `851-labs/background-remover`
+      is a community (non-"official") model, and the shorthand route 404s
+      for it (confirmed live, 2026-08). `_resolve_bg_remover_version`
+      fetches and caches the model's `latest_version.id` once per process
+      via `GET /v1/models/851-labs/background-remover`.
+
+    All 3 share the same result plumbing: ledger task `title_card_bg_remove`,
+    `new_variant.model` set to the composite id used (`local:pixel-threshold`
+    / `fal:{model_id}` / `replicate:851-labs/background-remover`).
   - A completed job writes to `titlecard/{shorthex}.{png|jpg|webp}` (parallel
     to `images/`/`references/`) and appends a variant — same
     `rating`/`is_selected`/`model`/`aspect_ratio`/`cost` fields as a scene

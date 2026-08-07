@@ -52,12 +52,15 @@ scene-image job id are unrelated and must never collide.
 
 import asyncio
 import base64
+import io
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
+import numpy as np
+from PIL import Image
 
 from .. import console_log, pricing, storage, usage
 
@@ -70,6 +73,14 @@ _OPENROUTER_IMAGES_URL = 'https://openrouter.ai/api/v1/images'
 _REPLICATE_BASE = 'https://api.replicate.com/v1'
 _REPLICATE_BG_REMOVER_ID = '851-labs/background-remover'
 _BG_REMOVE_MODEL = f'replicate:{_REPLICATE_BG_REMOVER_ID}'
+# Three interchangeable background-removal methods (see the guide this was
+# implemented from): 'local' is free pixel-threshold cutout for a flat
+# black/white background (no network call, no model id); 'fal' and
+# 'replicate' are AI models for complex backgrounds. `_BG_REMOVE_MODEL_LOCAL`
+# is a synthetic composite id (no real provider) purely so it can flow
+# through the same `model`/pricing/usage-ledger plumbing as the other two.
+_BG_REMOVE_MODEL_LOCAL = 'local:pixel-threshold'
+_FAL_BG_REMOVER_DEFAULT = 'fal-ai/bria/background/remove'
 
 _POLL_INTERVAL = 2.0
 _JOB_TIMEOUT = 300.0
@@ -366,6 +377,104 @@ async def _resolve_bg_remover_version(api_key: str) -> str:
     return version
 
 
+def _generate_background_remover_local(image_bytes: bytes, params: dict | None = None) -> tuple[bytes, str]:
+    """Method 1 (free, no network) from the background-removal guide this was
+    implemented from: for a flat solid black/white background, a pixel is
+    background - and gets alpha=0 - iff all 3 RGB channels are simultaneously
+    below `threshold` (black) or above `255-threshold` (white); anything else
+    (glow, particles, the text itself) is untouched. Only fits a flat
+    background - complex/gradient ones need the FAL or Replicate AI methods.
+    `params` is `settings.background_remover_local_params` (see
+    routers/settings.py); defaults match the guide's own (`bg='black'`,
+    `threshold=40`)."""
+    defaults = {'bg': 'black', 'threshold': 40}
+    opts = {**defaults, **(params or {})}
+    bg = opts['bg'] if opts['bg'] in ('black', 'white') else 'black'
+    threshold = max(0, min(255, int(opts['threshold'])))
+
+    img = Image.open(io.BytesIO(image_bytes)).convert('RGBA')
+    arr = np.asarray(img).astype(int)
+    rgb = arr[:, :, :3]
+    alpha = arr[:, :, 3].copy()
+    if bg == 'black':
+        is_bg = (rgb[:, :, 0] < threshold) & (rgb[:, :, 1] < threshold) & (rgb[:, :, 2] < threshold)
+    else:
+        is_bg = (rgb[:, :, 0] > 255 - threshold) & (rgb[:, :, 1] > 255 - threshold) & (rgb[:, :, 2] > 255 - threshold)
+    alpha[is_bg] = 0
+    arr[:, :, 3] = alpha
+
+    out = io.BytesIO()
+    Image.fromarray(arr.astype(np.uint8), 'RGBA').save(out, 'PNG')
+    return out.getvalue(), 'png'
+
+
+async def _generate_background_remover_fal(
+    image_bytes: bytes, ext: str, api_key: str, usage_out: dict | None = None, params: dict | None = None,
+) -> tuple[bytes, str]:
+    """Method 2 from the background-removal guide: FAL's background-removal
+    models (`fal-ai/bria/background/remove` - cleaner cut, commercial license
+    - or `fal-ai/imageutils/rembg` - softer). Same queue/poll shape as this
+    module's `_generate_fal` (reference-image call), but the input field is
+    `image_url` (a base64 data URI works directly, same as `_generate_fal`'s
+    `image_urls` - no separate upload step needed) and the result comes back
+    as a single `image` object, not an `images` list. `params` is
+    `settings.background_remover_fal_params` (see routers/settings.py)."""
+    if not api_key:
+        raise RuntimeError('Нет API-ключа FAL')
+    model_id = (params or {}).get('model') or _FAL_BG_REMOVER_DEFAULT
+    headers = {'Authorization': f'Key {api_key}', 'Content-Type': 'application/json'}
+    data_uri = f'data:image/{ext if ext != "jpg" else "jpeg"};base64,{base64.b64encode(image_bytes).decode()}'
+    body = {'image_url': data_uri}
+    debug_request = {
+        'url': f'{_FAL_BASE}/{model_id}', 'model': model_id,
+        'body': {'image_url': f'<image data, {len(image_bytes)} bytes>'},
+    }
+
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        resp = await http_client.post(f'{_FAL_BASE}/{model_id}', headers=headers, json=body)
+    if resp.status_code >= 400:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': resp.status_code, 'text': resp.text[:500]}}
+        raise RuntimeError(f'FAL API вернул {resp.status_code}: {resp.text[:300]}')
+    submitted = resp.json()
+    status_url = submitted['status_url']
+    response_url = submitted['response_url']
+
+    deadline = time.monotonic() + _JOB_TIMEOUT
+    status = submitted.get('status')
+    while status != 'COMPLETED':
+        if status == 'FAILED':
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': 'FAILED'}}
+            raise RuntimeError('FAL: задание завершилось с ошибкой')
+        if time.monotonic() > deadline:
+            raise RuntimeError('FAL: превышено время ожидания генерации')
+        await asyncio.sleep(_POLL_INTERVAL)
+        async with httpx.AsyncClient(timeout=30) as http_client:
+            poll = await http_client.get(status_url, headers=headers)
+        if poll.status_code >= 400:
+            if usage_out is not None:
+                usage_out['debug'] = {'request': debug_request, 'response': {'status': poll.status_code, 'text': poll.text[:500]}}
+            raise RuntimeError(f'FAL API (poll) вернул {poll.status_code}: {poll.text[:300]}')
+        status = poll.json().get('status')
+
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        result = await http_client.get(response_url, headers=headers)
+    if result.status_code >= 400:
+        if usage_out is not None:
+            usage_out['debug'] = {'request': debug_request, 'response': {'status': result.status_code, 'text': result.text[:500]}}
+        raise RuntimeError(f'FAL API (результат) вернул {result.status_code}: {result.text[:300]}')
+    payload = result.json()
+    image = payload.get('image') or {}
+    url = image.get('url')
+    if usage_out is not None:
+        redacted_response = {**payload, 'image': {**image, 'url': '<redacted>'}} if image else payload
+        usage_out['debug'] = {'request': debug_request, 'response': redacted_response}
+    if not url:
+        raise RuntimeError('FAL: результат не содержит изображения')
+    return await _download(url)
+
+
 async def _generate_background_remover(
     image_bytes: bytes, ext: str, api_key: str, usage_out: dict | None = None, params: dict | None = None,
 ) -> tuple[bytes, str]:
@@ -533,16 +642,20 @@ def get_job(job_id: str) -> dict | None:
 
 
 async def remove_background(
-    slug: str, variant_id: str, settings: dict, usage_ctx: dict | None = None,
+    slug: str, variant_id: str, settings: dict, usage_ctx: dict | None = None, method: str | None = None,
 ) -> dict:
-    """Runs one existing variant through `_generate_background_remover` and
-    appends the result as a **new** variant (`source_variant_id` pointing back
-    at the original) - the source variant is left untouched, matching the
-    "creates a copy" behaviour the user asked for. Synchronous (awaited
-    directly by the route, no job/poll dance) since it's a single call, not a
-    batch of `count` - the caller just shows a per-button spinner while this
-    resolves. Raises `ValueError` if `variant_id` doesn't exist (mapped to a
-    404 by the route)."""
+    """Runs one existing variant through one of the three methods from the
+    background-removal guide this was implemented from - `method` is
+    'local' / 'fal' / 'replicate' (falls back to
+    `settings.background_remover_method`, then 'replicate' for back-compat
+    with the single-method behaviour this replaced) - and appends the result
+    as a **new** variant (`source_variant_id` pointing back at the original)
+    - the source variant is left untouched, matching the "creates a copy"
+    behaviour the user asked for. Synchronous (awaited directly by the route,
+    no job/poll dance) since it's a single call, not a batch of `count` - the
+    caller just shows a per-button spinner while this resolves. Raises
+    `ValueError` if `variant_id` doesn't exist (mapped to a 404 by the
+    route)."""
     project = storage.load_project(slug)
     if project is None:
         raise ValueError('Project not found')
@@ -553,18 +666,31 @@ async def remove_background(
 
     file_path = storage.project_dir(slug) / source['file_path']
     ext = file_path.suffix.removeprefix('.').lower() or 'png'
-    api_key = (settings.get('api_keys') or {}).get('replicate', '')
-    params = settings.get('background_remover_params')
+    image_bytes = file_path.read_bytes()
+    method = method if method in ('local', 'fal', 'replicate') else (settings.get('background_remover_method') or 'replicate')
 
     started = time.monotonic()
     provider_usage: dict = {}
+    model = _BG_REMOVE_MODEL_LOCAL if method == 'local' else (_BG_REMOVE_MODEL if method == 'replicate' else None)
     try:
-        console_log.log_request_start(_BG_REMOVE_MODEL, 'image', usage_ctx.get('task') if usage_ctx else None)
-        content, out_ext = await _generate_background_remover(
-            file_path.read_bytes(), ext, api_key, usage_out=provider_usage, params=params,
-        )
+        if method == 'local':
+            content, out_ext = _generate_background_remover_local(image_bytes, settings.get('background_remover_local_params'))
+        elif method == 'fal':
+            fal_params = settings.get('background_remover_fal_params') or {}
+            model = f'fal:{(fal_params.get("model") or _FAL_BG_REMOVER_DEFAULT)}'
+            api_key = (settings.get('api_keys') or {}).get('fal', '')
+            console_log.log_request_start(model, 'image', usage_ctx.get('task') if usage_ctx else None)
+            content, out_ext = await _generate_background_remover_fal(
+                image_bytes, ext, api_key, usage_out=provider_usage, params=fal_params,
+            )
+        else:
+            api_key = (settings.get('api_keys') or {}).get('replicate', '')
+            console_log.log_request_start(model, 'image', usage_ctx.get('task') if usage_ctx else None)
+            content, out_ext = await _generate_background_remover(
+                image_bytes, ext, api_key, usage_out=provider_usage, params=settings.get('background_remover_params'),
+            )
     except Exception as exc:
-        usage.record(usage_ctx, model=_BG_REMOVE_MODEL, kind='image', status='error',
+        usage.record(usage_ctx, model=model, kind='image', status='error',
                      duration_ms=int((time.monotonic() - started) * 1000), prompt=source['file_path'], error=str(exc),
                      debug=provider_usage.get('debug'))
         raise RuntimeError(str(exc)) from exc
@@ -576,11 +702,14 @@ async def remove_background(
     (titlecard_dir / filename).write_bytes(content)
 
     units = {'images': 1, **{k: v for k, v in provider_usage.items() if k not in ('debug',)}}
-    cost, _ = pricing.compute_cost(_BG_REMOVE_MODEL, units, (usage_ctx or {}).get('pricing_overrides'))
+    # Local is genuinely free (no API call at all) - priced as 0 directly
+    # rather than through the catalog, which has no row for the synthetic
+    # 'local:pixel-threshold' id and would otherwise show it as "unknown".
+    cost = 0.0 if method == 'local' else pricing.compute_cost(model, units, (usage_ctx or {}).get('pricing_overrides'))[0]
     new_variant = {
         'variant_id': new_variant_id, 'file_path': f'titlecard/{filename}',
         'rating': 0, 'is_selected': False, 'generated_at': _now(),
-        'model': _BG_REMOVE_MODEL, 'aspect_ratio': source.get('aspect_ratio'), 'cost': cost,
+        'model': model, 'aspect_ratio': source.get('aspect_ratio'), 'cost': cost,
         'text_block': source.get('text_block'), 'base_prompt': source.get('base_prompt'),
         'reference_image_paths': source.get('reference_image_paths', []),
         'source_variant_id': variant_id,
@@ -596,7 +725,7 @@ async def remove_background(
         storage.save_project(slug, project)
 
     debug_info = provider_usage.get('debug')
-    usage.record(usage_ctx, model=_BG_REMOVE_MODEL, kind='image', status='ok',
+    usage.record(usage_ctx, model=model, kind='image', status='ok',
                  duration_ms=int((time.monotonic() - started) * 1000),
                  units=units, prompt=source['file_path'], response=new_variant['file_path'], debug=debug_info)
     return {'variant': new_variant, 'variants': current_variants, 'debug': debug_info}

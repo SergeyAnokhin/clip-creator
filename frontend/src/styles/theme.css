@@ -1456,6 +1456,36 @@
   cursor: default;
 }
 
+.titlecard-gallery-bg-menu {
+  position: absolute;
+  bottom: 32px;
+  left: 6px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.titlecard-gallery-bg-menu button {
+  font-size: 10.5px;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+}
+
+.titlecard-gallery-bg-menu button:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 .titlecard-gallery-caption {
   font-size: 11px;
   color: var(--text-dim);

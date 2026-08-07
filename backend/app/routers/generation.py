@@ -400,11 +400,13 @@ async def delete_title_card_variant(project_id: str, variant_id: str):
 
 
 @router.post('/{project_id}/title-card/variants/{variant_id}/remove-background')
-async def remove_title_card_variant_background(project_id: str, variant_id: str):
+async def remove_title_card_variant_background(project_id: str, variant_id: str, body: dict = Body(default={})):
     settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
     usage_ctx = usage.context('title_card_bg_remove', project_id, settings)
     try:
-        result = await title_card.remove_background(project_id, variant_id, settings, usage_ctx=usage_ctx)
+        result = await title_card.remove_background(
+            project_id, variant_id, settings, usage_ctx=usage_ctx, method=body.get('method'),
+        )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except RuntimeError as exc:

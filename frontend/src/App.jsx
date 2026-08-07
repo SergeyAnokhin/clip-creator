@@ -242,6 +242,9 @@ function App() {
           sceneBasePromptNarrative={settings.sceneBasePromptNarrative} sceneBasePromptAbstract={settings.sceneBasePromptAbstract}
           sceneWishLibrary={settings.sceneWishLibrary}
           backgroundRemoverParams={settings.backgroundRemoverParams} logos={settings.logos}
+          backgroundRemoverMethod={settings.backgroundRemoverMethod}
+          backgroundRemoverLocalParams={settings.backgroundRemoverLocalParams}
+          backgroundRemoverFalParams={settings.backgroundRemoverFalParams}
           pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           onClose={closeSettings} onOpenUsage={openUsage}

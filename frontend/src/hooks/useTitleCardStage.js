@@ -228,13 +228,13 @@ export function useTitleCardStage({
     }
   }
 
-  async function removeBackground(variantIdx) {
+  async function removeBackground(variantIdx, method) {
     if (!activeProject) return;
     const variant = titleCard.variants[variantIdx];
     if (!variant) return;
     setRemovingBgIds((s) => new Set(s).add(variant.variant_id));
     try {
-      const result = await api.removeTitleCardBackground(activeProject.id, variant.variant_id);
+      const result = await api.removeTitleCardBackground(activeProject.id, variant.variant_id, method);
       setActiveProject((p) => ({
         ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), variants: result.variants },
       }));

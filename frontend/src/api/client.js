@@ -100,7 +100,7 @@ export const api = {
   addTitleCardWish: (id, text) => request(`${projectPath(id)}/title-card/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
   getTitleCardJob: (id, jobId) => request(`${projectPath(id)}/title-card/jobs/${encodeURIComponent(jobId)}`),
   deleteTitleCardVariant: (id, variantId) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}`, { method: 'DELETE' }),
-  removeTitleCardBackground: (id, variantId) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}/remove-background`, { method: 'POST' }),
+  removeTitleCardBackground: (id, variantId, method) => request(`${projectPath(id)}/title-card/variants/${encodeURIComponent(variantId)}/remove-background`, { method: 'POST', body: JSON.stringify({ method }) }),
 
   uploadLogo: (name, file) => {
     const form = new FormData();

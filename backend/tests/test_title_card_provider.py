@@ -1,7 +1,10 @@
 import asyncio
 import base64
+import io
 
+import numpy as np
 import pytest
+from PIL import Image
 
 from app.providers import title_card
 
@@ -319,6 +322,76 @@ def test_generate_background_remover_missing_key_raises():
         asyncio.run(title_card._generate_background_remover(b'x', 'png', ''))
 
 
+def _flat_bg_png(bg_rgb, fg_rgb) -> bytes:
+    """4x4 RGBA PNG: a `bg_rgb` background with one `fg_rgb` pixel in the
+    corner - the minimal fixture for the local threshold-cutout method."""
+    arr = np.zeros((4, 4, 4), dtype=np.uint8)
+    arr[:, :, :3] = bg_rgb
+    arr[:, :, 3] = 255
+    arr[0, 0, :3] = fg_rgb
+    out = io.BytesIO()
+    Image.fromarray(arr, 'RGBA').save(out, 'PNG')
+    return out.getvalue()
+
+
+def test_generate_background_remover_local_clears_flat_black_background():
+    png = _flat_bg_png(bg_rgb=(5, 5, 5), fg_rgb=(255, 255, 255))
+
+    content, ext = title_card._generate_background_remover_local(png, {'bg': 'black', 'threshold': 40})
+
+    assert ext == 'png'
+    result = np.asarray(Image.open(io.BytesIO(content)).convert('RGBA'))
+    assert result[1, 1, 3] == 0  # background pixel -> fully transparent
+    assert result[0, 0, 3] == 255  # foreground (white) pixel -> untouched
+    assert tuple(result[0, 0, :3]) == (255, 255, 255)
+
+
+def test_generate_background_remover_local_white_background_inverts_condition():
+    png = _flat_bg_png(bg_rgb=(250, 250, 250), fg_rgb=(0, 0, 0))
+
+    content, _ = title_card._generate_background_remover_local(png, {'bg': 'white', 'threshold': 40})
+
+    result = np.asarray(Image.open(io.BytesIO(content)).convert('RGBA'))
+    assert result[1, 1, 3] == 0
+    assert result[0, 0, 3] == 255
+
+
+def test_generate_background_remover_fal_sends_image_url_and_polls_to_completion(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'IN_QUEUE'}),
+        _FakeResponse(200, {'status': 'COMPLETED'}),
+        _FakeResponse(200, {'image': {'url': 'https://cdn.example/cutout.png'}}),
+        _FakeResponse(200, content=b'FALBGDATA', headers={'content-type': 'image/png'}),
+    ])
+
+    content, ext = asyncio.run(title_card._generate_background_remover_fal(b'SOURCEDATA', 'png', 'test-key'))
+
+    assert content == b'FALBGDATA'
+    assert ext == 'png'
+    first_call = fake_client.calls[0]
+    assert first_call['url'] == 'https://queue.fal.run/fal-ai/bria/background/remove'
+    assert first_call['json']['image_url'] == f'data:image/png;base64,{base64.b64encode(b"SOURCEDATA").decode()}'
+
+
+def test_generate_background_remover_fal_uses_model_from_params(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'COMPLETED'}),
+        _FakeResponse(200, {'image': {'url': 'https://cdn.example/cutout.png'}}),
+        _FakeResponse(200, content=b'FALBGDATA', headers={'content-type': 'image/png'}),
+    ])
+
+    asyncio.run(title_card._generate_background_remover_fal(
+        b'SOURCEDATA', 'png', 'test-key', params={'model': 'fal-ai/imageutils/rembg'},
+    ))
+
+    assert fake_client.calls[0]['url'] == 'https://queue.fal.run/fal-ai/imageutils/rembg'
+
+
+def test_generate_background_remover_fal_missing_key_raises():
+    with pytest.raises(RuntimeError, match='FAL'):
+        asyncio.run(title_card._generate_background_remover_fal(b'x', 'png', ''))
+
+
 @pytest.fixture
 def usage_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
@@ -370,3 +443,59 @@ def test_remove_background_unknown_variant_raises(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match='Variant not found'):
         asyncio.run(title_card.remove_background('poem-a', 'does-not-exist', {'api_keys': {}}))
+
+
+def _save_source_variant(slug: str, image_bytes: bytes) -> None:
+    from app import storage
+    tc_dir = storage.project_dir(slug) / 'titlecard'
+    tc_dir.mkdir(parents=True)
+    (tc_dir / 'src.png').write_bytes(image_bytes)
+    source_variant = {
+        'variant_id': 'tc_src1', 'file_path': 'titlecard/src.png', 'rating': 0, 'is_selected': False,
+        'generated_at': '', 'model': 'google:gemini-3.1-flash-image', 'aspect_ratio': '16:9', 'cost': 0.04,
+        'text_block': '"T"', 'base_prompt': 'base', 'reference_image_paths': [],
+    }
+    storage.save_project(slug, {'id': slug, 'title_card': {'variants': [source_variant]}})
+
+
+def test_remove_background_local_method_is_free_and_makes_no_network_call(tmp_path, monkeypatch, usage_ledger):
+    _save_source_variant('poem-a', _flat_bg_png(bg_rgb=(5, 5, 5), fg_rgb=(255, 255, 255)))
+
+    def _no_client(**kwargs):
+        raise AssertionError('local method must not open an HTTP client')
+    monkeypatch.setattr(title_card.httpx, 'AsyncClient', _no_client)
+
+    ctx = usage_ledger.context('title_card_bg_remove', 'poem-a', {})
+    result = asyncio.run(title_card.remove_background('poem-a', 'tc_src1', {'api_keys': {}}, usage_ctx=ctx, method='local'))
+
+    assert result['variant']['model'] == 'local:pixel-threshold'
+    assert result['variant']['cost'] == 0.0
+
+
+def test_remove_background_fal_method_dispatches_to_fal(tmp_path, monkeypatch, usage_ledger):
+    from app import storage
+    _save_source_variant('poem-a', b'SOURCEDATA')
+
+    _install(monkeypatch, [
+        _FakeResponse(200, {'status_url': 'https://q/status', 'response_url': 'https://q/result', 'status': 'COMPLETED'}),
+        _FakeResponse(200, {'image': {'url': 'https://cdn.example/cutout.png'}}),
+        _FakeResponse(200, content=b'FALBGDATA', headers={'content-type': 'image/png'}),
+    ])
+
+    ctx = usage_ledger.context('title_card_bg_remove', 'poem-a', {})
+    settings = {'api_keys': {'fal': 'k'}, 'background_remover_fal_params': {'model': 'fal-ai/bria/background/remove'}}
+    result = asyncio.run(title_card.remove_background('poem-a', 'tc_src1', settings, usage_ctx=ctx, method='fal'))
+
+    assert result['variant']['model'] == 'fal:fal-ai/bria/background/remove'
+    new_file = storage.project_dir('poem-a') / result['variant']['file_path']
+    assert new_file.read_bytes() == b'FALBGDATA'
+
+
+def test_remove_background_falls_back_to_settings_method_default(tmp_path, monkeypatch, usage_ledger):
+    _save_source_variant('poem-a', _flat_bg_png(bg_rgb=(5, 5, 5), fg_rgb=(255, 255, 255)))
+
+    ctx = usage_ledger.context('title_card_bg_remove', 'poem-a', {})
+    settings = {'api_keys': {}, 'background_remover_method': 'local'}
+    result = asyncio.run(title_card.remove_background('poem-a', 'tc_src1', settings, usage_ctx=ctx))
+
+    assert result['variant']['model'] == 'local:pixel-threshold'

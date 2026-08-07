@@ -50,7 +50,20 @@ DEFAULT_SETTINGS = {
     'title_card_base_prompt_presets': TITLE_CARD_BASE_PROMPT_PRESETS,
     'pricing_overrides': {},
     'request_timeout_seconds': 60,
-    # Replicate 851-labs/background-remover input params (see
+    # Which of the 3 background-removal methods (see the guide this was
+    # implemented from) the "Remove background" button defaults to when no
+    # per-call `method` is given - 'local' (free, flat bg only) / 'fal' /
+    # 'replicate'. Each method's own params live in the 3 keys below (see
+    # providers/title_card.py's remove_background).
+    'background_remover_method': 'replicate',
+    # Method 1 (free, no API key) - flat-background pixel-threshold cutout.
+    'background_remover_local_params': {'bg': 'black', 'threshold': 40},
+    # Method 2 - FAL's background-removal models (providers/title_card.py's
+    # _generate_background_remover_fal); 'model' picks between
+    # fal-ai/bria/background/remove (cleaner cut) and fal-ai/imageutils/rembg
+    # (softer).
+    'background_remover_fal_params': {'model': 'fal-ai/bria/background/remove'},
+    # Method 3 - Replicate 851-labs/background-remover input params (see
     # providers/title_card.py's _generate_background_remover) - defaults
     # match the model's own schema defaults (confirmed live against
     # api.replicate.com/v1/models/851-labs/background-remover, 2026-08).

@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState } from 'react';
 import { Check, Eraser, Loader2, Star, Trash2 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { formatCost } from '../../lib/pricing.js';
+
+const BG_REMOVE_METHODS = ['local', 'fal', 'replicate'];
 
 /** Shows every Title Card variant at once (a grid, not a one-at-a-time
  * carousel) so nothing needs to be paged through to compare results.
@@ -13,6 +16,31 @@ import { formatCost } from '../../lib/pricing.js';
 export default function TitleCardGallery({
   L, projectId, variants, onExpand, onDelete, onSelectMain, onRate, onRemoveBackground, removingBgIds,
 }) {
+  // Which variant's "choose background-removal method" menu is open (see
+  // the guide this feature was implemented from: 3 interchangeable methods,
+  // picked right when the button is pressed rather than only in Settings).
+  // A single index, not a Set, since only one menu can be open at a time.
+  const [methodMenuIdx, setMethodMenuIdx] = useState(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (methodMenuIdx === null) return undefined;
+    function handleOutsideClick(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMethodMenuIdx(null);
+    }
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [methodMenuIdx]);
+
+  const methodLabels = {
+    local: L.settings_bgRemoverMethodLocal, fal: L.settings_bgRemoverMethodFal, replicate: L.settings_bgRemoverMethodReplicate,
+  };
+
+  function pickMethod(i, method) {
+    setMethodMenuIdx(null);
+    onRemoveBackground(i, method);
+  }
+
   return (
     <div className="titlecard-gallery">
       {variants.map((variant, i) => {
@@ -50,10 +78,19 @@ export default function TitleCardGallery({
                 className="titlecard-gallery-bg-btn"
                 title={L.titleCard_removeBackground}
                 disabled={removingBg}
-                onClick={(e) => { e.stopPropagation(); onRemoveBackground(i); }}
+                onClick={(e) => { e.stopPropagation(); setMethodMenuIdx((cur) => (cur === i ? null : i)); }}
               >
                 {removingBg ? <Loader2 size={12} className="spin" /> : <Eraser size={12} />}
               </button>
+              {methodMenuIdx === i && (
+                <div className="titlecard-gallery-bg-menu" ref={menuRef} onClick={(e) => e.stopPropagation()}>
+                  {BG_REMOVE_METHODS.map((method) => (
+                    <button key={method} onClick={() => pickMethod(i, method)}>
+                      {methodLabels[method]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="titlecard-gallery-caption">
               <div><strong>{variant.model || '—'}</strong> · {formatCost(variant.cost)}</div>

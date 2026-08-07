@@ -10,6 +10,9 @@ const DEFAULT_SIMPLE_MODELS = { favorites: [], default: '' };
 const DEFAULT_IMAGE_MODELS = { favorites: [], default: '' };
 const DEFAULT_IMAGE_MODELS_SIMPLE = { favorites: [], default: '' };
 const DEFAULT_BG_REMOVER_PARAMS = { background_type: 'rgba', format: 'png', threshold: 0, reverse: false };
+const DEFAULT_BG_REMOVER_METHOD = 'replicate';
+const DEFAULT_BG_REMOVER_LOCAL_PARAMS = { bg: 'black', threshold: 40 };
+const DEFAULT_BG_REMOVER_FAL_PARAMS = { model: 'fal-ai/bria/background/remove' };
 
 /** App settings (language, API keys, default models, Suno meta-tags), loaded
  * from the backend on mount. Owns `lang`, and therefore the `L` dictionary
@@ -35,6 +38,9 @@ export function useSettings({ showToast, onAiCall }) {
   const [titleCardBasePrompt, setTitleCardBasePrompt] = useState('');
   const [titleCardBasePromptPresets, setTitleCardBasePromptPresets] = useState([]);
   const [backgroundRemoverParams, setBackgroundRemoverParams] = useState(DEFAULT_BG_REMOVER_PARAMS);
+  const [backgroundRemoverMethod, setBackgroundRemoverMethodState] = useState(DEFAULT_BG_REMOVER_METHOD);
+  const [backgroundRemoverLocalParams, setBackgroundRemoverLocalParams] = useState(DEFAULT_BG_REMOVER_LOCAL_PARAMS);
+  const [backgroundRemoverFalParams, setBackgroundRemoverFalParams] = useState(DEFAULT_BG_REMOVER_FAL_PARAMS);
   const [logos, setLogos] = useState([]);
 
   useEffect(() => {
@@ -58,6 +64,9 @@ export function useSettings({ showToast, onAiCall }) {
       setTitleCardBasePrompt(s.title_card_base_prompt || '');
       setTitleCardBasePromptPresets(s.title_card_base_prompt_presets || []);
       setBackgroundRemoverParams(s.background_remover_params || DEFAULT_BG_REMOVER_PARAMS);
+      setBackgroundRemoverMethodState(s.background_remover_method || DEFAULT_BG_REMOVER_METHOD);
+      setBackgroundRemoverLocalParams(s.background_remover_local_params || DEFAULT_BG_REMOVER_LOCAL_PARAMS);
+      setBackgroundRemoverFalParams(s.background_remover_fal_params || DEFAULT_BG_REMOVER_FAL_PARAMS);
       setLogos(s.logos || []);
     }).catch(() => {});
     api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
@@ -240,6 +249,15 @@ export function useSettings({ showToast, onAiCall }) {
   function setBackgroundRemoverParam(key, value) {
     setBackgroundRemoverParams((prev) => ({ ...prev, [key]: value }));
   }
+  function setBackgroundRemoverMethod(value) {
+    setBackgroundRemoverMethodState(value);
+  }
+  function setBackgroundRemoverLocalParam(key, value) {
+    setBackgroundRemoverLocalParams((prev) => ({ ...prev, [key]: value }));
+  }
+  function setBackgroundRemoverFalParam(key, value) {
+    setBackgroundRemoverFalParams((prev) => ({ ...prev, [key]: value }));
+  }
 
   async function uploadLogo(name, file) {
     try {
@@ -357,6 +375,9 @@ export function useSettings({ showToast, onAiCall }) {
         title_card_base_prompt: src.title_card_base_prompt ?? titleCardBasePrompt,
         title_card_base_prompt_presets: src.title_card_base_prompt_presets ?? titleCardBasePromptPresets,
         background_remover_params: src.background_remover_params ?? backgroundRemoverParams,
+        background_remover_method: src.background_remover_method ?? backgroundRemoverMethod,
+        background_remover_local_params: src.background_remover_local_params ?? backgroundRemoverLocalParams,
+        background_remover_fal_params: src.background_remover_fal_params ?? backgroundRemoverFalParams,
       };
       setLang(next.lang);
       setTextModels(next.text_models);
@@ -375,6 +396,9 @@ export function useSettings({ showToast, onAiCall }) {
       setTitleCardBasePrompt(next.title_card_base_prompt);
       setTitleCardBasePromptPresets(next.title_card_base_prompt_presets);
       setBackgroundRemoverParams(next.background_remover_params);
+      setBackgroundRemoverMethodState(next.background_remover_method);
+      setBackgroundRemoverLocalParams(next.background_remover_local_params);
+      setBackgroundRemoverFalParams(next.background_remover_fal_params);
       await api.putSettings(next);
       showToast(L.toast_imported);
     } catch {
@@ -392,7 +416,8 @@ export function useSettings({ showToast, onAiCall }) {
         scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
         scene_wish_library: sceneWishLibrary, hide_motion_prompt: hideMotionPrompt,
         title_card_base_prompt: titleCardBasePrompt, title_card_base_prompt_presets: titleCardBasePromptPresets,
-        background_remover_params: backgroundRemoverParams,
+        background_remover_params: backgroundRemoverParams, background_remover_method: backgroundRemoverMethod,
+        background_remover_local_params: backgroundRemoverLocalParams, background_remover_fal_params: backgroundRemoverFalParams,
       });
       showToast(L.toast_saved);
     } catch {
@@ -406,11 +431,13 @@ export function useSettings({ showToast, onAiCall }) {
     sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets, requestTimeoutSeconds,
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
     titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
-    backgroundRemoverParams, logos, setLogos,
+    backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams,
+    logos, setLogos,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
-      setBackgroundRemoverParam, uploadLogo, deleteLogo,
+      setBackgroundRemoverParam, setBackgroundRemoverMethod, setBackgroundRemoverLocalParam, setBackgroundRemoverFalParam,
+      uploadLogo, deleteLogo,
       setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings, setHideMotionPrompt,
       addSpecialTag, removeSpecialTag, updateSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
       addReferenceExample, removeReferenceExample, updateReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet, setWishLibrary,

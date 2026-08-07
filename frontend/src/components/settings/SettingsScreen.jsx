@@ -42,7 +42,7 @@ export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
   sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
   sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
-  backgroundRemoverParams, logos,
+  backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams, logos,
   pricing, usageToday, usagePeriodTotals,
   onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
@@ -90,6 +90,8 @@ export default function SettingsScreen({
       request_timeout_seconds: requestTimeoutSeconds,
       scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
       scene_wish_library: sceneWishLibrary, background_remover_params: backgroundRemoverParams,
+      background_remover_method: backgroundRemoverMethod, background_remover_local_params: backgroundRemoverLocalParams,
+      background_remover_fal_params: backgroundRemoverFalParams,
     });
   }
   function handleApiKeysFile(e) {
@@ -348,6 +350,63 @@ export default function SettingsScreen({
             <div className="settings-panel">
               <div className="settings-panel-label">{L.settings_bgRemover}</div>
               <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverHint}</div>
+
+              <div className="settings-row" style={{ marginBottom: 16 }}>
+                <span className="settings-row-name">{L.settings_bgRemoverMethod}</span>
+                <select
+                  className="field"
+                  value={backgroundRemoverMethod}
+                  onChange={(e) => actions.setBackgroundRemoverMethod(e.target.value)}
+                >
+                  <option value="local">{L.settings_bgRemoverMethodLocal}</option>
+                  <option value="fal">{L.settings_bgRemoverMethodFal}</option>
+                  <option value="replicate">{L.settings_bgRemoverMethodReplicate}</option>
+                </select>
+              </div>
+
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 6 }}>{L.settings_bgRemoverMethodLocal}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverLocalHint}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <div className="settings-row">
+                  <span className="settings-row-name">{L.settings_bgRemoverLocalBg}</span>
+                  <select
+                    className="field"
+                    value={backgroundRemoverLocalParams.bg}
+                    onChange={(e) => actions.setBackgroundRemoverLocalParam('bg', e.target.value)}
+                  >
+                    <option value="black">black</option>
+                    <option value="white">white</option>
+                  </select>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-name">{L.settings_bgRemoverLocalThreshold}</span>
+                  <input
+                    className="field" type="number" min="0" max="255" step="1"
+                    style={{ maxWidth: 120 }}
+                    value={backgroundRemoverLocalParams.threshold}
+                    onChange={(e) => actions.setBackgroundRemoverLocalParam('threshold', Number(e.target.value) || 0)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 6 }}>{L.settings_bgRemoverMethodFal}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverFalHint}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                <div className="settings-row">
+                  <span className="settings-row-name">{L.settings_bgRemoverFalModel}</span>
+                  <select
+                    className="field"
+                    value={backgroundRemoverFalParams.model}
+                    onChange={(e) => actions.setBackgroundRemoverFalParam('model', e.target.value)}
+                  >
+                    <option value="fal-ai/bria/background/remove">fal-ai/bria/background/remove</option>
+                    <option value="fal-ai/imageutils/rembg">fal-ai/imageutils/rembg</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 6 }}>{L.settings_bgRemoverMethodReplicate}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverReplicateHint}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div className="settings-row">
                   <span className="settings-row-name">{L.settings_bgRemoverType}</span>
