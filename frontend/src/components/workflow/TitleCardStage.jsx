@@ -443,7 +443,7 @@ export default function TitleCardStage({
       {posterConstructorOpen && (
         <PosterConstructor
           L={L} projectId={project.id} candidates={candidates} variants={variants} logos={logos || []}
-          initialPoster={editingPoster} saving={posterSaving}
+          initialPoster={editingPoster} saving={posterSaving} textBlock={textBlock}
           onSave={actions.savePoster} onClose={actions.closeConstructor}
         />
       )}

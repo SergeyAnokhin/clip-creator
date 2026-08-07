@@ -202,6 +202,12 @@ export const DICT = {
     poster_cropReset: 'Сбросить обрезку', poster_deleteLayer: 'Удалить слой',
     poster_zoomIn: 'Увеличить', poster_zoomOut: 'Уменьшить', poster_zoomReset: 'Сбросить масштаб',
     poster_zoomLabel: 'Масштаб',
+    poster_undo: 'Отменить (Ctrl+Z)', poster_redo: 'Повторить (Ctrl+Y)',
+    poster_addTextBadge: 'Плашка', poster_addTextHalo: 'Объёмный текст',
+    poster_textBadgeLabel: 'Текст-плашка', poster_textHaloLabel: 'Объёмный текст',
+    poster_fontLabel: 'Шрифт', poster_fontSizeLabel: 'Размер шрифта',
+    poster_textColorLabel: 'Цвет текста', poster_badgeColorLabel: 'Цвет плашки',
+    poster_defaultTitleText: 'Заголовок', poster_defaultAuthorText: 'Автор',
   },
   en: {
     appName: 'Versecraft', apiConnected: 'API connected', newWorkflow: 'New Workflow', searchPlaceholder: 'Search workflows...',
@@ -406,6 +412,12 @@ export const DICT = {
     poster_cropReset: 'Reset crop', poster_deleteLayer: 'Delete layer',
     poster_zoomIn: 'Zoom in', poster_zoomOut: 'Zoom out', poster_zoomReset: 'Reset zoom',
     poster_zoomLabel: 'Zoom',
+    poster_undo: 'Undo (Ctrl+Z)', poster_redo: 'Redo (Ctrl+Y)',
+    poster_addTextBadge: 'Badge', poster_addTextHalo: 'Bold text',
+    poster_textBadgeLabel: 'Badge text', poster_textHaloLabel: 'Bold text',
+    poster_fontLabel: 'Font', poster_fontSizeLabel: 'Font size',
+    poster_textColorLabel: 'Text color', poster_badgeColorLabel: 'Badge color',
+    poster_defaultTitleText: 'Title', poster_defaultAuthorText: 'Author',
   },
 };
 

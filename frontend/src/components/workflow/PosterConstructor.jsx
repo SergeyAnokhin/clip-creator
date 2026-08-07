@@ -1,12 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ChevronDown, ChevronUp, Copy, Crop, Maximize2, Minimize2, Minus, Plus, RotateCcw, Save, Square, Trash2, X,
+  ChevronDown, ChevronUp, Copy, Crop, Maximize2, Minimize2, Minus, Plus, Redo2, RotateCcw, Save, Square, Trash2,
+  Type, Undo2, X,
 } from 'lucide-react';
 import Konva from 'konva';
-import { Group, Image as KonvaImage, Layer, Rect, Stage, Transformer } from 'react-konva';
+import { Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text, Transformer } from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
+
+/** Text-layer font choices for OverlayText - every entry other than Lato is
+ * verified (via the raw Google Fonts css2 response, not just the specimen
+ * page) to ship a cyrillic unicode-range block, since poster text is
+ * typically Russian. Lato is kept only for latin content - Google's Lato
+ * has no cyrillic glyphs at all, so cyrillic text in it silently falls back
+ * to the browser's default sans-serif. See frontend/index.html's font
+ * <link> for the matching Google Fonts request. */
+const FONT_OPTIONS = [
+  { value: "'Forum', serif", label: 'Forum' },
+  { value: "'Montserrat', sans-serif", label: 'Montserrat' },
+  { value: "'PT Sans', sans-serif", label: 'PT Sans' },
+  { value: "'Lato', sans-serif", label: 'Lato' },
+  { value: "'Oswald', sans-serif", label: 'Oswald' },
+  { value: "'Roboto Condensed', sans-serif", label: 'Roboto Condensed' },
+  { value: "'Rubik', sans-serif", label: 'Rubik' },
+  { value: "'Playfair Display', serif", label: 'Playfair Display' },
+];
 
 const MAX_DISPLAY_W = 760;
 const MAX_DISPLAY_H = 520;
@@ -35,6 +54,14 @@ const OVERFLOW_MARGIN_FULLSCREEN = 100;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 6;
 const ZOOM_STEP = 1.25;
+
+/** Undo/redo history depth (oldest snapshots drop off past this). */
+const MAX_HISTORY = 50;
+
+/** Screen-px distance (independent of zoom - divided by effectiveScale at
+ * call time) within which a dragged object's center snaps to the poster's
+ * own center. */
+const CENTER_SNAP_PX = 6;
 
 function genId() {
   return `l_${Math.random().toString(36).slice(2, 10)}`;
@@ -80,6 +107,75 @@ function normalizeLayers(raw) {
   }));
 }
 
+/** Normalizes a saved poster's `text` layer entries (see `layers.text` in
+ * the poster schema) back into full layer objects, backfilling any field
+ * missing from an older/partial save with a sane default - mirrors
+ * `normalizeLayers`'s role for the image layers. */
+function normalizeTextLayers(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((l) => ({
+    id: l.id || genId(),
+    x: l.x ?? 0, y: l.y ?? 0, scaleX: l.scaleX ?? 1, scaleY: l.scaleY ?? 1, rotation: l.rotation ?? 0,
+    kind: 'text', textType: l.textType === 'badge' ? 'badge' : 'halo',
+    text: l.text || '', fontFamily: l.fontFamily || FONT_OPTIONS[0].value,
+    fontSize: l.fontSize || 48, color: l.color || '#ffffff', bgColor: l.bgColor || '#000000',
+    effects: migrateEffects(l.effects),
+  }));
+}
+
+/** Splits the Title Card stage's free-text `text_block` (two quoted lines,
+ * e.g. `"Title"\n"Author"` - see useTitleCardStage.js / dict.js's
+ * titleCard_defaultTextBlock) into the title/author strings used as the
+ * default content for a newly placed halo/badge text layer. */
+function parseTextBlock(textBlock) {
+  if (!textBlock) return { title: '', author: '' };
+  const lines = textBlock.split('\n').map((l) => l.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
+  return { title: lines[0] || '', author: lines[1] || '' };
+}
+
+/** Builds a freshly placed text layer of the given type - `badge` (a black
+ * pill, white Forum text, defaults to the author line) or `halo` (large
+ * Montserrat text with a soft drop-shadow "halo", defaults to the title
+ * line). `bg` is the background image's natural size; `defaults` is
+ * `parseTextBlock`'s result, with `fallback` used when text_block is empty. */
+function makeTextLayer(textType, bg, defaults, fallback) {
+  const isBadge = textType === 'badge';
+  const fontSize = Math.round(bg.width * (isBadge ? 0.026 : 0.075));
+  return makeLayer({
+    kind: 'text', textType,
+    text: (isBadge ? defaults.author : defaults.title) || (isBadge ? fallback.author : fallback.title),
+    fontFamily: isBadge ? FONT_OPTIONS[0].value : "'Montserrat', sans-serif",
+    fontSize, color: '#ffffff', bgColor: '#000000',
+    x: bg.width * (isBadge ? 0.3 : 0.15),
+    y: bg.height * (isBadge ? 0.82 : 0.08),
+    effects: isBadge
+      ? makeDefaultEffects()
+      : { glow: { enabled: true, color: '#1a1a1a', blur: 10, distance: 8, opacity: 0.65 }, opacity: 1 },
+  });
+}
+
+/** Shared drag-time center-snap for every draggable overlay Group (image,
+ * glass, text) - called from `onDragMove`. Compares the node's own
+ * axis-aligned bounding-box center (in the shared bg-natural-pixel content
+ * space) against the poster's center and, within `CENTER_SNAP_PX` screen
+ * px (converted to that local space via `effectiveScale`), snaps the node
+ * onto it directly - a cheap Konva-node mutation, not a React state update,
+ * so it doesn't spam re-renders on every drag frame. Returns which guide
+ * line(s) should be shown for this frame. */
+function snapGroupToCenter(node, bgWidth, bgHeight, effectiveScale) {
+  const rect = node.getClientRect({ relativeTo: node.getParent() });
+  const threshold = CENTER_SNAP_PX / effectiveScale;
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const dx = bgWidth / 2 - cx;
+  const dy = bgHeight / 2 - cy;
+  const snapV = Math.abs(dx) <= threshold;
+  const snapH = Math.abs(dy) <= threshold;
+  if (snapV) node.x(node.x() + dx);
+  if (snapH) node.y(node.y() + dy);
+  return { v: snapV, h: snapH };
+}
+
 function makeDefaultGlass(bgW, bgH) {
   const w = bgW * 0.4;
   const h = bgH * 0.22;
@@ -121,7 +217,10 @@ function clampZoom(z) {
  * crop are visible again to crop back in. Both the ghost and the crop
  * editor are named `crop-editor` purely so handleSave's export pass can
  * find-and-hide them in one call - they must never leak into a saved PNG. */
-function OverlayImage({ image, layer, isSelected, isCropEditing, onSelect, onChange, onCropChange }) {
+function OverlayImage({
+  image, layer, isSelected, isCropEditing, onSelect, onChange, onCropChange,
+  bgWidth, bgHeight, effectiveScale, setGuides,
+}) {
   const groupRef = useRef(null);
   const trRef = useRef(null);
   const cropRectRef = useRef(null);
@@ -175,7 +274,8 @@ function OverlayImage({ image, layer, isSelected, isCropEditing, onSelect, onCha
         rotation={layer.rotation}
         draggable={!isCropEditing}
         onClick={onSelect} onTap={onSelect}
-        onDragEnd={(e) => onChange({ x: e.target.x(), y: e.target.y() })}
+        onDragMove={(e) => setGuides(snapGroupToCenter(e.target, bgWidth, bgHeight, effectiveScale))}
+        onDragEnd={(e) => { setGuides({ v: false, h: false }); onChange({ x: e.target.x(), y: e.target.y() }); }}
         onTransformEnd={() => {
           const node = groupRef.current;
           if (!node) return;
@@ -246,7 +346,7 @@ function OverlayImage({ image, layer, isSelected, isCropEditing, onSelect, onCha
  * true backdrop blur redrawn on every drag frame would be too slow. Found
  * at save time via its Konva `name` ('glass-group') rather than a ref, to
  * avoid extra ref plumbing between this component and PosterConstructor. */
-function OverlayGlass({ transform, isSelected, onSelect, onChange }) {
+function OverlayGlass({ transform, isSelected, onSelect, onChange, bgWidth, bgHeight, effectiveScale, setGuides }) {
   const groupRef = useRef(null);
   const trRef = useRef(null);
 
@@ -273,7 +373,11 @@ function OverlayGlass({ transform, isSelected, onSelect, onChange }) {
         rotation={transform.rotation}
         draggable
         onClick={onSelect} onTap={onSelect}
-        onDragEnd={(e) => onChange({ ...transform, x: e.target.x(), y: e.target.y() })}
+        onDragMove={(e) => setGuides(snapGroupToCenter(e.target, bgWidth, bgHeight, effectiveScale))}
+        onDragEnd={(e) => {
+          setGuides({ v: false, h: false });
+          onChange({ ...transform, x: e.target.x(), y: e.target.y() });
+        }}
         onTransformEnd={() => {
           const node = groupRef.current;
           if (!node) return;
@@ -296,6 +400,98 @@ function OverlayGlass({ transform, isSelected, onSelect, onChange }) {
           rotateEnabled
           enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
           boundBoxFunc={(oldBox, newBox) => (newBox.width < 20 || newBox.height < 20 ? oldBox : newBox)}
+        />
+      )}
+    </>
+  );
+}
+
+/** One draggable+resizable text overlay - either a `badge` (a black pill
+ * behind white text, e.g. an author credit) or a `halo` (bare large text
+ * with a soft drop-shadow, e.g. a title) - see `makeTextLayer`. Shares the
+ * exact drag/transform/center-snap skeleton with `OverlayImage`/
+ * `OverlayGlass`; the halo's "shadow around itself" look reuses the same
+ * `effects.glow` shadow mechanism `OverlayImage` already has for images
+ * (Konva `Text` exposes the same `shadow*` props as `Image`), rather than
+ * a second duplicated text node.
+ *
+ * The badge's pill `Rect` has to hug the text, but Konva only knows a
+ * `Text` node's rendered size once the font is actually loaded and the
+ * node has painted - so its size is read back via a ref after each
+ * paint-affecting prop change, plus once more when `document.fonts.ready`
+ * resolves (in case this render raced the Google Fonts `<link>`). */
+function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight, effectiveScale, setGuides }) {
+  const groupRef = useRef(null);
+  const textRef = useRef(null);
+  const trRef = useRef(null);
+  const [box, setBox] = useState({ w: 10, h: 10 });
+
+  useEffect(() => {
+    if (isSelected && trRef.current && groupRef.current) {
+      trRef.current.nodes([groupRef.current]);
+      trRef.current.getLayer()?.batchDraw();
+    }
+  }, [isSelected]);
+
+  useEffect(() => {
+    function measure() {
+      const node = textRef.current;
+      if (node) setBox({ w: node.width(), h: node.height() });
+    }
+    measure();
+    if (document.fonts?.ready) document.fonts.ready.then(measure);
+  }, [layer.text, layer.fontFamily, layer.fontSize]);
+
+  if (!layer) return null;
+  const isBadge = layer.textType === 'badge';
+  const effects = layer.effects || makeDefaultEffects();
+  const { glow } = effects;
+  const opacity = effects.opacity ?? 1;
+  const glowOffset = glow.distance * 0.7071;
+  const padX = isBadge ? layer.fontSize * 0.6 : 0;
+  const padY = isBadge ? layer.fontSize * 0.38 : 0;
+  const pillH = box.h + padY * 2;
+
+  return (
+    <>
+      <Group
+        ref={groupRef}
+        x={layer.x} y={layer.y}
+        scaleX={layer.scaleX} scaleY={layer.scaleY}
+        rotation={layer.rotation}
+        opacity={opacity}
+        draggable
+        onClick={onSelect} onTap={onSelect}
+        onDragMove={(e) => setGuides(snapGroupToCenter(e.target, bgWidth, bgHeight, effectiveScale))}
+        onDragEnd={(e) => { setGuides({ v: false, h: false }); onChange({ x: e.target.x(), y: e.target.y() }); }}
+        onTransformEnd={() => {
+          const node = groupRef.current;
+          if (!node) return;
+          onChange({ x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY(), rotation: node.rotation() });
+        }}
+      >
+        {isBadge && (
+          <Rect width={box.w + padX * 2} height={pillH} cornerRadius={pillH / 2} fill={layer.bgColor} />
+        )}
+        <Text
+          ref={textRef}
+          x={padX} y={padY}
+          text={layer.text}
+          fontFamily={layer.fontFamily}
+          fontSize={layer.fontSize}
+          fill={layer.color}
+          shadowEnabled={!isBadge && glow.enabled}
+          shadowColor={glow.color} shadowBlur={glow.blur}
+          shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+          shadowOpacity={glow.opacity}
+        />
+      </Group>
+      {isSelected && (
+        <Transformer
+          ref={trRef}
+          rotateEnabled
+          enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+          boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)}
         />
       )}
     </>
@@ -376,7 +572,7 @@ function EffectsPanel({ label, effects, onChange, L }) {
  * remaining title/logo layer can't be deleted into an empty (and then
  * auto-refilled - see PosterConstructor's default-placement effects)
  * state via this button. */
-function LayerToolbar({ layer, siblingCount, isCropEditing, onDuplicate, onDelete, onToggleCrop, onResetCrop, L }) {
+function LayerToolbar({ layer, siblingCount, isCropEditing, allowCrop = true, onDuplicate, onDelete, onToggleCrop, onResetCrop, L }) {
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
       {!isCropEditing && (
@@ -385,11 +581,13 @@ function LayerToolbar({ layer, siblingCount, isCropEditing, onDuplicate, onDelet
           {L.poster_duplicate}
         </button>
       )}
-      <button className="btn btn-accent-soft" style={{ fontSize: 11.5, padding: '5px 9px', gap: 5 }} onClick={onToggleCrop}>
-        <Crop size={12} />
-        {isCropEditing ? L.poster_cropDone : L.poster_crop}
-      </button>
-      {layer.crop && !isCropEditing && (
+      {allowCrop && (
+        <button className="btn btn-accent-soft" style={{ fontSize: 11.5, padding: '5px 9px', gap: 5 }} onClick={onToggleCrop}>
+          <Crop size={12} />
+          {isCropEditing ? L.poster_cropDone : L.poster_crop}
+        </button>
+      )}
+      {allowCrop && layer.crop && !isCropEditing && (
         <button className="btn btn-accent-soft" style={{ fontSize: 11.5, padding: '5px 9px', gap: 5 }} onClick={onResetCrop}>
           <RotateCcw size={12} />
           {L.poster_cropReset}
@@ -430,6 +628,48 @@ function GlassPanel({ glass, onChange, onRemove, L }) {
         label={L.poster_glassCorner} value={Math.round(glass.cornerRadius)} min={0} max={maxCorner}
         onChange={(v) => onChange({ ...glass, cornerRadius: v })}
       />
+    </div>
+  );
+}
+
+/** Content/typography controls for the selected text layer (badge or
+ * halo) - text content, font family (`FONT_OPTIONS`), size, and text
+ * color, plus the pill color when the layer is a badge. The shared
+ * opacity/glow controls stay in `EffectsPanel`, rendered separately right
+ * after this panel - this one only owns the text-specific fields. */
+function TextLayerPanel({ layer, onChange, L }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10, borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)' }}>
+      <div className="scene-prompt-label">{layer.textType === 'badge' ? L.poster_textBadgeLabel : L.poster_textHaloLabel}</div>
+      <textarea
+        value={layer.text}
+        onChange={(e) => onChange({ text: e.target.value })}
+        rows={2}
+        style={{
+          width: '100%', resize: 'vertical', fontSize: 12, padding: 6, borderRadius: 6,
+          background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff',
+        }}
+      />
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-dim)' }}>
+        {L.poster_fontLabel}
+        <select
+          value={layer.fontFamily}
+          onChange={(e) => onChange({ fontFamily: e.target.value })}
+          style={{ padding: 6, borderRadius: 6, background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
+        >
+          {FONT_OPTIONS.map((f) => (
+            <option key={f.value} value={f.value} style={{ color: '#000' }}>{f.label}</option>
+          ))}
+        </select>
+      </label>
+      <EffectSlider
+        label={L.poster_fontSizeLabel} value={layer.fontSize} min={10} max={400}
+        onChange={(v) => onChange({ fontSize: v })}
+      />
+      <ColorField label={L.poster_textColorLabel} value={layer.color} onChange={(v) => onChange({ color: v })} />
+      {layer.textType === 'badge' && (
+        <ColorField label={L.poster_badgeColorLabel} value={layer.bgColor} onChange={(v) => onChange({ bgColor: v })} />
+      )}
     </div>
   );
 }
@@ -488,7 +728,7 @@ function PickerThumb({ selected, onClick, title, children }) {
  * dependency needed) and uploads it alongside the layer transforms, so
  * `onEdit` can reopen this exact same arrangement later. */
 export default function PosterConstructor({
-  L, projectId, candidates, variants, logos, initialPoster, saving, onSave, onClose,
+  L, projectId, candidates, variants, logos, initialPoster, saving, onSave, onClose, textBlock,
 }) {
   const [backgroundPath, setBackgroundPath] = useState(initialPoster?.background_path || candidates[0] || null);
   const [titleCardVariantId, setTitleCardVariantId] = useState(initialPoster?.title_card_variant_id || variants[0]?.variant_id || null);
@@ -496,12 +736,17 @@ export default function PosterConstructor({
   const [titleLayers, setTitleLayers] = useState(() => normalizeLayers(initialPoster?.layers?.title_card));
   const [logoLayers, setLogoLayers] = useState(() => normalizeLayers(initialPoster?.layers?.logo));
   const [glassLayer, setGlassLayer] = useState(initialPoster?.layers?.glass || null);
-  const [selected, setSelected] = useState(null); // {kind:'title'|'logo', id} | {kind:'glass'} | null
+  const [textLayers, setTextLayers] = useState(() => normalizeTextLayers(initialPoster?.layers?.text));
+  const [selected, setSelected] = useState(null); // {kind:'title'|'logo'|'text', id} | {kind:'glass'} | null
   const [cropEditing, setCropEditing] = useState(null); // {kind, id} | null
   const [fullscreen, setFullscreen] = useState(false);
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
   const [zoom, setZoom] = useState(1);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+  const [guides, setGuides] = useState({ v: false, h: false });
+  const [past, setPast] = useState([]);
+  const [future, setFuture] = useState([]);
+  const lastCommitAt = useRef(0);
   const stageRef = useRef(null);
 
   useEffect(() => {
@@ -567,47 +812,148 @@ export default function PosterConstructor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logoImg.image, logoId, bg.width]);
 
-  function pickBackground(path) { setBackgroundPath(path); }
-  function pickTitleCard(variantId) {
-    setTitleCardVariantId(variantId);
-    setTitleLayers([]);
+  /** Undo/redo: a single choke point every document mutation runs through.
+   * Snapshots the pre-mutation document into `past` (clearing `future`,
+   * since a fresh edit invalidates any redo branch) before applying
+   * `mutate` - unless the previous commit was under 400ms ago, in which
+   * case it's coalesced into that same snapshot instead of pushing a new
+   * one. That coalescing is what keeps a single slider/color/text-field
+   * drag (which re-fires this on every tick) from flooding the history
+   * with one entry per pixel/keystroke - see the plan's rationale. */
+  function currentDoc() {
+    return { backgroundPath, titleCardVariantId, logoId, titleLayers, logoLayers, glassLayer, textLayers };
+  }
+  function applyDoc(doc) {
+    setBackgroundPath(doc.backgroundPath);
+    setTitleCardVariantId(doc.titleCardVariantId);
+    setLogoId(doc.logoId);
+    setTitleLayers(doc.titleLayers);
+    setLogoLayers(doc.logoLayers);
+    setGlassLayer(doc.glassLayer);
+    setTextLayers(doc.textLayers);
+  }
+  function commit(mutate) {
+    const now = Date.now();
+    if (now - lastCommitAt.current > 400) {
+      setPast((p) => [...p, currentDoc()].slice(-MAX_HISTORY));
+      setFuture([]);
+    }
+    lastCommitAt.current = now;
+    mutate();
+  }
+  function undo() {
+    if (past.length === 0) return;
+    const prev = past[past.length - 1];
+    setFuture((f) => [currentDoc(), ...f]);
+    setPast((p) => p.slice(0, -1));
+    applyDoc(prev);
+    lastCommitAt.current = 0;
     setSelected(null);
     setCropEditing(null);
+  }
+  function redo() {
+    if (future.length === 0) return;
+    const next = future[0];
+    setPast((p) => [...p, currentDoc()]);
+    setFuture((f) => f.slice(1));
+    applyDoc(next);
+    lastCommitAt.current = 0;
+    setSelected(null);
+    setCropEditing(null);
+  }
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // undo/redo intentionally omitted: they're recreated every render but only
+    // *do* anything different once past/future change, so resubscribing on
+    // those two (rather than every render - e.g. every drag-guide update) is
+    // the actual intent, not an oversight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [past, future]);
+
+  function pickBackground(path) { commit(() => setBackgroundPath(path)); }
+  function pickTitleCard(variantId) {
+    commit(() => {
+      setTitleCardVariantId(variantId);
+      setTitleLayers([]);
+      setSelected(null);
+      setCropEditing(null);
+    });
   }
   function pickLogo(id) {
-    setLogoId(id);
-    setLogoLayers([]);
-    setSelected(null);
-    setCropEditing(null);
+    commit(() => {
+      setLogoId(id);
+      setLogoLayers([]);
+      setSelected(null);
+      setCropEditing(null);
+    });
   }
-  function addGlass() { if (!bg.width || glassLayer) return; setGlassLayer(makeDefaultGlass(bg.width, bg.height)); setSelected({ kind: 'glass' }); }
-  function removeGlass() { setGlassLayer(null); setSelected((s) => (s?.kind === 'glass' ? null : s)); }
+  function addGlass() {
+    if (!bg.width || glassLayer) return;
+    commit(() => { setGlassLayer(makeDefaultGlass(bg.width, bg.height)); setSelected({ kind: 'glass' }); });
+  }
+  function removeGlass() {
+    commit(() => { setGlassLayer(null); setSelected((s) => (s?.kind === 'glass' ? null : s)); });
+  }
+
+  function addTextLayer(textType) {
+    if (!bg.width) return;
+    commit(() => {
+      const defaults = parseTextBlock(textBlock);
+      const fallback = { title: L.poster_defaultTitleText, author: L.poster_defaultAuthorText };
+      const layer = makeTextLayer(textType, bg, defaults, fallback);
+      setTextLayers((list) => [...list, layer]);
+      setSelected({ kind: 'text', id: layer.id });
+    });
+  }
+
+  function layerListFor(kind) {
+    if (kind === 'title') return [titleLayers, setTitleLayers];
+    if (kind === 'logo') return [logoLayers, setLogoLayers];
+    return [textLayers, setTextLayers];
+  }
 
   function updateLayer(kind, id, patch) {
-    const setList = kind === 'title' ? setTitleLayers : setLogoLayers;
-    setList((list) => list.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+    commit(() => {
+      const [, setList] = layerListFor(kind);
+      setList((list) => list.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+    });
   }
 
   function duplicateLayer(kind, id) {
-    const list = kind === 'title' ? titleLayers : logoLayers;
-    const setList = kind === 'title' ? setTitleLayers : setLogoLayers;
-    const src = list.find((l) => l.id === id);
-    if (!src) return;
-    const copy = {
-      ...src, id: genId(), x: src.x + 24, y: src.y + 24,
-      crop: src.crop ? { ...src.crop } : null,
-      effects: { glow: { ...src.effects.glow }, opacity: src.effects.opacity },
-    };
-    setList([...list, copy]);
-    setSelected({ kind, id: copy.id });
-    setCropEditing(null);
+    commit(() => {
+      const [list, setList] = layerListFor(kind);
+      const src = list.find((l) => l.id === id);
+      if (!src) return;
+      const copy = {
+        ...src, id: genId(), x: src.x + 24, y: src.y + 24,
+        effects: { glow: { ...src.effects.glow }, opacity: src.effects.opacity },
+        ...(kind !== 'text' ? { crop: src.crop ? { ...src.crop } : null } : {}),
+      };
+      setList([...list, copy]);
+      setSelected({ kind, id: copy.id });
+      setCropEditing(null);
+    });
   }
 
   function deleteLayer(kind, id) {
-    const setList = kind === 'title' ? setTitleLayers : setLogoLayers;
-    setList((list) => list.filter((l) => l.id !== id));
-    setSelected(null);
-    setCropEditing(null);
+    commit(() => {
+      const [, setList] = layerListFor(kind);
+      setList((list) => list.filter((l) => l.id !== id));
+      setSelected(null);
+      setCropEditing(null);
+    });
   }
 
   function zoomAtPoint(pointer, factor) {
@@ -741,13 +1087,20 @@ export default function PosterConstructor({
     onSave({
       blob, backgroundPath, titleCardVariantId, logoId,
       canvasSize: { width: bg.width, height: bg.height },
-      layers: { title_card: titleLayers, logo: logoId ? logoLayers : null, glass: glassLayer },
+      layers: { title_card: titleLayers, logo: logoId ? logoLayers : null, glass: glassLayer, text: textLayers },
       posterId: initialPoster?.poster_id,
     });
   }
 
   const panelStyle = fullscreen
-    ? { flex: `0 0 ${SIDE_PANEL_WIDTH}px`, width: SIDE_PANEL_WIDTH, display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto', minHeight: 0 }
+    // paddingTop reserves room for the floating Minimize2/X buttons
+    // (top:10 + 30px tall, see the fullscreen branch below), which sit
+    // directly over this panel's top-right corner and would otherwise
+    // overlap the zoom/undo row that used to be the panel's first child.
+    ? {
+      flex: `0 0 ${SIDE_PANEL_WIDTH}px`, width: SIDE_PANEL_WIDTH, display: 'flex', flexDirection: 'column', gap: 14,
+      overflowY: 'auto', minHeight: 0, paddingTop: 48,
+    }
     : { flex: '1 1 220px', minWidth: 220, display: 'flex', flexDirection: 'column', gap: 14 };
 
   const pictureBox = (
@@ -777,7 +1130,8 @@ export default function PosterConstructor({
               {glassLayer && (
                 <OverlayGlass
                   transform={glassLayer} isSelected={selected?.kind === 'glass'}
-                  onSelect={() => setSelected({ kind: 'glass' })} onChange={setGlassLayer}
+                  onSelect={() => setSelected({ kind: 'glass' })} onChange={(next) => commit(() => setGlassLayer(next))}
+                  bgWidth={bg.width} bgHeight={bg.height} effectiveScale={effectiveScale} setGuides={setGuides}
                 />
               )}
               {titleLayers.map((layer) => (
@@ -789,6 +1143,7 @@ export default function PosterConstructor({
                   onSelect={() => setSelected({ kind: 'title', id: layer.id })}
                   onChange={(patch) => updateLayer('title', layer.id, patch)}
                   onCropChange={(crop) => updateLayer('title', layer.id, { crop })}
+                  bgWidth={bg.width} bgHeight={bg.height} effectiveScale={effectiveScale} setGuides={setGuides}
                 />
               ))}
               {logoId && logoLayers.map((layer) => (
@@ -800,8 +1155,33 @@ export default function PosterConstructor({
                   onSelect={() => setSelected({ kind: 'logo', id: layer.id })}
                   onChange={(patch) => updateLayer('logo', layer.id, patch)}
                   onCropChange={(crop) => updateLayer('logo', layer.id, { crop })}
+                  bgWidth={bg.width} bgHeight={bg.height} effectiveScale={effectiveScale} setGuides={setGuides}
                 />
               ))}
+              {textLayers.map((layer) => (
+                <OverlayText
+                  key={layer.id}
+                  layer={layer}
+                  isSelected={selected?.kind === 'text' && selected.id === layer.id}
+                  onSelect={() => setSelected({ kind: 'text', id: layer.id })}
+                  onChange={(patch) => updateLayer('text', layer.id, patch)}
+                  bgWidth={bg.width} bgHeight={bg.height} effectiveScale={effectiveScale} setGuides={setGuides}
+                />
+              ))}
+              {guides.v && (
+                <Line
+                  points={[bg.width / 2, 0, bg.width / 2, bg.height]}
+                  stroke="#ff3b6f" strokeWidth={1.5 / effectiveScale}
+                  dash={[8 / effectiveScale, 6 / effectiveScale]} listening={false}
+                />
+              )}
+              {guides.h && (
+                <Line
+                  points={[0, bg.height / 2, bg.width, bg.height / 2]}
+                  stroke="#ff3b6f" strokeWidth={1.5 / effectiveScale}
+                  dash={[8 / effectiveScale, 6 / effectiveScale]} listening={false}
+                />
+              )}
             </Group>
           </Layer>
         </Stage>
@@ -809,8 +1189,8 @@ export default function PosterConstructor({
     </div>
   );
 
-  const selectedLayer = selected && (selected.kind === 'title' || selected.kind === 'logo')
-    ? (selected.kind === 'title' ? titleLayers : logoLayers).find((l) => l.id === selected.id)
+  const selectedLayer = selected && (selected.kind === 'title' || selected.kind === 'logo' || selected.kind === 'text')
+    ? layerListFor(selected.kind)[0].find((l) => l.id === selected.id)
     : null;
   const isEditingSelectedCrop = !!(selectedLayer && cropEditing?.kind === selected.kind && cropEditing.id === selected.id);
 
@@ -865,6 +1245,13 @@ export default function PosterConstructor({
           <div style={panelStyle}>
             {bg.image && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={undo} disabled={past.length === 0} title={L.poster_undo}>
+                  <Undo2 size={13} />
+                </button>
+                <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={redo} disabled={future.length === 0} title={L.poster_redo}>
+                  <Redo2 size={13} />
+                </button>
+                <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.15)' }} />
                 <span className="scene-prompt-label" style={{ flex: 1 }}>{L.poster_zoomLabel}</span>
                 <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => zoomButton(1 / ZOOM_STEP)} title={L.poster_zoomOut}>
                   <Minus size={13} />
@@ -918,29 +1305,66 @@ export default function PosterConstructor({
                   {L.poster_addGlass}
                 </button>
               )}
+              {textLayers.map((layer) => (
+                <PickerThumb
+                  key={layer.id} selected={selected?.kind === 'text' && selected.id === layer.id}
+                  onClick={() => setSelected({ kind: 'text', id: layer.id })} title={layer.text}
+                >
+                  <span
+                    style={{
+                      fontFamily: layer.fontFamily, fontSize: 15, color: '#fff', fontWeight: 700,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%',
+                      background: layer.textType === 'badge' ? '#000' : 'transparent', borderRadius: 5,
+                      textShadow: layer.textType === 'halo' ? '0 0 4px rgba(0,0,0,0.6)' : 'none',
+                    }}
+                  >
+                    Aa
+                  </span>
+                </PickerThumb>
+              ))}
+              <button className="btn" style={{ fontSize: 12, padding: '6px 10px', gap: 6 }} onClick={() => addTextLayer('badge')} disabled={!bg.width}>
+                <Type size={13} />
+                {L.poster_addTextBadge}
+              </button>
+              <button className="btn" style={{ fontSize: 12, padding: '6px 10px', gap: 6 }} onClick={() => addTextLayer('halo')} disabled={!bg.width}>
+                <Type size={13} />
+                {L.poster_addTextHalo}
+              </button>
             </PickerRow>
 
             <div style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{L.poster_dragHint}</div>
 
             {selected?.kind === 'glass' && glassLayer && (
-              <GlassPanel glass={glassLayer} onChange={setGlassLayer} onRemove={removeGlass} L={L} />
+              <GlassPanel glass={glassLayer} onChange={(next) => commit(() => setGlassLayer(next))} onRemove={removeGlass} L={L} />
             )}
 
             {selectedLayer && (
               <>
                 <LayerToolbar
                   layer={selectedLayer}
-                  siblingCount={(selected.kind === 'title' ? titleLayers : logoLayers).length}
+                  siblingCount={layerListFor(selected.kind)[0].length}
                   isCropEditing={isEditingSelectedCrop}
+                  allowCrop={selected.kind !== 'text'}
                   onDuplicate={() => duplicateLayer(selected.kind, selected.id)}
                   onDelete={() => deleteLayer(selected.kind, selected.id)}
                   onToggleCrop={() => setCropEditing(isEditingSelectedCrop ? null : { kind: selected.kind, id: selected.id })}
                   onResetCrop={() => updateLayer(selected.kind, selected.id, { crop: null })}
                   L={L}
                 />
+                {selected.kind === 'text' && (
+                  <TextLayerPanel
+                    layer={selectedLayer}
+                    onChange={(patch) => updateLayer('text', selected.id, patch)}
+                    L={L}
+                  />
+                )}
                 {!isEditingSelectedCrop && (
                   <EffectsPanel
-                    label={selected.kind === 'title' ? L.poster_titleCardLabel : L.poster_logoLabel}
+                    label={selected.kind === 'title'
+                      ? L.poster_titleCardLabel
+                      : selected.kind === 'logo'
+                        ? L.poster_logoLabel
+                        : (selectedLayer.textType === 'badge' ? L.poster_textBadgeLabel : L.poster_textHaloLabel)}
                     effects={selectedLayer.effects}
                     onChange={(next) => updateLayer(selected.kind, selected.id, { effects: next })}
                     L={L}

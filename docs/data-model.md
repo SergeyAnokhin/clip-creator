@@ -80,7 +80,8 @@ variant rather than replacing one.
 
 **Poster**: `{poster_id, file_path, background_path, title_card_variant_id,
 logo_id, canvas_size{width,height}, layers{title_card[{id,x,y,scaleX,scaleY,rotation,crop,effects}],
-logo[{...}]|null, glass{x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null},
+logo[{...}]|null, glass{x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null,
+text[{id,x,y,scaleX,scaleY,rotation,textType,text,fontFamily,fontSize,color,bgColor,effects}]},
 rating, is_selected, generated_at}` — the Poster
 constructor's output: `background_path` (a scene/reference image path,
 same shape as `TitleCard.reference_image_paths` entries) and
@@ -118,6 +119,23 @@ key simply lose that effect on next load, no migration.)
 Unlike `title_card`/`logo`, `glass` is not tied to a picked source image —
 it's a standalone decorative rounded-rect panel (a simulated "frosted glass"
 look), limited to one instance, and also opaque/unvalidated on the backend.
+
+`text` is an array of freely-editable text layers (also opaque/unvalidated on
+the backend, added client-side after both title-card variants and posters
+already existed, so older saved posters simply have no `text` key —
+`normalizeTextLayers` in `PosterConstructor.jsx` treats a missing/non-array
+value as `[]`). `textType` is `'badge'` (a black rounded-pill background with
+white text, defaults to the author line) or `'halo'` (bare text with a
+drop-shadow "halo" effect reusing the `effects.glow` shape below, defaults to
+the title line) — both default from `title_card.text_block`'s two quoted
+lines (title / author), parsed by `parseTextBlock`. `fontFamily` is one of
+`PosterConstructor.jsx`'s `FONT_OPTIONS` (Forum, Montserrat, PT Sans, Lato,
+Oswald, Roboto Condensed, Rubik, Playfair Display — all verified to include
+cyrillic glyphs except Lato, kept only for latin text since poster text is
+typically Russian). `fontSize`/`color` and, for `badge`, `bgColor` are plain
+per-layer style fields; `effects` reuses the exact same
+`{glow{enabled,color,blur,distance,opacity}, opacity}` shape as `title_card`/
+`logo` layers.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads

@@ -548,7 +548,8 @@ draggable/resizable layout, flattened to PNG client-side
   canvas_size: {width, height},         # background's natural size
   layers: { title_card: [{id,x,y,scaleX,scaleY,rotation,crop,effects}],
             logo: [{...}]|null,
-            glass: {x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null },
+            glass: {x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null,
+            text: [{id,x,y,scaleX,scaleY,rotation,textType,text,fontFamily,fontSize,color,bgColor,effects}] },
   rating, is_selected, generated_at }
 ```
 
@@ -618,7 +619,11 @@ true edge-to-edge `100vw`/`100vh` overlay, and the collapse/close buttons
 float over the picture's top-right corner instead of taking their own
 layout row — so the picture cell can grow to fill essentially the entire
 viewport height (only `FULLSCREEN_V_RESERVE`, a small bottom-padding
-buffer, is reserved). The tools column stays a fixed `SIDE_PANEL_WIDTH`
+buffer, is reserved). Since the collapse/close buttons float over the same
+top-right corner the tools panel docks to, the panel gets a `paddingTop`
+(fullscreen only) sized to clear them, so the zoom/undo row that used to be
+the panel's first child doesn't render underneath those buttons. The tools
+column stays a fixed `SIDE_PANEL_WIDTH`
 (300px) docked flush to the right edge in both modes — `flex: 1` on the
 picture cell plus a fixed-width (non-growing) panel, rather than the
 reverse, is what keeps the extra space from piling up as a dead zone next
@@ -650,6 +655,56 @@ collapsible (`PickerRow`'s `collapsible` prop, chevron toggle, open/closed
 state kept local to each row) so the fixed-width panel stays manageable
 once several sections have content — logo and objects default closed since
 they're touched less often than background/title card.
+
+**Text layers.** The "Объекты" row also offers two freely-editable text
+layer types, rendered by `OverlayText` (the same drag/Transformer/select
+skeleton as `OverlayImage`, minus crop — text has no crop concept):
+`badge` (a black rounded-pill background behind white text, default font
+Forum) and `halo` (bare text with a drop-shadow "halo", default font
+Montserrat) — reusing the exact same `effects.glow` shadow mechanism
+`OverlayImage` already has for images, rather than a second duplicated text
+node, since Konva `Text` exposes the same `shadow*` props as `Image`. A new
+layer's default content comes from the Title Card stage's `text_block`
+(`parseTextBlock` splits its two quoted lines into title/author — `halo`
+defaults to the title, `badge` to the author), falling back to plain
+placeholder strings when `text_block` is empty. Font choice
+(`FONT_OPTIONS` in `PosterConstructor.jsx`) is deliberately limited to
+families verified (via the raw Google Fonts `css2` response, not just the
+specimen page) to ship cyrillic glyphs, since poster text is typically
+Russian — Forum, Montserrat, PT Sans, Oswald, Roboto Condensed, Rubik,
+Playfair Display all do; Lato does not and is kept in the list only for
+latin content, never as a default. The badge's pill `Rect` auto-sizes to
+the rendered text (read back from the Konva `Text` node's `width()`/
+`height()` after paint, re-measured once more on `document.fonts.ready` in
+case the paint raced the Google Fonts `<link>` in `index.html`).
+
+**Undo/redo.** A single document snapshot —
+`{backgroundPath, titleCardVariantId, logoId, titleLayers, logoLayers,
+glassLayer, textLayers}` — flows through one choke point, `commit(mutate)`:
+it pushes the pre-mutation snapshot onto a `past` stack (clearing `future`)
+before running `mutate`, unless the previous commit landed under 400ms ago,
+in which case it's coalesced into that same snapshot instead of pushing a
+new one — the mechanism that keeps a single slider/color/text-field drag
+(which calls `commit` on every tick) from flooding the history with one
+entry per pixel/keystroke. Every mutating action in the file (pick
+background/title/logo, add/remove glass, add/duplicate/delete/update any
+layer including text) routes through `commit`. Undo/redo buttons sit next
+to the zoom row (`Undo2`/`Redo2`, disabled when their stack is empty);
+`Ctrl/Cmd+Z` and `Ctrl/Cmd+Y`/`Ctrl/Cmd+Shift+Z` do the same, via a
+`window`-level `keydown` listener that ignores the event while focus is in
+an `INPUT`/`TEXTAREA`/`contentEditable` element (so native undo inside a
+text field isn't hijacked).
+
+**Center-snap guides.** Dragging any overlay (image, glass, or text) toward
+the poster's own center shows a dashed guide line and gently snaps to it —
+`snapGroupToCenter` (called from each overlay's `onDragMove`) compares the
+dragged Konva node's own bounding-box center against the poster's center
+and, within a `CENTER_SNAP_PX`-screen-pixel threshold (converted to local/
+zoom-independent units via `effectiveScale`), mutates the node's position
+directly — a cheap Konva-only operation, not a React state update, so it
+doesn't trigger a re-render on every drag frame. Only the guide-visibility
+flags (`guides.v`/`guides.h`, driving two `Line` nodes) are React state.
+Snapping only applies to dragging, not resizing/rotating.
 
 - `POST /api/projects/{id}/title-card/poster` (multipart: `file` PNG +
   `background_path`, `title_card_variant_id`, `logo_id`, `layers` (JSON),
