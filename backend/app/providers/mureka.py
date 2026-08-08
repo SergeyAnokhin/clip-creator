@@ -189,7 +189,7 @@ async def _run_job(
             'model': model_composite, 'style': style, 'lyrics': lyrics,
             'params': {'n': n, 'gender': gender, 'reference_id': reference_id},
             'rating': 0, 'is_selected': False, 'tag_ids': [],
-            'generated_at': _now(), 'raw': choice,
+            'generated_at': _now(), 'raw': choice, 'reference_used': None,
         })
 
     if not tracks:
@@ -204,6 +204,19 @@ async def _run_job(
         project = storage.load_project(slug)
         if project is not None:
             mureka_data = project.setdefault('mureka', {'reference_audio': [], 'tracks': []})
+            reference_used = None
+            if reference_id:
+                ref_entry = next(
+                    (r for r in mureka_data.get('reference_audio', []) if r.get('mureka_file_id') == reference_id),
+                    None,
+                )
+                if ref_entry:
+                    reference_used = {
+                        'source_id': ref_entry.get('source_id'), 'filename': ref_entry.get('filename'),
+                        'start_ms': ref_entry.get('start_ms'), 'end_ms': ref_entry.get('end_ms'),
+                    }
+            for track in tracks:
+                track['reference_used'] = reference_used
             mureka_data['tracks'] = [*mureka_data.get('tracks', []), *tracks]
             project['updated_at'] = _now()
             storage.save_project(slug, project)
@@ -422,13 +435,29 @@ async def stem_track(
 # this repo shells out to an external binary.
 
 def _run_ffmpeg_trim(src_path: Path, start_s: float, duration_s: float, dest_path: Path) -> None:
-    result = subprocess.run(
-        ['ffmpeg', '-y', '-i', str(src_path), '-ss', f'{start_s:.3f}', '-t', f'{duration_s:.3f}',
-         '-c:a', 'libmp3lame', '-q:a', '2', str(dest_path)],
-        capture_output=True, check=False,
-    )
+    cmd = ['ffmpeg', '-y', '-i', str(src_path), '-ss', f'{start_s:.3f}', '-t', f'{duration_s:.3f}',
+           '-c:a', 'libmp3lame', '-q:a', '2', str(dest_path)]
+    result = subprocess.run(cmd, capture_output=True, check=False)
     if result.returncode != 0:
-        raise RuntimeError(f'ffmpeg не смог обрезать файл: {result.stderr.decode(errors="replace")[-400:]}')
+        stderr = result.stderr.decode(errors='replace').strip()
+        stdout = result.stdout.decode(errors='replace').strip()
+        # Seen live with an empty stderr *and* stdout despite a non-zero exit
+        # code - ffmpeg itself always writes something before failing, so
+        # that combination means the process was cut off before it could run
+        # at all (most likely something external killed/blocked it, e.g.
+        # antivirus flagging a subprocess spawned by the reloaded backend) -
+        # worth calling out explicitly since a truly empty message otherwise
+        # gives no lead at all.
+        detail = stderr or stdout or (
+            'ffmpeg ничего не вывел, хотя завершился с ошибкой - вероятно, процесс '
+            'был прерван до запуска (например, антивирусом). Проверьте лог backend '
+            'в терминале и попробуйте ещё раз.'
+        )
+        console_log.log_error(
+            'ffmpeg trim',
+            f'exit={result.returncode} cmd={" ".join(cmd)}\nstderr={stderr!r}\nstdout={stdout!r}',
+        )
+        raise RuntimeError(f'ffmpeg не смог обрезать файл (код {result.returncode}): {detail[-400:]}')
 
 
 async def trim_audio(src_path: Path, start_ms: int, end_ms: int, dest_path: Path) -> None:

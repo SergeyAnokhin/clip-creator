@@ -290,6 +290,12 @@ export default function MurekaTrackDetailModal({
             <div className="mureka-detail-meta-row"><b>{L.mureka_detailDuration}:</b> {formatMs(track.duration_ms)}</div>
             {track.raw?.id && <div className="mureka-detail-meta-row"><b>{L.mureka_detailSongId}:</b> {track.raw.id}</div>}
             {track.raw?.index != null && <div className="mureka-detail-meta-row"><b>{L.mureka_detailChoiceIndex}:</b> {track.raw.index}</div>}
+            {track.reference_used && (
+              <div className="mureka-detail-meta-row">
+                <b>{L.mureka_detailReferenceLabel}:</b> {track.reference_used.filename || '—'}
+                {' '}({formatMs(track.reference_used.start_ms)} → {formatMs(track.reference_used.end_ms)})
+              </div>
+            )}
             <details>
               <summary>{L.mureka_detailsStyle}</summary>
               <div className="mureka-detail-style-text">{track.style || '—'}</div>

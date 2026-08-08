@@ -23,7 +23,7 @@ function formatTime(s) {
  * (useMurekaStage.js's trimReferenceSource, which cuts it server-side via
  * ffmpeg and uploads only that clip to Mureka - the source file itself
  * never reaches Mureka as-is). */
-export default function ReferenceAudioTrimmer({ L, source, uploading, onConfirm, onClose }) {
+export default function ReferenceAudioTrimmer({ L, projectId, source, uploading, onConfirm, onClose }) {
   const audioRef = useRef(null);
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
@@ -43,7 +43,7 @@ export default function ReferenceAudioTrimmer({ L, source, uploading, onConfirm,
     let cancelled = false;
     setPeaks(null);
     setDecodeError(null);
-    fetch(mediaUrl(source.file_path))
+    fetch(mediaUrl(`projects/${projectId}/${source.file_path}`))
       .then((r) => r.arrayBuffer())
       .then((buf) => {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -71,7 +71,25 @@ export default function ReferenceAudioTrimmer({ L, source, uploading, onConfirm,
         }
         setPeaks(arr);
       })
-      .catch(() => { if (!cancelled) setDecodeError(L.mureka_trimDecodeError); });
+      .catch(() => {
+        if (cancelled) return;
+        setDecodeError(L.mureka_trimDecodeError);
+        // Waveform preview only - the actual cut always happens server-side
+        // via ffmpeg (see the module docstring), so a decode failure here
+        // shouldn't block picking a window. Fall back to the plain <audio>
+        // element's own (more lenient) duration so selection still works,
+        // just without waveform bars.
+        const applyNativeDuration = (total) => {
+          if (cancelled || !Number.isFinite(total) || total <= 0) return;
+          setDuration(total);
+          setSelStart(0);
+          setSelEnd(Math.min(MIN_SELECTION_S, total));
+        };
+        const el = audioRef.current;
+        if (!el) return;
+        if (Number.isFinite(el.duration) && el.duration > 0) applyNativeDuration(el.duration);
+        else el.addEventListener('loadedmetadata', () => applyNativeDuration(el.duration), { once: true });
+      });
     return () => { cancelled = true; };
   }, [source.file_path, L.mureka_trimDecodeError]);
 
@@ -156,7 +174,7 @@ export default function ReferenceAudioTrimmer({ L, source, uploading, onConfirm,
   }
 
   const tooShort = duration > 0 && duration < MIN_SELECTION_S;
-  const canConfirm = !uploading && peaks && !tooShort && (selEnd - selStart) >= MIN_SELECTION_S - 0.05;
+  const canConfirm = !uploading && duration > 0 && !tooShort && (selEnd - selStart) >= MIN_SELECTION_S - 0.05;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -171,19 +189,23 @@ export default function ReferenceAudioTrimmer({ L, source, uploading, onConfirm,
         <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{source.filename}</div>
 
         <audio
-          ref={audioRef} src={mediaUrl(source.file_path)}
+          ref={audioRef} src={mediaUrl(`projects/${projectId}/${source.file_path}`)} preload="metadata"
           onTimeUpdate={onTimeUpdate} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
           style={{ display: 'none' }}
         />
 
-        {!peaks && !decodeError && (
+        {!duration && !decodeError && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '30px 0', justifyContent: 'center', color: 'var(--text-dim)' }}>
             <Loader2 size={16} className="spin" /> {L.mureka_trimDecoding}
           </div>
         )}
-        {decodeError && <div style={{ fontSize: 13, color: '#fca5a5', padding: '20px 0' }}>⚠️ {decodeError}</div>}
+        {decodeError && (
+          <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 8 }}>
+            ⚠️ {decodeError}{duration ? ` — ${L.mureka_trimNoWaveform}` : ''}
+          </div>
+        )}
 
-        {peaks && (
+        {duration > 0 && (
           <>
             <div className="mureka-trimmer-waveform">
               <canvas ref={canvasRef} width={900} height={120} onClick={(e) => seekTo(xToTime(e.clientX))} />

@@ -2017,6 +2017,14 @@
   align-items: center;
 }
 
+.mureka-reference-menu-divider {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  padding: 6px 8px 2px;
+}
+
 .mureka-reference-menu-row button:first-child {
   flex: 1;
 }

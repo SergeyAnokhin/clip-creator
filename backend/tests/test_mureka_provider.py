@@ -203,6 +203,45 @@ def test_start_job_success_writes_tracks_and_persists_project(tmp_path, monkeypa
         assert track['tag_ids'] == []
         assert track['style'] == 'a style'
         assert track['lyrics'] == 'some lyrics'
+        assert track['reference_used'] is None
+
+
+def test_start_job_with_reference_id_records_reference_used(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import storage
+
+    storage.save_project('poem-a', {'id': 'poem-a', 'mureka': {
+        'tracks': [],
+        'reference_audio': [{
+            'id': 'mref_1', 'mureka_file_id': 'file_abc', 'file_path': 'music/references/ref_1.mp3',
+            'filename': 'song.mp3', 'uploaded_at': 't', 'source_id': 'msrc_1', 'start_ms': 1000, 'end_ms': 31000,
+        }],
+    }})
+
+    _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'task_1', 'status': 'preparing'}),
+        _FakeResponse(200, {
+            'status': 'succeeded',
+            'choices': [{'index': 0, 'id': 'c0', 'url': 'https://cdn.mureka.ai/c0.mp3', 'duration': 45000}],
+        }),
+        _FakeResponse(200, content=b'MP3DATA0'),
+    ])
+
+    async def scenario():
+        job_id = mureka.start_job(
+            'poem-a', 'a style', 'some lyrics', 'auto', 1, None, 'file_abc', {'api_keys': {'mureka': 'k'}},
+        )
+        return await _wait_for_terminal(job_id)
+
+    job = asyncio.run(scenario())
+
+    assert job['status'] == 'completed'
+    assert job['tracks'][0]['reference_used'] == {
+        'source_id': 'msrc_1', 'filename': 'song.mp3', 'start_ms': 1000, 'end_ms': 31000,
+    }
+
+    project = storage.load_project('poem-a')
+    assert project['mureka']['tracks'][0]['reference_used']['source_id'] == 'msrc_1'
 
 
 def test_start_job_missing_key_fails_job(tmp_path, monkeypatch):

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
-from .. import storage, usage
+from .. import console_log, storage, usage
 from ..providers import images, mureka, scenes, suno, title_card, wish_library
 from .projects import migrate_legacy_project
 from .settings import DEFAULT_SETTINGS
@@ -666,7 +666,11 @@ async def delete_mureka_reference_audio(project_id: str, ref_id: str):
 # an uploaded source file is kept locally first ("reference source") so the
 # frontend can let the user audition it and pick a >=30s window; only the
 # trimmed clip that comes out of /trim below ever reaches Mureka, via the
-# same upload_mureka_reference_audio flow above.
+# same upload_mureka_reference_audio flow above. A source is never deleted
+# by a successful trim - it stays in reference_sources so the same upload
+# can be trimmed into another window later (the resulting reference_audio
+# entry records which source_id/start_ms/end_ms it came from); only an
+# explicit DELETE on the source itself removes it.
 
 @router.post('/{project_id}/mureka/reference-sources')
 async def upload_mureka_reference_source(project_id: str, file: UploadFile = File(...)):
@@ -674,6 +678,7 @@ async def upload_mureka_reference_source(project_id: str, file: UploadFile = Fil
     if suffix not in _ALLOWED_REFERENCE_SOURCE_EXTENSIONS:
         raise HTTPException(415, 'Unsupported audio type')
     contents = await file.read()
+    console_log.log_step('📤', 'reference-source upload', f'project={project_id!r} filename={file.filename!r} bytes={len(contents)}')
 
     async with storage.project_lock(project_id):
         project = storage.load_project(project_id)
@@ -703,6 +708,7 @@ async def upload_mureka_reference_source(project_id: str, file: UploadFile = Fil
 
 @router.delete('/{project_id}/mureka/reference-sources/{source_id}')
 async def delete_mureka_reference_source(project_id: str, source_id: str):
+    console_log.log_step('🗑️', 'reference-source delete', f'project={project_id!r} source_id={source_id!r}')
     async with storage.project_lock(project_id):
         project = storage.load_project(project_id)
         if project is None:
@@ -743,6 +749,10 @@ async def trim_mureka_reference_source(project_id: str, source_id: str, body: di
     src_path = storage.project_dir(project_id) / source['file_path']
     trimmed_id = f'trim_{uuid4().hex[:8]}'
     trimmed_path = storage.project_dir(project_id) / 'music' / 'reference-sources' / f'{trimmed_id}.mp3'
+    console_log.log_step(
+        '✂️', 'reference-source trim',
+        f'project={project_id!r} source_id={source_id!r} {start_ms}ms→{end_ms}ms src={src_path} exists={src_path.is_file()}',
+    )
     try:
         await mureka.trim_audio(src_path, start_ms, end_ms, trimmed_path)
         trimmed_bytes = trimmed_path.read_bytes()
@@ -769,7 +779,7 @@ async def trim_mureka_reference_source(project_id: str, source_id: str, body: di
             {
                 'id': f'mref_{uuid4().hex[:8]}', 'mureka_file_id': uploaded.get('id'),
                 'file_path': f'music/references/{filename}', 'filename': source.get('filename') or f'{trimmed_id}.mp3',
-                'uploaded_at': _now(),
+                'uploaded_at': _now(), 'source_id': source_id, 'start_ms': start_ms, 'end_ms': end_ms,
             },
         ]
         mureka_field['reference_audio'] = reference_audio

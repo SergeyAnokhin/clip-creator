@@ -1063,10 +1063,56 @@ def test_trim_mureka_reference_source_success_calls_ffmpeg_then_upload(client, m
     refs = resp.json()['reference_audio']
     assert len(refs) == 1
     assert refs[0]['mureka_file_id'] == 'mureka_file_trimmed'
+    assert refs[0]['source_id'] == source_id
+    assert refs[0]['start_ms'] == 0
+    assert refs[0]['end_ms'] == 30000
 
     data_root = Path(os.environ['APP_DATA_DIR'])
     written = data_root / 'projects' / pid / refs[0]['file_path']
     assert written.read_bytes() == b'trimmed-mp3-bytes'
+
+    # The source itself is never deleted by a successful trim - it stays
+    # available so the same upload can be trimmed into another window later.
+    project = client.get(f'/api/projects/{pid}').json()
+    assert any(s['id'] == source_id for s in project['mureka']['reference_sources'])
+
+
+def test_trim_mureka_reference_source_twice_keeps_source_and_appends_second_clip(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    upload = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('song.mp3', b'raw-bytes', 'audio/mpeg')},
+    )
+    source_id = upload.json()['reference_sources'][0]['id']
+
+    async def fake_trim_audio(src_path, start_ms, end_ms, dest_path):
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(f'trimmed-{start_ms}-{end_ms}'.encode())
+
+    monkeypatch.setattr(generation_router.mureka, 'trim_audio', fake_trim_audio)
+    monkeypatch.setattr(
+        generation_router.mureka, 'upload_reference_audio',
+        AsyncMock(side_effect=[{'id': 'mureka_file_1'}, {'id': 'mureka_file_2'}]),
+    )
+
+    first = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources/{source_id}/trim',
+        json={'start_ms': 0, 'end_ms': 30000},
+    )
+    second = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources/{source_id}/trim',
+        json={'start_ms': 10000, 'end_ms': 45000},
+    )
+
+    assert first.status_code == 200 and second.status_code == 200
+    refs = second.json()['reference_audio']
+    assert len(refs) == 2
+    assert [r['source_id'] for r in refs] == [source_id, source_id]
+    assert [r['start_ms'] for r in refs] == [0, 10000]
+    assert [r['end_ms'] for r in refs] == [30000, 45000]
+
+    project = client.get(f'/api/projects/{pid}').json()
+    assert any(s['id'] == source_id for s in project['mureka']['reference_sources'])
 
 
 def test_trim_mureka_reference_source_ffmpeg_failure_returns_502(client, monkeypatch):

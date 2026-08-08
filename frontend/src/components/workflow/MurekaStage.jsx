@@ -221,12 +221,13 @@ export default function MurekaStage({
 
   async function handleTrimConfirm(startMs, endMs) {
     if (!trimmingSource) return;
+    // The source is kept regardless of outcome - it stays in referenceSources
+    // so the same upload can be trimmed into another window later instead of
+    // requiring a fresh upload each time (see ReferenceAudioTrimmer.jsx).
     const ok = await actions.trimReferenceSource(trimmingSource.id, startMs, endMs);
-    await actions.deleteReferenceSource(trimmingSource.id);
     if (ok) setTrimmingSource(null);
   }
-  async function handleTrimClose() {
-    if (trimmingSource) await actions.deleteReferenceSource(trimmingSource.id);
+  function handleTrimClose() {
     setTrimmingSource(null);
   }
 
@@ -319,6 +320,19 @@ export default function MurekaStage({
                     </button>
                   </span>
                 ))}
+                {!!(referenceSources || []).length && (
+                  <div className="mureka-reference-menu-divider">{L.mureka_referenceSourcesLabel}</div>
+                )}
+                {(referenceSources || []).map((source) => (
+                  <span key={source.id} className="mureka-reference-menu-row">
+                    <button onClick={() => { setTrimmingSource(source); setReferenceMenuOpen(false); }}>
+                      <Scissors size={11} /> {source.filename}
+                    </button>
+                    <button title={L.mureka_referenceSourceDeleteTitle} onClick={() => actions.deleteReferenceSource(source.id)}>
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
                 <button onClick={() => { setReferenceMenuOpen(false); fileInputRef.current?.click(); }} disabled={uploadingReferenceSource || uploadingReference}>
                   {(uploadingReferenceSource || uploadingReference) ? <Loader2 size={12} className="spin" /> : <Upload size={12} />}
                   {(uploadingReferenceSource || uploadingReference) ? L.mureka_referenceUploading : L.mureka_referenceUpload}
@@ -378,7 +392,7 @@ export default function MurekaStage({
 
       {trimmingSource && (
         <ReferenceAudioTrimmer
-          L={L} source={trimmingSource} uploading={trimmingReference}
+          L={L} projectId={project.id} source={trimmingSource} uploading={trimmingReference}
           onConfirm={handleTrimConfirm} onClose={handleTrimClose}
         />
       )}

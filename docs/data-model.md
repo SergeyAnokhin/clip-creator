@@ -184,21 +184,29 @@ time the stage loads (`useMurekaStage.js`'s `resetForProject`), then freely
 editable independent of the Suno-stage originals — this is literally what
 gets sent to Mureka's `song/generate`, so it doubles as the "what goes to the
 model" preview the stage shows. `reference_audio` is
-`[{id, mureka_file_id, file_path, filename, uploaded_at}]` — `file_path` a
-local copy under `music/references/` (already trimmed to a valid window,
-mp3), `mureka_file_id` the id Mureka's `files/upload` returned for it (usable
-as `reference_id` on a generate call). `reference_sources` is
+`[{id, mureka_file_id, file_path, filename, uploaded_at, source_id?, start_ms?,
+end_ms?}]` — `file_path` a local copy under `music/references/` (already
+trimmed to a valid window, mp3), `mureka_file_id` the id Mureka's
+`files/upload` returned for it (usable as `reference_id` on a generate call).
+An entry produced by the trimmer (below) also carries `source_id` (which
+`reference_sources` entry it was cut from) and the `start_ms`/`end_ms` window
+used — a plain direct upload (`uploadReferenceAudio`, no trim step) leaves
+all three `undefined`. `reference_sources` is
 `[{id, file_path, filename, uploaded_at}]` — the **untrimmed** file a user
 just uploaded (`music/reference-sources/`, any decodable audio format),
-staged only so `ReferenceAudioTrimmer.jsx` can let them pick a ≥30s window
-before anything reaches Mureka (which hard-rejects reference audio under
-30s); normally deleted again right after a successful trim or a cancelled
-edit (`useMurekaStage.js`'s `deleteReferenceSource`), so this array is
-usually empty. `tracks` is append-only, one entry per generated song:
+staged so `ReferenceAudioTrimmer.jsx` can let them pick a ≥30s window before
+anything reaches Mureka (which hard-rejects reference audio under 30s). A
+source is **never** deleted by a successful (or cancelled) trim — it stays in
+this array so the same upload can be trimmed into another window later
+(`MurekaStage.jsx`'s reference-menu list, a "✂ trim" action per source); only
+an explicit `DELETE .../reference-sources/{id}` removes it, so this array
+grows with every distinct upload rather than staying usually-empty. `tracks`
+is append-only, one entry per generated song:
 
 **MurekaTrack**: `{track_id, task_id, choice_index, file_path, duration_ms,
 model, style, lyrics, params{n, gender, reference_id}, rating, is_selected,
-tag_ids[], generated_at, raw, extended_from_track_id?, stems?}` — `file_path`
+tag_ids[], generated_at, raw, reference_used?, extended_from_track_id?,
+stems?}` — `file_path`
 under `music/` (always `.mp3`, downloaded immediately since Mureka's own
 `url` expires after 30 days). `style`/`lyrics`/`params` are a snapshot of
 exactly what was sent for this track (a "regenerate 3 tracks" call can
@@ -206,6 +214,12 @@ produce several `MurekaTrack`s from one task, one per `choices[]` entry —
 `choice_index` is that entry's index; for a track produced by "Продлить"
 (extend), `params` is `{extend_at, extend_type}` instead and
 `extended_from_track_id` points back at the source track's `track_id`).
+`reference_used` is `{source_id, filename, start_ms, end_ms} | null` — set on
+a `song/generate` call (never on extend) when `params.reference_id` resolved
+against `reference_audio` at generation time, `null` when no reference was
+used. It's a snapshot taken at generation time, not a live reference, so it
+still shows which clip/window produced this track even if that
+`reference_audio` entry is later deleted (`MurekaTrackDetailModal.jsx`).
 `rating` (0-5) and `is_selected` mirror `Image`'s shape, but **`is_selected`
 is set only by an explicit user action** (`PATCH /api/projects/{id}` with a
 recomputed `tracks` array — see the API table below) — unlike `Image`, it is
@@ -550,7 +564,7 @@ reference-image upload (multipart).
 | `DELETE /api/projects/{id}/mureka/reference-audio/{ref_id}` | → `{reference_audio}` |
 | `POST /api/projects/{id}/mureka/reference-sources` | multipart `file` (any decodable audio format) → `{reference_sources}` — stages a raw upload under `music/reference-sources/` **without** touching Mureka (which hard-rejects reference audio under 30s); `415` on a bad extension |
 | `DELETE /api/projects/{id}/mureka/reference-sources/{source_id}` | → `{reference_sources}` |
-| `POST /api/projects/{id}/mureka/reference-sources/{source_id}/trim` | `{start_ms, end_ms}` → `{reference_audio}` — cuts `[start_ms, end_ms)` from the staged source via `ffmpeg` (system dependency, see README) and forwards the result through the same flow as `/mureka/reference-audio` above; `422` if the range is invalid, `502` on an `ffmpeg` or Mureka failure (missing `ffmpeg` on `PATH` surfaces here with a clear message) |
+| `POST /api/projects/{id}/mureka/reference-sources/{source_id}/trim` | `{start_ms, end_ms}` → `{reference_audio}` — cuts `[start_ms, end_ms)` from the staged source via `ffmpeg` (system dependency, see README) and forwards the result through the same flow as `/mureka/reference-audio` above, tagging the new `reference_audio` entry with `source_id`/`start_ms`/`end_ms`; `422` if the range is invalid, `502` on an `ffmpeg` or Mureka failure (missing `ffmpeg` on `PATH` surfaces here with a clear message). The source itself is left in `reference_sources` — callable again with a different range to produce another clip from the same upload |
 | `POST /api/projects/{id}/mureka/tracks/{track_id}/extend` | `{lyrics, extend_at?, extend_type?, model?}` → `{job_id}` — real Mureka `song/extend` call ("Продлить"), same job/poll shape as `/mureka/generate`; `extend_at` defaults to the track's own `duration_ms` (extend from the end). `422` if `lyrics` is blank or the track has no Mureka `song_id` (`track.raw.id`) to extend from — e.g. an already-extended track past Mureka's ~1-month window |
 | `POST /api/projects/{id}/mureka/tracks/{track_id}/stem` | `{model?}` (`audio-separation-1\|2\|3`) → `{tracks}` — real Mureka `song/stem` call ("Разделить на дорожки"), **synchronous** (no job/poll — unlike every other real Mureka call here); appends to the track's `stems[]`. `404` if the track's `.mp3` is missing from disk, `502` on a provider failure |
 | `POST /api/settings/logos` | multipart `file` (png/webp) + `name?` → `{logos}` — appends to the global `settings.logos`, file under `app_data/logos/` |

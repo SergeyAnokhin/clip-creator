@@ -68,6 +68,27 @@ def log_request_start(model: str, kind: str, task: str | None = None) -> None:
     _safe_print(_paint(_CYAN, f'🚀 {label}→ {model} ({kind})'))
 
 
+def log_step(emoji: str, label: str, detail: str) -> None:
+    """One line for a specific endpoint's own basic parameters - on top of
+    (not instead of) `request_log.RequestLogMiddleware`'s generic per-request
+    line (method/path/status/duration, every route, no params). Use this on
+    routes where "was this route even hit, and with what" is worth seeing at
+    a glance without reading a raw path/query string - added first for the
+    reference-audio-trim flow, where a truly silent local failure (ffmpeg
+    exiting non-zero with empty stderr) needed telling apart from "the
+    request never reached the backend at all"."""
+    _safe_print(_paint(_CYAN, f'{emoji} {label}: {detail}'))
+
+
+def log_error(label: str, message: str) -> None:
+    """For local (non-provider) failures worth seeing in full in the dev
+    console - e.g. a subprocess like ffmpeg failing, where the HTTP error
+    response returned to the frontend is deliberately short and the full
+    detail (command, exit code, complete stderr) only needs to reach whoever
+    is watching this terminal."""
+    _safe_print(_paint(_RED, f'❌ [{label}] {message}'))
+
+
 def log_result(rec: dict) -> None:
     """Printed once a provider call's `usage.record()` row has been built -
     mirrors that row exactly, so this can never disagree with the ledger."""
