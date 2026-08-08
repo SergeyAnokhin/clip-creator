@@ -988,8 +988,13 @@ async def lyrics_video_mureka_track(project_id: str, track_id: str, body: dict =
     video_id = f'lvid_{uuid4().hex[:8]}'
     dest_path = storage.project_dir(project_id) / 'music' / f'{video_id}.mp4'
     usage_ctx = usage.context('mureka_lyrics_video', project_id, settings)
+    duration_ms = track.get('duration_ms')
     try:
-        result = await mureka.generate_lyrics_video(song_id, title, aspect_ratio, api_key, dest_path, usage_ctx=usage_ctx)
+        result = await mureka.generate_lyrics_video(
+            song_id, title, aspect_ratio, api_key, dest_path,
+            selection_start=0 if duration_ms else None, selection_end=duration_ms,
+            usage_ctx=usage_ctx,
+        )
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
 

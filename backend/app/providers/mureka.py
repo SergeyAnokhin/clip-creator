@@ -23,9 +23,14 @@ Confirmed against platform.mureka.ai/docs, 2026-08:
 - `POST https://api.mureka.ai/v1/song/transcribe` `{song_id}` -> `{zip_url,
   expires_at}` (a .musicxml + .pdf pair), synchronous like `song/stem`.
 - `POST https://api.mureka.ai/v1/lyrics-video/generate` `{song_id, title?,
-  aspect_ratio?}` -> `{url}` (mp4, valid 30 days), synchronous. All three
-  confirmed against platform.mureka.ai/docs, 2026-08 - none of them go
-  through the task/poll dance `song/generate`/`song/extend` use.
+  aspect_ratio?, selection_start?, selection_end?}` -> `{url}` (mp4, valid 30
+  days), synchronous. Requires either a `lyrics_start_row`/`lyrics_end_row`
+  pair or a `selection_start`/`selection_end` (ms) pair - the API rejects the
+  request with no partial-range parameter at all, so this module always
+  sends `selection_start: 0` / `selection_end: <track duration>` (the whole
+  track) since there's no UI for picking a sub-range. All three confirmed
+  against platform.mureka.ai/docs, 2026-08 - none of them go through the
+  task/poll dance `song/generate`/`song/extend` use.
 
 Unlike `images.py`'s per-variant job (`start_jobs` -> one job per requested
 image), Mureka's own `n` parameter returns several songs from a *single*
@@ -200,6 +205,7 @@ async def _run_job(
             'params': {'n': n, 'gender': gender, 'reference_id': reference_id},
             'rating': 0, 'is_selected': False, 'tag_ids': [],
             'generated_at': _now(), 'raw': choice, 'reference_used': None,
+            'request': debug_request,
         })
 
     if not tracks:
@@ -348,6 +354,7 @@ async def _run_extend_job(
             'extended_from_track_id': source_track_id,
             'rating': 0, 'is_selected': False, 'tag_ids': [],
             'generated_at': _now(), 'raw': choice,
+            'request': debug_request,
         })
 
     if not tracks:
@@ -501,6 +508,7 @@ async def transcribe_song(song_id: str, api_key: str, dest_zip_path: Path, usage
 
 async def generate_lyrics_video(
     song_id: str, title: str | None, aspect_ratio: str | None, api_key: str, dest_path: Path,
+    selection_start: int | None = None, selection_end: int | None = None,
     usage_ctx: dict | None = None,
 ) -> dict:
     started = time.monotonic()
@@ -512,6 +520,14 @@ async def generate_lyrics_video(
         body['title'] = title
     if aspect_ratio:
         body['aspect_ratio'] = aspect_ratio
+    # Mureka requires either a lyrics-row pair or a time-range pair - without
+    # one of them the API rejects the request outright ("One parameter pair
+    # is required..."). The UI has no partial-range picker, so default to the
+    # whole track (confirmed against platform.mureka.ai/docs/api/operations/
+    # post-v1-lyrics-video-generate.html, 2026-08).
+    if selection_start is not None and selection_end is not None:
+        body['selection_start'] = selection_start
+        body['selection_end'] = selection_end
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     try:
         async with httpx.AsyncClient(timeout=120) as http_client:

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Check, ChevronDown, ChevronUp, FileText, Info, Loader2, Maximize2, MoreVertical, Music4, Plus, RotateCcw,
   Scissors, Star, Trash2, Upload, Video, Wand2, X, Zap,
@@ -36,12 +36,23 @@ function formatElapsed(totalSeconds, L) {
   return `${m}${L.suno_unitMinutes} ${rem}${L.suno_unitSeconds}`;
 }
 
+/** `08.08.2026 18:23:45` - track card title timestamp (down to the second,
+ * unlike lib/format.js's `formatDate`) so several tracks generated minutes
+ * apart within the same project are distinguishable at a glance. */
+function formatTrackTimestamp(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function TrackCard({
-  L, projectId, track, index, allTags, onRate, onSelectMain, onToggleTag, onDelete,
+  L, projectId, projectTitle, track, index, allTags, onRate, onSelectMain, onToggleTag, onDelete,
   onReuseSettings, onExtend, onStem, onOpenDetail, extending, stemming,
   onDescribe, onTranscribe, onGenerateLyricsVideo, describing, transcribing, generatingVideo,
 }) {
   const audioRef = useRef(null);
+  const actionsMenuRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [tagMenuOpen, setTagMenuOpen] = useState(false);
@@ -53,6 +64,30 @@ function TrackCard({
   const duration = formatTrackDuration(track.duration_ms);
   const addedTags = (allTags || []).filter((t) => (track.tag_ids || []).includes(t.id));
   const availableTags = (allTags || []).filter((t) => !(track.tag_ids || []).includes(t.id));
+  const timestamp = formatTrackTimestamp(track.generated_at);
+  const cardTitle = projectTitle ? `${projectTitle}${timestamp ? ` — ${timestamp}` : ''}` : `${L.mureka_tracksLabel} ${index + 1}`;
+  // Which paid action (if any) is currently in flight for this track - shown
+  // as a visible row below the header instead of only as a spinner inside
+  // the ⋮ menu item, which disappears the instant the menu closes (every
+  // action closes the menu on click) and was otherwise invisible outside
+  // the browser console.
+  const busyLabel = extending ? L.mureka_busyExtending
+    : stemming ? L.mureka_busyStemming
+    : describing ? L.mureka_busyDescribing
+    : transcribing ? L.mureka_busyTranscribing
+    : generatingVideo ? L.mureka_busyGeneratingVideo
+    : null;
+
+  // Auto-collapse the actions menu on any click outside it, instead of
+  // requiring the user to re-click the ⋮ button to close it.
+  useEffect(() => {
+    if (!actionsMenuOpen) return undefined;
+    function handleClickOutside(e) {
+      if (actionsMenuRef.current && !actionsMenuRef.current.contains(e.target)) setActionsMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [actionsMenuOpen]);
 
   function submitExtend() {
     if (!extendLyrics.trim()) return;
@@ -66,7 +101,7 @@ function TrackCard({
     <div className={`mureka-track-row${track.is_selected ? ' is-main' : ''}`}>
       <div className="mureka-track-row-head">
         <span className="mureka-track-title">
-          <Music4 size={13} /> {`${L.mureka_tracksLabel} ${index + 1}`}
+          <Music4 size={13} /> {cardTitle}
           {duration && <span className="mureka-track-duration">{duration}</span>}
           {track.extended_from_track_id && <span className="mureka-track-extended-badge">{L.mureka_extendedBadge}</span>}
         </span>
@@ -82,7 +117,7 @@ function TrackCard({
           <button className="icon-btn" style={{ width: 26, height: 26 }} title={L.mureka_openDetailBtn} onClick={() => onOpenDetail(track)}>
             <Maximize2 size={12} />
           </button>
-          <div style={{ position: 'relative' }}>
+          <div style={{ position: 'relative' }} ref={actionsMenuRef}>
             <button className="icon-btn" style={{ width: 26, height: 26 }} title={L.mureka_actionsTitle} onClick={() => setActionsMenuOpen((o) => !o)}>
               <MoreVertical size={13} />
             </button>
@@ -91,7 +126,10 @@ function TrackCard({
                 <button onClick={() => { onReuseSettings(track); setActionsMenuOpen(false); }}>
                   <RotateCcw size={12} /> {L.mureka_reuseSettingsBtn}
                 </button>
-                <button onClick={() => setExtendFormOpen((o) => !o)} disabled={!track.raw?.id} title={!track.raw?.id ? L.mureka_extendUnavailable : undefined}>
+                <button
+                  onClick={() => { setExtendFormOpen((o) => !o); setActionsMenuOpen(false); }}
+                  disabled={!track.raw?.id} title={!track.raw?.id ? L.mureka_extendUnavailable : undefined}
+                >
                   <Wand2 size={12} /> {L.mureka_extendBtn}
                 </button>
                 <button onClick={() => { onStem(track.track_id); setActionsMenuOpen(false); }} disabled={stemming}>
@@ -121,6 +159,10 @@ function TrackCard({
           </button>
         </div>
       </div>
+
+      {busyLabel && (
+        <div className="mureka-track-busy"><Loader2 size={11} className="spin" /> {busyLabel}</div>
+      )}
 
       {extendFormOpen && (
         <div className="mureka-extend-form">
@@ -192,6 +234,14 @@ function TrackCard({
         <div className="mureka-track-details">
           <div><b>{L.mureka_detailsModel}:</b> {track.model}</div>
           <div><b>{L.mureka_detailsStyle}:</b> {track.style || '—'}</div>
+          {track.reference_used && (
+            <div>
+              <b>{L.mureka_detailReferenceLabel}:</b> {track.reference_used.filename || '—'}
+              {track.reference_used.start_ms != null && (
+                <> ({formatTrackDuration(track.reference_used.start_ms)}–{formatTrackDuration(track.reference_used.end_ms)})</>
+              )}
+            </div>
+          )}
           <details>
             <summary>{L.mureka_detailsLyrics}</summary>
             <pre>{track.lyrics}</pre>
@@ -212,6 +262,14 @@ function TrackCard({
               <JsonTreeView L={L} data={track.raw} />
             </div>
           </details>
+          {track.request && (
+            <details>
+              <summary>{L.mureka_detailsRequest}</summary>
+              <div className="json-tree-scroll">
+                <JsonTreeView L={L} data={track.request} />
+              </div>
+            </details>
+          )}
         </div>
       )}
     </div>
@@ -486,7 +544,7 @@ export default function MurekaStage({
           {tracks.map((track, i) => (
             <TrackCard
               key={track.track_id}
-              L={L} projectId={project.id} track={track} index={i} allTags={musicTags || []}
+              L={L} projectId={project.id} projectTitle={project.title} track={track} index={i} allTags={musicTags || []}
               onRate={actions.onRate} onSelectMain={actions.onSelectMain}
               onToggleTag={actions.onToggleTag} onDelete={actions.onDelete}
               onReuseSettings={actions.reuseTrackSettings}

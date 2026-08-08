@@ -204,6 +204,7 @@ def test_start_job_success_writes_tracks_and_persists_project(tmp_path, monkeypa
         assert track['style'] == 'a style'
         assert track['lyrics'] == 'some lyrics'
         assert track['reference_used'] is None
+        assert track['request'] == {'url': 'https://api.mureka.ai/v1/song/generate', 'body': {'lyrics': 'some lyrics', 'model': 'auto', 'n': 2, 'prompt': 'a style'}}
 
 
 def test_start_job_with_reference_id_records_reference_used(tmp_path, monkeypatch):
@@ -447,6 +448,7 @@ def test_start_extend_job_success_appends_tracks_tagged_with_source(tmp_path, mo
     assert track['extended_from_track_id'] == 'trk_source'
     assert track['lyrics'] == 'continuation lyrics'
     assert track['params'] == {'extend_at': 30000, 'extend_type': None}
+    assert track['request'] == {'url': 'https://api.mureka.ai/v1/song/extend', 'body': {'song_id': 'song_1', 'lyrics': 'continuation lyrics', 'extend_at': 30000}}
 
     project = storage.load_project('poem-a')
     assert len(project['mureka']['tracks']) == 1
@@ -620,6 +622,18 @@ def test_generate_lyrics_video_omits_optional_fields_when_not_given(tmp_path, mo
     asyncio.run(mureka.generate_lyrics_video('song_1', None, None, 'key', dest))
 
     assert fake_client.calls[0]['json'] == {'song_id': 'song_1'}
+
+
+def test_generate_lyrics_video_includes_selection_range_when_given(tmp_path, monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'url': 'https://cdn.mureka.ai/lyrics.mp4'}),
+        _FakeResponse(200, content=b'MP4DATA'),
+    ])
+    dest = tmp_path / 'lvid.mp4'
+
+    asyncio.run(mureka.generate_lyrics_video('song_1', None, None, 'key', dest, selection_start=0, selection_end=30000))
+
+    assert fake_client.calls[0]['json'] == {'song_id': 'song_1', 'selection_start': 0, 'selection_end': 30000}
 
 
 def test_generate_lyrics_video_missing_key_raises(tmp_path):

@@ -220,6 +220,13 @@ against `reference_audio` at generation time, `null` when no reference was
 used. It's a snapshot taken at generation time, not a live reference, so it
 still shows which clip/window produced this track even if that
 `reference_audio` entry is later deleted (`MurekaTrackDetailModal.jsx`).
+`request` is `{url, body} | null` — the exact HTTP request `providers/mureka.py`
+sent to Mureka for this track (`song/generate` or `song/extend`), kept
+alongside `raw` so the generation parameters can be double-checked from the
+UI (`MurekaStage.jsx`'s inline "Детали" panel and `MurekaTrackDetailModal.jsx`
+both show it collapsed, next to "Сырые данные Mureka"). Only present on
+tracks generated after this field was added — older tracks have no `request`
+key at all, not a `null`.
 `rating` (0-5) and `is_selected` mirror `Image`'s shape, but **`is_selected`
 is set only by an explicit user action** (`PATCH /api/projects/{id}` with a
 recomputed `tracks` array — see the API table below) — unlike `Image`, it is
@@ -279,7 +286,10 @@ involved); `transcriptions` is `[{id, file_path, expires_at, created_at}]`
 `.musicxml`+`.pdf` zip under `music/{id}.zip`, same expiring-CDN-link
 convention as `stems`); `lyrics_videos` is `[{id, file_path, title,
 aspect_ratio, created_at}]` (Mureka `lyrics-video/generate` - `file_path` a
-downloaded mp4 under `music/{id}.mp4`). `transcribe`/`lyrics-video` both key
+downloaded mp4 under `music/{id}.mp4`; the call always sends the whole track
+as `selection_start: 0` / `selection_end: <track duration_ms>` since Mureka
+requires either that pair or a `lyrics_start_row`/`lyrics_end_row` pair and
+there's no UI for picking a partial range). `transcribe`/`lyrics-video` both key
 off the track's Mureka `song_id` (`raw.id`) rather than re-uploading audio,
 same id `/extend` uses, so they share `/extend`'s "no `song_id`" `422`
 failure mode for a track past Mureka's ~1-month retention window; `describe`

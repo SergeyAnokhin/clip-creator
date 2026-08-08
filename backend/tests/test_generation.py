@@ -1370,9 +1370,12 @@ def test_lyrics_video_mureka_track_success_appends_video(client, monkeypatch):
     ]}
     client.patch(f'/api/projects/{pid}', json=project)
 
-    async def fake_generate_lyrics_video(song_id, title, aspect_ratio, api_key, dest_path, usage_ctx=None):
+    async def fake_generate_lyrics_video(
+        song_id, title, aspect_ratio, api_key, dest_path, selection_start=None, selection_end=None, usage_ctx=None,
+    ):
         assert song_id == 'song_1'
         assert aspect_ratio == '16:9'
+        assert (selection_start, selection_end) == (0, 30000)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(b'mp4-bytes')
         return {'url': 'https://cdn.mureka.ai/lyrics.mp4'}

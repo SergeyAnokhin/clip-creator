@@ -320,6 +320,14 @@ export default function MurekaTrackDetailModal({
                 <JsonTreeView L={L} data={track.raw} />
               </div>
             </details>
+            {track.request && (
+              <details>
+                <summary>{L.mureka_detailsRequest}</summary>
+                <div className="json-tree-scroll">
+                  <JsonTreeView L={L} data={track.request} />
+                </div>
+              </details>
+            )}
           </div>
         </div>
       </div>
