@@ -499,13 +499,12 @@ function OverlayGlass({ transform, isSelected, onSelect, onChange, bgWidth, bgHe
  * a second duplicated text node.
  *
  * The badge's pill `Rect` has to hug the text, but Konva only knows a
- * `Text` node's rendered size once the font is actually loaded and the
- * node has painted - so its size is read back via a ref after each
+ * `Text` node's rendered size once the font is actually loaded - so its
+ * size is measured via a detached probe `Text` node after each
  * paint-affecting prop change, plus once more when `document.fonts.ready`
  * resolves (in case this render raced the Google Fonts `<link>`). */
 function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight, effectiveScale, setGuides }) {
   const groupRef = useRef(null);
-  const textRef = useRef(null);
   const trRef = useRef(null);
   const cloneRef = useRef(null);
   const [box, setBox] = useState({ w: 10, h: 10 });
@@ -519,11 +518,17 @@ function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight,
 
   useEffect(() => {
     function measure() {
-      const node = textRef.current;
-      // getTextWidth()/height() read the text's actual rendered size,
-      // ignoring the `width` we feed the node below to make `align` work -
-      // width() would otherwise just echo that fed-in value back.
-      if (node) setBox({ w: node.getTextWidth(), h: node.height() });
+      // Measured on a detached, unconstrained probe node rather than the
+      // real (rendered) Text below - that one is fed `width={box.w}` so
+      // `align` works, but Konva's `wrap="none"` doesn't actually skip its
+      // width-constrained line-splitting, so once `box.w` starts small
+      // (initial state) the real node keeps chopping the text into narrow
+      // fragments and re-measuring it (via getTextWidth/height) would just
+      // echo that same too-small size back forever - text stays invisible.
+      // A fresh node with no `width` set is never subject to that split.
+      const probe = new Konva.Text({ text: layer.text, fontFamily: layer.fontFamily, fontSize: layer.fontSize, wrap: 'none' });
+      setBox({ w: probe.getTextWidth(), h: probe.height() });
+      probe.destroy();
     }
     measure();
     if (document.fonts?.ready) document.fonts.ready.then(measure);
@@ -585,10 +590,9 @@ function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight,
         {isBadge && (
           <Rect width={box.w + padX * 2} height={pillH} cornerRadius={pillH / 2} fill={layer.bgColor} />
         )}
-        {Array.from({ length: isBadge ? 1 : glowPassCount }).map((_, i, arr) => (
+        {Array.from({ length: isBadge ? 1 : glowPassCount }).map((_, i) => (
           <Text
             key={i}
-            ref={i === arr.length - 1 ? textRef : undefined}
             x={padX} y={padY}
             width={box.w} wrap="none" align={layer.align || 'left'}
             text={layer.text}
@@ -700,14 +704,17 @@ function EffectsPanel({ label, effects, onChange, L }) {
   );
 }
 
-/** Duplicate/crop/delete toolbar for the selected title or logo layer -
+/** Duplicate/crop/delete toolbar for the selected title/logo/text layer -
  * duplicate clones the layer (offset slightly, independently movable from
- * then on); crop toggles OverlayImage's crop-editing mode; delete only
- * shows once there's more than one layer of that kind, so the last
+ * then on); crop toggles OverlayImage's crop-editing mode; delete normally
+ * only shows once there's more than one layer of that kind, so the last
  * remaining title/logo layer can't be deleted into an empty (and then
- * auto-refilled - see PosterConstructor's default-placement effects)
- * state via this button. */
-function LayerToolbar({ layer, siblingCount, isCropEditing, allowCrop = true, onDuplicate, onDelete, onToggleCrop, onResetCrop, L }) {
+ * auto-refilled - see PosterConstructor's default-placement effects) state
+ * via this button. Text layers have no such auto-refill (a poster can
+ * legitimately have zero text layers), so `alwaysDeletable` skips that gate
+ * for them - otherwise a poster's only badge/halo layer could never be
+ * removed. */
+function LayerToolbar({ layer, siblingCount, isCropEditing, allowCrop = true, alwaysDeletable = false, onDuplicate, onDelete, onToggleCrop, onResetCrop, L }) {
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
       {!isCropEditing && (
@@ -728,7 +735,7 @@ function LayerToolbar({ layer, siblingCount, isCropEditing, allowCrop = true, on
           {L.poster_cropReset}
         </button>
       )}
-      {siblingCount > 1 && !isCropEditing && (
+      {(siblingCount > 1 || alwaysDeletable) && !isCropEditing && (
         <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onDelete} title={L.poster_deleteLayer}>
           <Trash2 size={12} />
         </button>
@@ -1567,6 +1574,7 @@ export default function PosterConstructor({
                   siblingCount={layerListFor(selected.kind)[0].length}
                   isCropEditing={isEditingSelectedCrop}
                   allowCrop={selected.kind !== 'text'}
+                  alwaysDeletable={selected.kind === 'text'}
                   onDuplicate={() => duplicateLayer(selected.kind, selected.id)}
                   onDelete={() => deleteLayer(selected.kind, selected.id)}
                   onToggleCrop={() => setCropEditing(isEditingSelectedCrop ? null : { kind: selected.kind, id: selected.id })}
