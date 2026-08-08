@@ -3,7 +3,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from .. import storage, usage
-from ..providers import image_models, text_models, wish_library
+from ..providers import image_models, mureka, text_models, wish_library
 from ..providers.mureka_prompt_defaults import MUREKA_BASE_PROMPT_PRESETS
 from ..providers.scenes_prompt_defaults import (
     DEFAULT_SCENE_BASE_PROMPT_ABSTRACT, DEFAULT_SCENE_BASE_PROMPT_NARRATIVE,
@@ -22,6 +22,41 @@ _MODEL_PROVIDERS = {'google', 'google_free', 'openrouter', 'deepseek', 'replicat
 # valid for the image-models endpoint but not the text one.
 _IMAGE_MODEL_PROVIDERS = _MODEL_PROVIDERS | {'krea'}
 _ALLOWED_LOGO_EXTENSIONS = {'.png', '.webp'}
+
+# Music-tag badge colors - assigned automatically (index-based, cycling),
+# never hand-picked by the user, so two tags are never visually identical
+# and every tag stays readable at a glance. Mirrored verbatim in
+# frontend/src/lib/musicTagColors.js (client-side tags need the same
+# palette when `addMusicTag` creates one at runtime) - keep both in sync,
+# same convention as lib/lyrics.js mirroring suno.py.
+MUSIC_TAG_COLORS = [
+    '#ff9d5c', '#7dd3fc', '#c4b5fd', '#86efac', '#fda4af',
+    '#fbbf24', '#38bdf8', '#f472b6', '#a3e635', '#2dd4bf',
+]
+
+# Seeded so the tag list isn't empty on first use (previously `[]` - the
+# user has to type every review tag from scratch before tagging a single
+# track). Still just a normal user-editable/deletable list afterward.
+DEFAULT_MUSIC_TAGS = [
+    {'id': 'mtag_vocal_good', 'label': 'Хороший вокал'},
+    {'id': 'mtag_pronunciation_bad', 'label': 'Плохое произношение'},
+    {'id': 'mtag_gender_swapped', 'label': 'Перепутан пол голоса'},
+    {'id': 'mtag_tempo_off', 'label': 'Не тот темп'},
+    {'id': 'mtag_mix_bad', 'label': 'Плохое сведение'},
+    {'id': 'mtag_melody_great', 'label': 'Отличная мелодия'},
+    {'id': 'mtag_beat_weak', 'label': 'Слабый бит'},
+    {'id': 'mtag_reference', 'label': 'Использовать как референс'},
+]
+
+
+def normalize_music_tags(tags: list[dict]) -> list[dict]:
+    """Assigns a `color` (from MUSIC_TAG_COLORS, by position) to any tag that
+    doesn't already have one - covers both the seeded defaults above and any
+    tag saved before this field existed."""
+    return [
+        {**tag, 'color': tag.get('color') or MUSIC_TAG_COLORS[i % len(MUSIC_TAG_COLORS)]}
+        for i, tag in enumerate(tags)
+    ]
 
 DEFAULT_SETTINGS = {
     'lang': 'ru',
@@ -89,11 +124,23 @@ DEFAULT_SETTINGS = {
     # doesn't touch the underlying scene data, just what's rendered.
     'hide_motion_prompt': False,
     # Mureka stage (providers/mureka.py) - user-defined quality-review tags
-    # ({id, label}) assignable to generated tracks (e.g. "плохое произношение",
-    # "перепутан пол голоса"). Flat array, CRUD'd entirely via this
-    # partial-merge PUT - same convention as poster_templates above, no
-    # dedicated endpoint needed since no LLM call is involved.
-    'music_tags': [],
+    # ({id, label, color}) assignable to generated tracks (e.g. "плохое
+    # произношение", "перепутан пол голоса"). Flat array, CRUD'd entirely
+    # via this partial-merge PUT - same convention as poster_templates
+    # above, no dedicated endpoint needed since no LLM call is involved.
+    # Seeded with DEFAULT_MUSIC_TAGS instead of empty (see above); `color`
+    # normalized on every GET by normalize_music_tags below.
+    'music_tags': DEFAULT_MUSIC_TAGS,
+    # User-managed named variants of suno_base_prompt, same shape/CRUD
+    # convention as title_card_base_prompt_presets above ({id, name,
+    # prompt}) - unlike SUNO_BASE_PROMPT_PRESETS/MUREKA_BASE_PROMPT_PRESETS
+    # (built-in, read-only), these are added/renamed/deleted entirely from
+    # Settings -> "Музыкальные промпты". Merged into
+    # GET /suno-prompt-presets below so they show up in the same
+    # groupPresetsByService list the Suno stage already renders - no
+    # separate picker UI needed.
+    'suno_base_prompt_user_presets': [],
+    'mureka_base_prompt_user_presets': [],
 }
 
 
@@ -103,6 +150,7 @@ def get_settings():
     merged['suno_wish_library'] = wish_library.normalize_wish_library(merged.get('suno_wish_library', []))
     merged['scene_wish_library'] = wish_library.normalize_wish_library(merged.get('scene_wish_library', []))
     merged['title_card_wish_library'] = wish_library.normalize_wish_library(merged.get('title_card_wish_library', []))
+    merged['music_tags'] = normalize_music_tags(merged.get('music_tags', []))
     return merged
 
 
@@ -163,7 +211,28 @@ def get_suno_prompt_presets():
     a `service` label like 'Suno' or 'Mureka') the Settings -> music-prompts
     tab offers to load into the editable settings.suno_base_prompt, so users
     can A/B test them - read-only, not stored per-user."""
-    return SUNO_BASE_PROMPT_PRESETS + MUREKA_BASE_PROMPT_PRESETS
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    user_suno = [
+        {'id': p['id'], 'service': 'Suno', 'name': p['name'], 'description': '', 'prompt': p['prompt']}
+        for p in settings.get('suno_base_prompt_user_presets', [])
+    ]
+    user_mureka = [
+        {'id': p['id'], 'service': 'Mureka', 'name': p['name'], 'description': '', 'prompt': p['prompt']}
+        for p in settings.get('mureka_base_prompt_user_presets', [])
+    ]
+    return SUNO_BASE_PROMPT_PRESETS + MUREKA_BASE_PROMPT_PRESETS + user_suno + user_mureka
+
+
+@router.get('/mureka-billing')
+async def get_mureka_billing():
+    """`GET /v1/account/billing` passthrough for the Mureka stage's balance
+    pill (see providers/mureka.py::get_billing)."""
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    api_key = (settings.get('api_keys') or {}).get('mureka', '')
+    try:
+        return await mureka.get_billing(api_key)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @router.post('/wish-library')

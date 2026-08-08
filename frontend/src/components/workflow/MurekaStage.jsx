@@ -1,6 +1,13 @@
 import { useRef, useState } from 'react';
-import { Check, Loader2, Music4, Star, Trash2, Upload, X, Zap } from 'lucide-react';
+import {
+  Check, ChevronDown, ChevronUp, Loader2, MoreVertical, Music4, Plus, RotateCcw,
+  Scissors, Star, Trash2, Upload, Wand2, X, Zap,
+} from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
+import { pickReadableTextColor } from '../../lib/musicTagColors.js';
+import CopyButton from './CopyButton.jsx';
+import KaraokeLyrics from './KaraokeLyrics.jsx';
+import ReferenceAudioTrimmer from './ReferenceAudioTrimmer.jsx';
 
 const MODELS = ['auto', 'mureka-7.6', 'mureka-o2', 'mureka-8', 'mureka-9'];
 
@@ -24,57 +31,161 @@ function formatElapsed(totalSeconds, L) {
   return `${m}${L.suno_unitMinutes} ${rem}${L.suno_unitSeconds}`;
 }
 
-function TrackCard({ L, projectId, track, index, tagsById, onRate, onSelectMain, onToggleTag, onDelete }) {
+function TrackCard({
+  L, projectId, track, index, allTags, onRate, onSelectMain, onToggleTag, onDelete,
+  onReuseSettings, onExtend, onStem, extending, stemming,
+}) {
+  const audioRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [tagMenuOpen, setTagMenuOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const [extendFormOpen, setExtendFormOpen] = useState(false);
+  const [extendLyrics, setExtendLyrics] = useState('');
+
   const duration = formatTrackDuration(track.duration_ms);
+  const addedTags = (allTags || []).filter((t) => (track.tag_ids || []).includes(t.id));
+  const availableTags = (allTags || []).filter((t) => !(track.tag_ids || []).includes(t.id));
+
+  function submitExtend() {
+    if (!extendLyrics.trim()) return;
+    onExtend(track.track_id, { lyrics: extendLyrics, extendAt: track.duration_ms });
+    setExtendLyrics('');
+    setExtendFormOpen(false);
+    setActionsMenuOpen(false);
+  }
+
   return (
-    <div className={`mureka-track-card${track.is_selected ? ' is-main' : ''}`}>
-      <div className="mureka-track-header">
+    <div className={`mureka-track-row${track.is_selected ? ' is-main' : ''}`}>
+      <div className="mureka-track-row-head">
         <span className="mureka-track-title">
           <Music4 size={13} /> {`${L.mureka_tracksLabel} ${index + 1}`}
           {duration && <span className="mureka-track-duration">{duration}</span>}
+          {track.extended_from_track_id && <span className="mureka-track-extended-badge">{L.mureka_extendedBadge}</span>}
         </span>
-        <div className="mureka-track-header-actions">
+
+        <div className="mureka-track-row-actions">
           <button
             className={`image-thumb-select${track.is_selected ? ' is-active' : ''}`}
-            style={{ position: 'static' }}
-            title={L.mureka_primaryTitle}
-            onClick={() => onSelectMain(track.track_id)}
+            style={{ position: 'static' }} title={L.mureka_primaryTitle} onClick={() => onSelectMain(track.track_id)}
           >
             <Check size={12} />
           </button>
-          <button
-            className="image-thumb-delete"
-            style={{ position: 'static' }}
-            title={L.mureka_deleteTrackTitle}
-            onClick={() => onDelete(track.track_id)}
-          >
+          <CopyButton L={L} text={mediaUrl(`projects/${projectId}/${track.file_path}`)} />
+          <div style={{ position: 'relative' }}>
+            <button className="icon-btn" style={{ width: 26, height: 26 }} title={L.mureka_actionsTitle} onClick={() => setActionsMenuOpen((o) => !o)}>
+              <MoreVertical size={13} />
+            </button>
+            {actionsMenuOpen && (
+              <div className="mureka-reference-menu mureka-actions-menu">
+                <button onClick={() => { onReuseSettings(track); setActionsMenuOpen(false); }}>
+                  <RotateCcw size={12} /> {L.mureka_reuseSettingsBtn}
+                </button>
+                <button onClick={() => setExtendFormOpen((o) => !o)} disabled={!track.raw?.id} title={!track.raw?.id ? L.mureka_extendUnavailable : undefined}>
+                  <Wand2 size={12} /> {L.mureka_extendBtn}
+                </button>
+                <button onClick={() => { onStem(track.track_id); setActionsMenuOpen(false); }} disabled={stemming}>
+                  {stemming ? <Loader2 size={12} className="spin" /> : <Scissors size={12} />} {L.mureka_stemBtn}
+                </button>
+                <div className="mureka-menu-cost-hint">{L.mureka_costUnknownHint}</div>
+              </div>
+            )}
+          </div>
+          <button className="image-thumb-delete" style={{ position: 'static' }} title={L.mureka_deleteTrackTitle} onClick={() => onDelete(track.track_id)}>
             <Trash2 size={11} />
           </button>
         </div>
       </div>
 
-      <audio className="mureka-track-audio" controls src={mediaUrl(`projects/${projectId}/${track.file_path}`)} />
+      {extendFormOpen && (
+        <div className="mureka-extend-form">
+          <textarea
+            className="suno-textarea" style={{ minHeight: 70 }} value={extendLyrics}
+            onChange={(e) => setExtendLyrics(e.target.value)} placeholder={L.mureka_extendLyricsPlaceholder}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-accent-soft" disabled={extending} onClick={submitExtend}>
+              {extending ? <Loader2 size={12} className="spin" /> : null} {L.mureka_extendSubmit}
+            </button>
+            <button className="btn-ghost" style={{ border: 'none', cursor: 'pointer' }} onClick={() => setExtendFormOpen(false)}>{L.cancel}</button>
+          </div>
+        </div>
+      )}
 
-      <div className="image-carousel-stars" style={{ position: 'static', transform: 'none', alignSelf: 'flex-start' }}>
-        {[1, 2, 3, 4, 5].map((n) => (
-          <button key={n} onClick={() => onRate(track.track_id, n)}>
-            <Star size={12} color={n <= track.rating ? '#ff9d5c' : 'rgba(255,255,255,0.35)'} />
-          </button>
-        ))}
-      </div>
+      <audio
+        ref={audioRef} className="mureka-track-audio" controls src={mediaUrl(`projects/${projectId}/${track.file_path}`)}
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+        onTimeUpdate={() => setCurrentTimeMs((audioRef.current?.currentTime || 0) * 1000)}
+      />
 
-      {!!tagsById.length && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {tagsById.map((tag) => (
-            <button
-              key={tag.id}
-              className={`chip${(track.tag_ids || []).includes(tag.id) ? ' is-active' : ''}`}
-              style={{ padding: '4px 10px', fontSize: 11 }}
-              onClick={() => onToggleTag(track.track_id, tag.id)}
-            >
-              {tag.label}
+      {playing && <KaraokeLyrics raw={track.raw} currentTimeMs={currentTimeMs} />}
+
+      <div className="mureka-track-row-footer">
+        <div className="image-carousel-stars" style={{ position: 'static', transform: 'none' }}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button key={n} onClick={() => onRate(track.track_id, n)}>
+              <Star size={12} color={n <= track.rating ? '#ff9d5c' : 'rgba(255,255,255,0.35)'} />
             </button>
           ))}
+        </div>
+
+        <div className="mureka-track-tags">
+          {addedTags.map((tag) => (
+            <span
+              key={tag.id} className="chip mureka-tag-badge"
+              style={{ background: tag.color, color: pickReadableTextColor(tag.color) }}
+              onClick={() => onToggleTag(track.track_id, tag.id)}
+              title={L.mureka_removeTagTitle}
+            >
+              {tag.label} <X size={10} />
+            </span>
+          ))}
+          <div style={{ position: 'relative' }}>
+            <button className="mureka-tag-add-btn" onClick={() => setTagMenuOpen((o) => !o)} title={L.mureka_addTagTitle}>
+              <Plus size={12} />
+            </button>
+            {tagMenuOpen && (
+              <div className="mureka-reference-menu">
+                {availableTags.length
+                  ? availableTags.map((tag) => (
+                    <button key={tag.id} onClick={() => { onToggleTag(track.track_id, tag.id); setTagMenuOpen(false); }}>
+                      <span className="mureka-tag-swatch" style={{ background: tag.color }} /> {tag.label}
+                    </button>
+                  ))
+                  : <span className="mureka-reference-menu-empty">{L.mureka_noMoreTags}</span>}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <button className="mureka-details-toggle" onClick={() => setDetailsOpen((o) => !o)}>
+          {detailsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />} {L.mureka_detailsToggle}
+        </button>
+      </div>
+
+      {detailsOpen && (
+        <div className="mureka-track-details">
+          <div><b>{L.mureka_detailsModel}:</b> {track.model}</div>
+          <div><b>{L.mureka_detailsStyle}:</b> {track.style || '—'}</div>
+          <details>
+            <summary>{L.mureka_detailsLyrics}</summary>
+            <pre>{track.lyrics}</pre>
+          </details>
+          {!!track.stems?.length && (
+            <div>
+              <b>{L.mureka_detailsStems}:</b>{' '}
+              {track.stems.map((s) => (
+                <a key={s.id} href={mediaUrl(`projects/${projectId}/${s.file_path}`)} target="_blank" rel="noreferrer" style={{ marginRight: 8 }}>
+                  {L.mureka_downloadStemsLink} ({s.model || 'default'})
+                </a>
+              ))}
+            </div>
+          )}
+          <details>
+            <summary>{L.mureka_detailsRaw}</summary>
+            <pre>{JSON.stringify(track.raw, null, 2)}</pre>
+          </details>
         </div>
       )}
     </div>
@@ -82,24 +193,53 @@ function TrackCard({ L, projectId, track, index, tagsById, onRate, onSelectMain,
 }
 
 export default function MurekaStage({
-  L, project, isMobile, styleInput, lyricsInput, model, n, gender, referenceId, referenceAudio, tracks,
-  generating, elapsedSeconds, murekaError, uploadingReference, musicTags, actions,
+  L, project, isMobile, styleInput, lyricsInput, model, n, gender, referenceId, referenceAudio, referenceSources,
+  tracks, generating, elapsedSeconds, jobStage, murekaError, uploadingReference, uploadingReferenceSource, trimmingReference,
+  billing, extendingTrackIds, stemmingTrackIds, musicTags, actions,
 }) {
   const [referenceMenuOpen, setReferenceMenuOpen] = useState(false);
+  const [trimmingSource, setTrimmingSource] = useState(null);
   const fileInputRef = useRef(null);
 
-  function handleReferenceFile(e) {
+  async function handleReferenceFile(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) actions.uploadReferenceAudio(file);
+    if (!file) return;
+    const source = await actions.uploadReferenceSource(file);
+    if (source) setTrimmingSource(source);
+  }
+
+  async function handleTrimConfirm(startMs, endMs) {
+    if (!trimmingSource) return;
+    const ok = await actions.trimReferenceSource(trimmingSource.id, startMs, endMs);
+    await actions.deleteReferenceSource(trimmingSource.id);
+    if (ok) setTrimmingSource(null);
+  }
+  async function handleTrimClose() {
+    if (trimmingSource) await actions.deleteReferenceSource(trimmingSource.id);
+    setTrimmingSource(null);
   }
 
   const selectedReference = (referenceAudio || []).find((r) => r.mureka_file_id === referenceId);
+  const stageLabels = {
+    preparing: L.mureka_stagePreparing, queued: L.mureka_stageQueued,
+    running: L.mureka_stageRunning, streaming: L.mureka_stageStreaming,
+  };
 
   return (
     <>
-      <div className="stage-heading-title" style={{ marginBottom: 4 }}>{L.murekaStageTitle}</div>
-      <div className="stage-heading-subtitle" style={{ marginBottom: 18 }}>{L.murekaStageSubtitle}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+        <div>
+          <div className="stage-heading-title">{L.murekaStageTitle}</div>
+          <div className="stage-heading-subtitle">{L.murekaStageSubtitle}</div>
+        </div>
+        {billing && (
+          <div className="mureka-balance-pill" title={L.mureka_balanceHint}>
+            💰 {billing.balance} / {billing.total_recharge}
+          </div>
+        )}
+      </div>
+      <div style={{ marginBottom: 18 }} />
 
       <div style={{ display: 'flex', gap: 12, flexDirection: isMobile ? 'column' : 'row', marginBottom: 16 }}>
         <div className="glass-card" style={{ flex: 1, minWidth: 0 }}>
@@ -169,13 +309,13 @@ export default function MurekaStage({
                     </button>
                   </span>
                 ))}
-                <button onClick={() => { setReferenceMenuOpen(false); fileInputRef.current?.click(); }} disabled={uploadingReference}>
-                  {uploadingReference ? <Loader2 size={12} className="spin" /> : <Upload size={12} />}
-                  {uploadingReference ? L.mureka_referenceUploading : L.mureka_referenceUpload}
+                <button onClick={() => { setReferenceMenuOpen(false); fileInputRef.current?.click(); }} disabled={uploadingReferenceSource || uploadingReference}>
+                  {(uploadingReferenceSource || uploadingReference) ? <Loader2 size={12} className="spin" /> : <Upload size={12} />}
+                  {(uploadingReferenceSource || uploadingReference) ? L.mureka_referenceUploading : L.mureka_referenceUpload}
                 </button>
               </div>
             )}
-            <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/mp4,.mp3,.m4a" style={{ display: 'none' }} onChange={handleReferenceFile} />
+            <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/flac,.mp3,.m4a,.wav,.ogg,.flac" style={{ display: 'none' }} onChange={handleReferenceFile} />
           </div>
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 10 }}>{L.mureka_referenceHint}</div>
@@ -193,7 +333,7 @@ export default function MurekaStage({
 
       {generating && (
         <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>
-          ⏳ {L.mureka_generating} · {formatElapsed(elapsedSeconds, L)}
+          ⏳ {L.mureka_generating}{jobStage && stageLabels[jobStage] ? ` (${stageLabels[jobStage]})` : ''} · {formatElapsed(elapsedSeconds, L)}
         </div>
       )}
       {!generating && murekaError && (
@@ -204,13 +344,17 @@ export default function MurekaStage({
       {!tracks?.length ? (
         <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{L.mureka_noTracksYet}</div>
       ) : (
-        <div className="mureka-gallery">
+        <div className="mureka-track-list">
           {tracks.map((track, i) => (
             <TrackCard
               key={track.track_id}
-              L={L} projectId={project.id} track={track} index={i} tagsById={musicTags || []}
+              L={L} projectId={project.id} track={track} index={i} allTags={musicTags || []}
               onRate={actions.onRate} onSelectMain={actions.onSelectMain}
               onToggleTag={actions.onToggleTag} onDelete={actions.onDelete}
+              onReuseSettings={actions.reuseTrackSettings}
+              onExtend={actions.extendTrack} onStem={actions.stemTrack}
+              extending={(extendingTrackIds || []).includes(track.track_id)}
+              stemming={(stemmingTrackIds || []).includes(track.track_id)}
             />
           ))}
         </div>
@@ -219,6 +363,13 @@ export default function MurekaStage({
         <button className="btn-ghost" style={{ marginTop: 10, border: 'none', cursor: 'pointer' }} onClick={actions.onOpenSettings}>
           {L.mureka_manageTagsLink}
         </button>
+      )}
+
+      {trimmingSource && (
+        <ReferenceAudioTrimmer
+          L={L} source={trimmingSource} uploading={trimmingReference}
+          onConfirm={handleTrimConfirm} onClose={handleTrimClose}
+        />
       )}
     </>
   );

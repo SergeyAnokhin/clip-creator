@@ -1623,27 +1623,29 @@
 
 /* ---------- Mureka stage (real audio generation) ---------- */
 
-.mureka-gallery {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 14px;
-}
-
-.mureka-track-card {
+/* Full-width rows (not a card grid) - each track's player gets the whole
+   row's width instead of competing for space in a fixed-size tile. */
+.mureka-track-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+}
+
+.mureka-track-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
   border: 2px solid rgba(255, 255, 255, 0.12);
 }
 
-.mureka-track-card.is-main {
+.mureka-track-row.is-main {
   border-color: var(--accent);
 }
 
-.mureka-track-header {
+.mureka-track-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1664,14 +1666,212 @@
   color: var(--text-dim);
 }
 
-.mureka-track-header-actions {
+.mureka-track-extended-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(255, 157, 92, 0.18);
+  color: #ff9d5c;
+}
+
+.mureka-track-row-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
 }
 
 .mureka-track-audio {
   width: 100%;
   height: 34px;
+}
+
+.mureka-track-row-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.mureka-track-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mureka-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.mureka-tag-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.mureka-tag-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mureka-tag-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mureka-details-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.mureka-details-toggle:hover {
+  color: #fff;
+}
+
+.mureka-track-details {
+  font-size: 12px;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mureka-track-details pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 11px;
+  margin: 6px 0 0;
+}
+
+.mureka-track-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.mureka-extend-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.mureka-actions-menu {
+  right: 0;
+  left: auto;
+}
+
+.mureka-menu-cost-hint {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  padding: 4px 8px 2px;
+}
+
+.mureka-reference-menu-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 6px 8px;
+}
+
+.mureka-balance-pill {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  white-space: nowrap;
+}
+
+.mureka-karaoke {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.mureka-karaoke-line {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+  transition: color 0.2s, font-size 0.2s;
+}
+
+.mureka-karaoke-line.is-current {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #ff9d5c;
+}
+
+.mureka-trimmer-waveform {
+  position: relative;
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+  touch-action: none;
+}
+
+.mureka-trimmer-waveform canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.mureka-trimmer-selection {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: rgba(255, 157, 92, 0.12);
+  border-top: 2px solid #ff9d5c;
+  border-bottom: 2px solid #ff9d5c;
+  cursor: grab;
+}
+
+.mureka-trimmer-handle {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 10px;
+  margin-left: -5px;
+  background: #ff9d5c;
+  cursor: ew-resize;
+  border-radius: 3px;
 }
 
 .mureka-reference-menu {

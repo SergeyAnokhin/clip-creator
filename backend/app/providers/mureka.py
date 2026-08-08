@@ -29,8 +29,12 @@ number.
 """
 
 import asyncio
+import base64
+import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -43,12 +47,31 @@ _API_BASE = 'https://api.mureka.ai'
 _POLL_INTERVAL = 3.0
 _JOB_TIMEOUT = 600.0
 _TERMINAL_STATUSES = {'succeeded', 'failed', 'timeouted', 'cancelled'}
+# /v1/song/stem's `url` field accepts a base64 data URI in lieu of a hosted
+# link (confirmed against platform.mureka.ai/docs, 2026-08) capped at 10MB -
+# checked against the *decoded* local file before ever making the call.
+_STEM_MAX_BYTES = 10 * 1024 * 1024
 
 _jobs: dict[str, dict] = {}
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _extract_error_message(resp: httpx.Response) -> str:
+    """Mureka's real error body is `{"error": {"message": "..."}}`
+    (confirmed live, 2026-08 - e.g. "Invalid Request, The audio duration
+    should be at least 30 seconds."). Surfacing just that message instead of
+    the raw JSON blob is the difference between a toast the user can act on
+    and one that reads like a stack trace."""
+    try:
+        message = (resp.json().get('error') or {}).get('message')
+        if message:
+            return message
+    except Exception:
+        pass
+    return f'{resp.status_code}: {resp.text[:300]}'
 
 
 async def upload_reference_audio(content: bytes, filename: str, api_key: str) -> dict:
@@ -63,7 +86,7 @@ async def upload_reference_audio(content: bytes, filename: str, api_key: str) ->
             files={'file': (filename, content)}, data={'purpose': 'reference'},
         )
     if resp.status_code != 200:
-        raise RuntimeError(f'Mureka API (files/upload) вернул {resp.status_code}: {resp.text[:300]}')
+        raise RuntimeError(f'Mureka API (files/upload): {_extract_error_message(resp)}')
     return resp.json()
 
 
@@ -85,11 +108,16 @@ async def _submit(
     async with httpx.AsyncClient(timeout=30) as http_client:
         resp = await http_client.post(f'{_API_BASE}/v1/song/generate', headers=headers, json=body)
     if resp.status_code != 200:
-        raise RuntimeError(f'Mureka API вернул {resp.status_code}: {resp.text[:300]}')
+        raise RuntimeError(f'Mureka API: {_extract_error_message(resp)}')
     return resp.json(), debug_request
 
 
-async def _poll(task_id: str, api_key: str) -> dict:
+async def _poll(task_id: str, api_key: str, job_id: str | None = None) -> dict:
+    """Polls `song/query/{task_id}` until a terminal status. When `job_id` is
+    given, mirrors each intermediate `status` (preparing/queued/running/
+    streaming - see the SongTask schema) into `_jobs[job_id]['stage']` so
+    `GET /mureka/jobs/{job_id}` can show real progress instead of just an
+    elapsed-seconds counter."""
     headers = {'Authorization': f'Bearer {api_key}'}
     deadline = time.monotonic() + _JOB_TIMEOUT
     while True:
@@ -97,9 +125,12 @@ async def _poll(task_id: str, api_key: str) -> dict:
         async with httpx.AsyncClient(timeout=30) as http_client:
             resp = await http_client.get(f'{_API_BASE}/v1/song/query/{task_id}', headers=headers)
         if resp.status_code != 200:
-            raise RuntimeError(f'Mureka API (poll) вернул {resp.status_code}: {resp.text[:300]}')
+            raise RuntimeError(f'Mureka API (poll): {_extract_error_message(resp)}')
         data = resp.json()
-        if data.get('status') in _TERMINAL_STATUSES:
+        status = data.get('status')
+        if job_id is not None and job_id in _jobs and status not in _TERMINAL_STATUSES:
+            _jobs[job_id]['stage'] = status
+        if status in _TERMINAL_STATUSES:
             return data
         if time.monotonic() > deadline:
             raise RuntimeError('Mureka: превышено время ожидания генерации')
@@ -109,7 +140,7 @@ async def _download(url: str) -> bytes:
     async with httpx.AsyncClient(timeout=60) as http_client:
         resp = await http_client.get(url)
     if resp.status_code != 200:
-        raise RuntimeError(f'Не удалось скачать трек ({resp.status_code})')
+        raise RuntimeError(f'Не удалось скачать трек: {_extract_error_message(resp)}')
     return resp.content
 
 
@@ -124,7 +155,7 @@ async def _run_job(
         console_log.log_request_start(model_composite, 'audio', usage_ctx.get('task') if usage_ctx else None)
         submitted, debug_request = await _submit(style, lyrics, model, n, gender, reference_id, api_key)
         task_id = submitted['id']
-        result = await _poll(task_id, api_key)
+        result = await _poll(task_id, api_key, job_id)
         if result.get('status') != 'succeeded':
             reason = f' ({result["failed_reason"]})' if result.get('failed_reason') else ''
             raise RuntimeError(f'Mureka: генерация завершилась со статусом {result.get("status")}{reason}')
@@ -135,7 +166,7 @@ async def _run_job(
         usage.record(usage_ctx, model=model_composite, kind='audio', status='error',
                      duration_ms=int((time.monotonic() - started) * 1000), prompt=style, error=str(exc),
                      debug={'request': debug_request} if debug_request else None)
-        _jobs[job_id] = {'status': 'failed', 'tracks': None, 'error': str(exc)}
+        _jobs[job_id] = {'status': 'failed', 'tracks': None, 'error': str(exc), 'stage': None}
         return
 
     music_dir = storage.project_dir(slug) / 'music'
@@ -166,7 +197,7 @@ async def _run_job(
         usage.record(usage_ctx, model=model_composite, kind='audio', status='error',
                      duration_ms=int((time.monotonic() - started) * 1000), prompt=style, error=err,
                      debug={'request': debug_request, 'response': result})
-        _jobs[job_id] = {'status': 'failed', 'tracks': None, 'error': err}
+        _jobs[job_id] = {'status': 'failed', 'tracks': None, 'error': err, 'stage': None}
         return
 
     async with storage.project_lock(slug):
@@ -181,7 +212,7 @@ async def _run_job(
                  duration_ms=int((time.monotonic() - started) * 1000),
                  units={'tracks': len(tracks)}, prompt=style, response=tracks[0]['file_path'],
                  debug={'request': debug_request, 'response': result})
-    _jobs[job_id] = {'status': 'completed', 'tracks': tracks, 'error': None}
+    _jobs[job_id] = {'status': 'completed', 'tracks': tracks, 'error': None, 'stage': None}
 
 
 def start_job(
@@ -190,7 +221,7 @@ def start_job(
 ) -> str:
     api_key = (settings.get('api_keys') or {}).get('mureka', '')
     job_id = uuid4().hex
-    _jobs[job_id] = {'status': 'pending', 'tracks': None, 'error': None}
+    _jobs[job_id] = {'status': 'pending', 'tracks': None, 'error': None, 'stage': None}
     n_clamped = max(1, min(3, n or 1))
     asyncio.create_task(
         _run_job(job_id, slug, style, lyrics, model, n_clamped, gender, reference_id, api_key, usage_ctx),
@@ -200,3 +231,221 @@ def start_job(
 
 def get_job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
+
+
+async def get_billing(api_key: str) -> dict:
+    """`GET /v1/account/billing` - confirmed live, 2026-08:
+    `{account_id, balance, total_recharge, total_spending,
+    concurrent_request_limit, trace_id}`. The currency/unit of `balance`
+    isn't documented anywhere on platform.mureka.ai - shown to the user
+    as-is, no invented conversion."""
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Mureka')
+    headers = {'Authorization': f'Bearer {api_key}'}
+    async with httpx.AsyncClient(timeout=15) as http_client:
+        resp = await http_client.get(f'{_API_BASE}/v1/account/billing', headers=headers)
+    if resp.status_code != 200:
+        raise RuntimeError(f'Mureka API (account/billing): {_extract_error_message(resp)}')
+    return resp.json()
+
+
+# ---------- Extend an existing track (POST /v1/song/extend) ----------
+# Mirrors the generate flow above almost exactly: submit -> poll (SongTask,
+# same shape) -> download each choice - same _jobs dict/get_job, so the
+# frontend reuses the existing GET /mureka/jobs/{job_id} poll route
+# unchanged. Confirmed against the docs site's own embedded OpenAPI spec,
+# 2026-08 (SongExtendReq): required `lyrics` (continuation text) +
+# `extend_at` (ms), optional `song_id` (a `Song.id` from a prior
+# generate/extend - what we store as `track['raw']['id']`), `extend_type`
+# ('tail'|'head', mureka-8 only) and `model`.
+
+async def _submit_extend(
+    song_id: str, lyrics: str, extend_at: int, model: str | None, extend_type: str | None, api_key: str,
+) -> tuple[dict, dict]:
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Mureka')
+    body: dict = {'song_id': song_id, 'lyrics': lyrics, 'extend_at': extend_at}
+    if model:
+        body['model'] = model
+    if extend_type:
+        body['extend_type'] = extend_type
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    debug_request = {'url': f'{_API_BASE}/v1/song/extend', 'body': body}
+    async with httpx.AsyncClient(timeout=30) as http_client:
+        resp = await http_client.post(f'{_API_BASE}/v1/song/extend', headers=headers, json=body)
+    if resp.status_code != 200:
+        raise RuntimeError(f'Mureka API (song/extend): {_extract_error_message(resp)}')
+    return resp.json(), debug_request
+
+
+async def _run_extend_job(
+    job_id: str, slug: str, source_track_id: str, song_id: str, lyrics: str, extend_at: int,
+    model: str | None, extend_type: str | None, api_key: str, usage_ctx: dict | None = None,
+) -> None:
+    started = time.monotonic()
+    model_composite = f'mureka:{model or "auto"}'
+    debug_request = None
+    try:
+        console_log.log_request_start(model_composite, 'audio', usage_ctx.get('task') if usage_ctx else None)
+        submitted, debug_request = await _submit_extend(song_id, lyrics, extend_at, model, extend_type, api_key)
+        task_id = submitted['id']
+        result = await _poll(task_id, api_key, job_id)
+        if result.get('status') != 'succeeded':
+            reason = f' ({result["failed_reason"]})' if result.get('failed_reason') else ''
+            raise RuntimeError(f'Mureka: продление завершилось со статусом {result.get("status")}{reason}')
+        choices = result.get('choices') or []
+        if not choices:
+            raise RuntimeError('Mureka: задание завершено, но треков не найдено')
+    except Exception as exc:
+        usage.record(usage_ctx, model=model_composite, kind='audio', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=lyrics, error=str(exc),
+                     debug={'request': debug_request} if debug_request else None)
+        _jobs[job_id] = {'status': 'failed', 'tracks': None, 'error': str(exc), 'stage': None}
+        return
+
+    music_dir = storage.project_dir(slug) / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    tracks = []
+    for choice in choices:
+        url = choice.get('url')
+        if not url:
+            continue
+        try:
+            content = await _download(url)
+        except Exception:
+            continue
+        track_id = f'trk_{uuid4().hex[:8]}'
+        filename = f'{track_id}.mp3'
+        (music_dir / filename).write_bytes(content)
+        tracks.append({
+            'track_id': track_id, 'task_id': task_id, 'choice_index': choice.get('index'),
+            'file_path': f'music/{filename}', 'duration_ms': choice.get('duration'),
+            'model': model_composite, 'style': '', 'lyrics': lyrics,
+            'params': {'extend_at': extend_at, 'extend_type': extend_type},
+            'extended_from_track_id': source_track_id,
+            'rating': 0, 'is_selected': False, 'tag_ids': [],
+            'generated_at': _now(), 'raw': choice,
+        })
+
+    if not tracks:
+        err = 'Mureka: не удалось скачать ни одного трека'
+        usage.record(usage_ctx, model=model_composite, kind='audio', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), prompt=lyrics, error=err,
+                     debug={'request': debug_request, 'response': result})
+        _jobs[job_id] = {'status': 'failed', 'tracks': None, 'error': err, 'stage': None}
+        return
+
+    async with storage.project_lock(slug):
+        project = storage.load_project(slug)
+        if project is not None:
+            mureka_data = project.setdefault('mureka', {'reference_audio': [], 'tracks': []})
+            mureka_data['tracks'] = [*mureka_data.get('tracks', []), *tracks]
+            project['updated_at'] = _now()
+            storage.save_project(slug, project)
+
+    usage.record(usage_ctx, model=model_composite, kind='audio', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000),
+                 units={'tracks': len(tracks)}, prompt=lyrics, response=tracks[0]['file_path'],
+                 debug={'request': debug_request, 'response': result})
+    _jobs[job_id] = {'status': 'completed', 'tracks': tracks, 'error': None, 'stage': None}
+
+
+def start_extend_job(
+    slug: str, source_track_id: str, song_id: str, lyrics: str, extend_at: int,
+    model: str | None, extend_type: str | None, settings: dict, usage_ctx: dict | None = None,
+) -> str:
+    api_key = (settings.get('api_keys') or {}).get('mureka', '')
+    job_id = uuid4().hex
+    _jobs[job_id] = {'status': 'pending', 'tracks': None, 'error': None, 'stage': None}
+    asyncio.create_task(
+        _run_extend_job(job_id, slug, source_track_id, song_id, lyrics, extend_at, model, extend_type, api_key, usage_ctx),
+    )
+    return job_id
+
+
+# ---------- Stem separation (POST /v1/song/stem) ----------
+# Unlike generate/extend, this is a *synchronous* call - the response
+# already carries the result (SongStemResp: {zip_url, expires_at,
+# midi_zip_url}), no task/poll dance. Confirmed against the docs site's
+# embedded OpenAPI spec, 2026-08 (SongStemReq): required `url` - a hosted
+# link OR a base64 data URI (`data:audio/mpeg;base64,...`), capped at 10MB
+# decoded - we already have the track's mp3 on disk, so a data URI avoids
+# needing any hosting. Optional `model` picks stem count/format
+# (audio-separation-1/2/3). `zip_url` is only valid until `expires_at`, so
+# (like every other Mureka result URL in this file) it's downloaded to disk
+# immediately rather than kept as a link.
+
+async def stem_track(
+    content: bytes, model: str | None, api_key: str, dest_zip_path: Path, usage_ctx: dict | None = None,
+) -> dict:
+    started = time.monotonic()
+    model_label = f'mureka:{model or "audio-separation-1"}'
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Mureka')
+    if len(content) > _STEM_MAX_BYTES:
+        raise RuntimeError(
+            f'Файл трека больше {_STEM_MAX_BYTES // (1024 * 1024)}MB - Mureka API не принимает такой размер для stem',
+        )
+    data_uri = f'data:audio/mpeg;base64,{base64.b64encode(content).decode("ascii")}'
+    body: dict = {'url': data_uri}
+    if model:
+        body['model'] = model
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    try:
+        async with httpx.AsyncClient(timeout=60) as http_client:
+            resp = await http_client.post(f'{_API_BASE}/v1/song/stem', headers=headers, json=body)
+        if resp.status_code != 200:
+            raise RuntimeError(f'Mureka API (song/stem): {_extract_error_message(resp)}')
+        result = resp.json()
+        zip_url = result.get('zip_url')
+        if not zip_url:
+            raise RuntimeError('Mureka: ответ не содержит ссылку на архив со стемами')
+        zip_bytes = await _download(zip_url)
+        dest_zip_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_zip_path.write_bytes(zip_bytes)
+    except Exception as exc:
+        usage.record(usage_ctx, model=model_label, kind='audio', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), error=str(exc))
+        raise RuntimeError(str(exc)) from exc
+    usage.record(usage_ctx, model=model_label, kind='audio', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000), response=str(dest_zip_path.name))
+    return result
+
+
+# ---------- Local reference-audio trimming (ffmpeg) ----------
+# Mureka's reference-upload hard-requires >=30s of audio (confirmed live,
+# 2026-08 - "The audio duration should be at least 30 seconds") - rather
+# than blindly upload whatever the user picked and let it 400, the Mureka
+# stage lets them audition the source file and pick a window first
+# (ReferenceAudioTrimmer.jsx); this just executes that cut. ffmpeg is a
+# *system* dependency (not a pip package, see README) - nothing else in
+# this repo shells out to an external binary.
+
+def _run_ffmpeg_trim(src_path: Path, start_s: float, duration_s: float, dest_path: Path) -> None:
+    result = subprocess.run(
+        ['ffmpeg', '-y', '-i', str(src_path), '-ss', f'{start_s:.3f}', '-t', f'{duration_s:.3f}',
+         '-c:a', 'libmp3lame', '-q:a', '2', str(dest_path)],
+        capture_output=True, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f'ffmpeg не смог обрезать файл: {result.stderr.decode(errors="replace")[-400:]}')
+
+
+async def trim_audio(src_path: Path, start_ms: int, end_ms: int, dest_path: Path) -> None:
+    if shutil.which('ffmpeg') is None:
+        raise RuntimeError(
+            'ffmpeg не найден в PATH - он нужен, чтобы обрезать референс-аудио. '
+            'Установите ffmpeg (ffmpeg.org) и перезапустите backend.',
+        )
+    start_s = max(0, start_ms) / 1000
+    duration_s = max(0.0, (end_ms - start_ms) / 1000)
+    if duration_s <= 0:
+        raise RuntimeError('Некорректный диапазон обрезки')
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    # `asyncio.create_subprocess_exec` needs a Proactor event loop on Windows
+    # - not guaranteed under every ASGI server/reload setup (confirmed live:
+    # under `uvicorn --reload`, it raised an empty-message NotImplementedError
+    # instead of ever spawning ffmpeg). A plain blocking `subprocess.run` in a
+    # worker thread has no such dependency, at the cost of tying up one
+    # thread-pool thread for the duration of the cut (a few seconds at most).
+    await asyncio.to_thread(_run_ffmpeg_trim, src_path, start_s, duration_s, dest_path)

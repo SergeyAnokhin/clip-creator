@@ -18,8 +18,55 @@ def projects_dir() -> Path:
     return d
 
 
+def _redirects_file() -> Path:
+    return get_data_root() / 'projects' / '_redirects.json'
+
+
+def load_redirects() -> dict[str, str]:
+    f = _redirects_file()
+    if not f.is_file():
+        return {}
+    return json.loads(f.read_text(encoding='utf-8'))
+
+
+def save_redirect(old_slug: str, new_slug: str) -> None:
+    """Records that `old_slug`'s folder was renamed to `new_slug` (see
+    routers/projects.py::patch_project). `resolve_slug` below follows this
+    chain so every existing caller - including a background generation job
+    that captured `old_slug` before the rename and only saves its result
+    30-90s later - transparently lands in the renamed folder instead of
+    recreating an orphaned old one."""
+    redirects = load_redirects()
+    redirects[old_slug] = new_slug
+    projects_dir()  # ensure the parent dir exists
+    _redirects_file().write_text(json.dumps(redirects, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def resolve_slug(slug: str) -> str:
+    """Follows the rename-redirect chain to a project's current folder name -
+    but only when `slug` isn't itself a real, currently-existing project.
+    Slugs are content-derived (author+title) and not permanently unique: a
+    project's *old* slug, once redirected away from, is just a string, and an
+    entirely unrelated project can legitimately hold that exact string as its
+    own real, current `id` (confirmed live, 2026-08 - a still-default
+    "Неизвестный автор - Новое стихотворение" project got silently redirected
+    into a *different*, already-renamed project's folder because that exact
+    string happened to be the other project's old address). Checking for a
+    real folder first makes a redirect apply only to genuinely vacated
+    addresses, which is the only case it's meant for. Loop-guarded in case of
+    a redirect cycle (shouldn't happen, but a broken chain must never hang)."""
+    if (projects_dir() / slug / 'config.json').is_file():
+        return slug
+    redirects = load_redirects()
+    seen = set()
+    while slug in redirects and slug not in seen:
+        seen.add(slug)
+        slug = redirects[slug]
+    return slug
+
+
 def project_dir(slug: str) -> Path:
-    return projects_dir() / slug
+    return projects_dir() / resolve_slug(slug)
 
 
 def project_file(slug: str) -> Path:
@@ -81,7 +128,10 @@ def project_lock(slug: str) -> asyncio.Lock:
     slug gets its own lock. One lock per slug is enough because
     `load_project`/`save_project` are synchronous (no `await` inside), so
     once a coroutine acquires the lock nothing else can interleave with its
-    critical section until it releases."""
+    critical section until it releases. Resolves the rename-redirect chain
+    first, so a job started under the old slug and a request already using
+    the renamed one share the same lock instead of two independent ones."""
+    slug = resolve_slug(slug)
     lock = _project_locks.get(slug)
     if lock is None:
         lock = _project_locks[slug] = asyncio.Lock()

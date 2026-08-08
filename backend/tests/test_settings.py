@@ -36,6 +36,81 @@ def test_get_settings_returns_defaults(client):
     assert body['hide_motion_prompt'] is False
 
 
+def test_get_settings_seeds_music_tags_with_colors(client):
+    resp = client.get('/api/settings')
+    tags = resp.json()['music_tags']
+
+    assert len(tags) > 0
+    for tag in tags:
+        assert tag['id']
+        assert tag['label']
+        assert tag['color'].startswith('#')
+    # Fewer seeded tags than palette colors, so each one is distinct.
+    colors = [t['color'] for t in tags]
+    assert len(set(colors)) == len(colors)
+
+
+def test_get_settings_assigns_color_to_legacy_tag_missing_one(client):
+    client.put('/api/settings', json={'music_tags': [{'id': 'mtag_x', 'label': 'без цвета'}]})
+
+    resp = client.get('/api/settings')
+
+    tags = resp.json()['music_tags']
+    assert tags == [{'id': 'mtag_x', 'label': 'без цвета', 'color': tags[0]['color']}]
+    assert tags[0]['color'].startswith('#')
+
+
+def test_get_settings_preserves_existing_tag_color(client):
+    client.put('/api/settings', json={'music_tags': [{'id': 'mtag_x', 'label': 'custom', 'color': '#123456'}]})
+
+    resp = client.get('/api/settings')
+
+    assert resp.json()['music_tags'][0]['color'] == '#123456'
+
+
+def test_user_base_prompt_presets_merge_into_suno_prompt_presets(client):
+    client.put('/api/settings', json={
+        'suno_base_prompt_user_presets': [{'id': 'u1', 'name': 'Мой промпт', 'prompt': 'текст промпта'}],
+        'mureka_base_prompt_user_presets': [{'id': 'u2', 'name': 'Mureka вариант', 'prompt': 'другой текст'}],
+    })
+
+    presets = client.get('/api/settings/suno-prompt-presets').json()
+
+    user_suno = next(p for p in presets if p['id'] == 'u1')
+    assert user_suno == {'id': 'u1', 'service': 'Suno', 'name': 'Мой промпт', 'description': '', 'prompt': 'текст промпта'}
+    user_mureka = next(p for p in presets if p['id'] == 'u2')
+    assert user_mureka['service'] == 'Mureka'
+    # Built-ins are still there alongside the user ones.
+    assert any(p['id'] == 'mureka-strict' for p in presets)
+
+
+def test_get_mureka_billing_success(client, monkeypatch):
+    from app.routers import settings as settings_router
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        settings_router.mureka, 'get_billing',
+        AsyncMock(return_value={'balance': 2991, 'total_recharge': 3000, 'total_spending': 9}),
+    )
+    client.put('/api/settings', json={'api_keys': {'mureka': 'test-key'}})
+
+    resp = client.get('/api/settings/mureka-billing')
+
+    assert resp.status_code == 200
+    assert resp.json()['balance'] == 2991
+
+
+def test_get_mureka_billing_provider_failure_returns_502(client, monkeypatch):
+    from app.routers import settings as settings_router
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(settings_router.mureka, 'get_billing', AsyncMock(side_effect=RuntimeError('Нет API-ключа Mureka')))
+
+    resp = client.get('/api/settings/mureka-billing')
+
+    assert resp.status_code == 502
+
+
 def test_get_settings_normalizes_legacy_string_wishes(client):
     client.put('/api/settings', json={'suno_wish_library': ['добавь больше саксофона']})
 

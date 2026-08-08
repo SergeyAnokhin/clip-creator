@@ -6,8 +6,10 @@ import { downloadJSON } from '../../lib/download.js';
 import { sortByUseCount } from '../../lib/wishes.js';
 import { useFieldVoice } from '../../hooks/useVoice.js';
 import { groupPresetsByService } from '../../lib/sunoPrompt.js';
+import { pickReadableTextColor } from '../../lib/musicTagColors.js';
 import ModelFavorites from './ModelFavorites.jsx';
 import PricingPanel from './PricingPanel.jsx';
+import BasePromptPresetEditor from './BasePromptPresetEditor.jsx';
 import UsagePill from '../UsagePill.jsx';
 
 const API_KEY_ROWS = [
@@ -44,7 +46,7 @@ export default function SettingsScreen({
   sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
   sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
   backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams, logos,
-  outpaintQualityMode, musicTags,
+  outpaintQualityMode, musicTags, sunoBasePromptUserPresets, murekaBasePromptUserPresets,
   pricing, usageToday, usagePeriodTotals,
   onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
@@ -607,8 +609,12 @@ export default function SettingsScreen({
                       style={tag.id === editingMusicTagId ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
                     >
                       <span
-                        className="settings-row-name"
-                        style={{ width: 'auto', flex: 1, cursor: 'pointer' }}
+                        className="chip"
+                        style={{
+                          padding: '4px 12px', fontSize: 12.5, cursor: 'pointer',
+                          background: tag.color || 'rgba(255,255,255,0.06)', color: pickReadableTextColor(tag.color),
+                          border: 'none',
+                        }}
                         title={L.settings_clickToEdit}
                         onClick={() => startEditMusicTag(tag)}
                       >
@@ -669,6 +675,21 @@ export default function SettingsScreen({
                   ))}
                 </div>
               )}
+
+              <BasePromptPresetEditor
+                L={L} title={L.settings_sunoUserPresets} hint={L.settings_sunoUserPresetsHint}
+                presets={sunoBasePromptUserPresets}
+                onSave={actions.saveSunoBasePromptUserPreset}
+                onUpdate={actions.updateSunoBasePromptUserPreset}
+                onDelete={actions.deleteSunoBasePromptUserPreset}
+              />
+              <BasePromptPresetEditor
+                L={L} title={L.settings_murekaUserPresets} hint={L.settings_murekaUserPresetsHint}
+                presets={murekaBasePromptUserPresets}
+                onSave={actions.saveMurekaBasePromptUserPreset}
+                onUpdate={actions.updateMurekaBasePromptUserPreset}
+                onDelete={actions.deleteMurekaBasePromptUserPreset}
+              />
 
               <div className="settings-panel">
                 <div className="settings-panel-label">{L.settings_sunoBasePrompt}</div>

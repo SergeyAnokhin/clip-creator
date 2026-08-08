@@ -261,6 +261,8 @@ function App() {
           backgroundRemoverLocalParams={settings.backgroundRemoverLocalParams}
           backgroundRemoverFalParams={settings.backgroundRemoverFalParams}
           outpaintQualityMode={settings.outpaintQualityMode} musicTags={settings.musicTags}
+          sunoBasePromptUserPresets={settings.sunoBasePromptUserPresets}
+          murekaBasePromptUserPresets={settings.murekaBasePromptUserPresets}
           pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           onClose={closeSettings} onOpenUsage={openUsage}

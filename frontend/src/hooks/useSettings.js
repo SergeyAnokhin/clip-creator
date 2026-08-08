@@ -3,6 +3,7 @@ import { api } from '../api/client.js';
 import { DICT } from '../i18n/dict.js';
 import { readJSONFile } from '../lib/download.js';
 import { debounce } from '../lib/debounce.js';
+import { nextMusicTagColor } from '../lib/musicTagColors.js';
 
 const DEFAULT_SPECIAL_TAGS = ['[Vocal Interlude]', '[Female vocal interlude]'];
 const DEFAULT_TEXT_MODELS = { favorites: [], default: 'google:gemini-2.5-flash' };
@@ -46,6 +47,8 @@ export function useSettings({ showToast, onAiCall }) {
   const [logos, setLogos] = useState([]);
   const [posterTemplates, setPosterTemplates] = useState([]);
   const [musicTags, setMusicTags] = useState([]);
+  const [sunoBasePromptUserPresets, setSunoBasePromptUserPresets] = useState([]);
+  const [murekaBasePromptUserPresets, setMurekaBasePromptUserPresets] = useState([]);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -75,6 +78,8 @@ export function useSettings({ showToast, onAiCall }) {
       setLogos(s.logos || []);
       setPosterTemplates(s.poster_templates || []);
       setMusicTags(s.music_tags || []);
+      setSunoBasePromptUserPresets(s.suno_base_prompt_user_presets || []);
+      setMurekaBasePromptUserPresets(s.mureka_base_prompt_user_presets || []);
     }).catch(() => {});
     api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
   }, []);
@@ -98,7 +103,10 @@ export function useSettings({ showToast, onAiCall }) {
   function addMusicTag(label) {
     const trimmed = label.trim();
     if (!trimmed) return;
-    setMusicTags((prev) => [...prev, { id: `mtag_${Math.random().toString(36).slice(2, 10)}`, label: trimmed }]);
+    setMusicTags((prev) => [
+      ...prev,
+      { id: `mtag_${Math.random().toString(36).slice(2, 10)}`, label: trimmed, color: nextMusicTagColor(prev.length) },
+    ]);
   }
   function removeMusicTag(id) {
     setMusicTags((prev) => prev.filter((t) => t.id !== id));
@@ -255,6 +263,67 @@ export function useSettings({ showToast, onAiCall }) {
     const next = titleCardBasePromptPresets.filter((p) => p.id !== id);
     setTitleCardBasePromptPresets(next);
     api.putSettings({ title_card_base_prompt_presets: next }).catch(() => {});
+  }
+
+  // User-managed base-prompt presets for the Suno/Mureka "Музыкальные
+  // промпты" settings tab - unlike SUNO_BASE_PROMPT_PRESETS/
+  // MUREKA_BASE_PROMPT_PRESETS (built-in, read-only, served by
+  // GET /suno-prompt-presets), these are freely added/renamed/deleted from
+  // Settings, same plain-array-CRUD-via-partial-PUT pattern as the title-card
+  // presets above. Also spliced into `sunoPromptPresets` optimistically (same
+  // {id, service, name, description, prompt} shape the backend merges them
+  // into) so they show up immediately in the Suno stage's existing
+  // groupPresetsByService picker without a refetch.
+  function saveSunoBasePromptUserPreset(name, prompt) {
+    const trimmedName = (name || '').trim();
+    const trimmedPrompt = (prompt || '').trim();
+    if (!trimmedName || !trimmedPrompt) return;
+    const preset = { id: crypto.randomUUID(), name: trimmedName, prompt: trimmedPrompt };
+    const next = [...sunoBasePromptUserPresets, preset];
+    setSunoBasePromptUserPresets(next);
+    setSunoPromptPresets((prev) => [...prev, { id: preset.id, service: 'Suno', name: trimmedName, description: '', prompt: trimmedPrompt }]);
+    api.putSettings({ suno_base_prompt_user_presets: next }).catch(() => {});
+  }
+  function updateSunoBasePromptUserPreset(id, { name, prompt }) {
+    const trimmedName = (name || '').trim();
+    const trimmedPrompt = (prompt || '').trim();
+    if (!trimmedName || !trimmedPrompt) return;
+    const next = sunoBasePromptUserPresets.map((p) => (p.id === id ? { ...p, name: trimmedName, prompt: trimmedPrompt } : p));
+    setSunoBasePromptUserPresets(next);
+    setSunoPromptPresets((prev) => prev.map((p) => (p.id === id ? { ...p, name: trimmedName, prompt: trimmedPrompt } : p)));
+    api.putSettings({ suno_base_prompt_user_presets: next }).catch(() => {});
+  }
+  function deleteSunoBasePromptUserPreset(id) {
+    const next = sunoBasePromptUserPresets.filter((p) => p.id !== id);
+    setSunoBasePromptUserPresets(next);
+    setSunoPromptPresets((prev) => prev.filter((p) => p.id !== id));
+    api.putSettings({ suno_base_prompt_user_presets: next }).catch(() => {});
+  }
+
+  function saveMurekaBasePromptUserPreset(name, prompt) {
+    const trimmedName = (name || '').trim();
+    const trimmedPrompt = (prompt || '').trim();
+    if (!trimmedName || !trimmedPrompt) return;
+    const preset = { id: crypto.randomUUID(), name: trimmedName, prompt: trimmedPrompt };
+    const next = [...murekaBasePromptUserPresets, preset];
+    setMurekaBasePromptUserPresets(next);
+    setSunoPromptPresets((prev) => [...prev, { id: preset.id, service: 'Mureka', name: trimmedName, description: '', prompt: trimmedPrompt }]);
+    api.putSettings({ mureka_base_prompt_user_presets: next }).catch(() => {});
+  }
+  function updateMurekaBasePromptUserPreset(id, { name, prompt }) {
+    const trimmedName = (name || '').trim();
+    const trimmedPrompt = (prompt || '').trim();
+    if (!trimmedName || !trimmedPrompt) return;
+    const next = murekaBasePromptUserPresets.map((p) => (p.id === id ? { ...p, name: trimmedName, prompt: trimmedPrompt } : p));
+    setMurekaBasePromptUserPresets(next);
+    setSunoPromptPresets((prev) => prev.map((p) => (p.id === id ? { ...p, name: trimmedName, prompt: trimmedPrompt } : p)));
+    api.putSettings({ mureka_base_prompt_user_presets: next }).catch(() => {});
+  }
+  function deleteMurekaBasePromptUserPreset(id) {
+    const next = murekaBasePromptUserPresets.filter((p) => p.id !== id);
+    setMurekaBasePromptUserPresets(next);
+    setSunoPromptPresets((prev) => prev.filter((p) => p.id !== id));
+    api.putSettings({ mureka_base_prompt_user_presets: next }).catch(() => {});
   }
 
   // Poster constructor "save as template" (logo/glass/text layout, reusable
@@ -420,6 +489,8 @@ export function useSettings({ showToast, onAiCall }) {
         background_remover_fal_params: src.background_remover_fal_params ?? backgroundRemoverFalParams,
         outpaint_quality_mode: src.outpaint_quality_mode ?? outpaintQualityMode,
         music_tags: src.music_tags ?? musicTags,
+        suno_base_prompt_user_presets: src.suno_base_prompt_user_presets ?? sunoBasePromptUserPresets,
+        mureka_base_prompt_user_presets: src.mureka_base_prompt_user_presets ?? murekaBasePromptUserPresets,
       };
       setLang(next.lang);
       setTextModels(next.text_models);
@@ -443,7 +514,10 @@ export function useSettings({ showToast, onAiCall }) {
       setBackgroundRemoverFalParams(next.background_remover_fal_params);
       setOutpaintQualityModeState(next.outpaint_quality_mode);
       setMusicTags(next.music_tags);
+      setSunoBasePromptUserPresets(next.suno_base_prompt_user_presets);
+      setMurekaBasePromptUserPresets(next.mureka_base_prompt_user_presets);
       await api.putSettings(next);
+      api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
       showToast(L.toast_imported);
     } catch {
       showToast(L.toast_importFailed);
@@ -463,6 +537,7 @@ export function useSettings({ showToast, onAiCall }) {
         background_remover_params: backgroundRemoverParams, background_remover_method: backgroundRemoverMethod,
         background_remover_local_params: backgroundRemoverLocalParams, background_remover_fal_params: backgroundRemoverFalParams,
         outpaint_quality_mode: outpaintQualityMode, music_tags: musicTags,
+        suno_base_prompt_user_presets: sunoBasePromptUserPresets, mureka_base_prompt_user_presets: murekaBasePromptUserPresets,
       });
       showToast(L.toast_saved);
     } catch {
@@ -479,6 +554,7 @@ export function useSettings({ showToast, onAiCall }) {
     backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams,
     outpaintQualityMode,
     logos, setLogos, posterTemplates, musicTags,
+    sunoBasePromptUserPresets, murekaBasePromptUserPresets,
     toggleLang: () => setLang((l) => (l === 'ru' ? 'en' : 'ru')),
     actions: {
       setLangRu: () => setLang('ru'), setLangEn: () => setLang('en'), setRequestTimeoutSeconds,
@@ -499,6 +575,8 @@ export function useSettings({ showToast, onAiCall }) {
       bumpWishUse, bumpSceneWishUse, bumpTitleCardWishUse,
       savePosterTemplate, deletePosterTemplate,
       addMusicTag, removeMusicTag, updateMusicTag,
+      saveSunoBasePromptUserPreset, updateSunoBasePromptUserPreset, deleteSunoBasePromptUserPreset,
+      saveMurekaBasePromptUserPreset, updateMurekaBasePromptUserPreset, deleteMurekaBasePromptUserPreset,
     },
   };
 }

@@ -1,4 +1,5 @@
 import re
+import shutil
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -131,7 +132,40 @@ def patch_project(project_id: str, patch: dict = Body(...)):
     project = migrate_legacy_project(project)
     project.update(patch)
     project['updated_at'] = _now()
-    storage.save_project(project_id, project)
+
+    # `title`/`author` are already live everywhere they're displayed
+    # (WorkflowHeader.jsx, ProjectCard.jsx read the fields directly) - only
+    # the folder name/`id` (fixed at creation from spec 1.1's "[Author] -
+    # [Title]" slug) used to lag behind. Rename the folder to match,
+    # uniquified the same way create_project above picks a free slug, and
+    # leave a redirect (storage.save_redirect) so any background job that
+    # captured the *old* slug before this rename - e.g. a Mureka generation
+    # still running - still finds the right folder when it saves its result
+    # later (storage.project_dir/project_lock resolve the redirect first).
+    #
+    # `'title' in patch` isn't a "did the user just edit the title field"
+    # check - useProjects.js's `updateProject`/`flushPendingSave` always
+    # PATCH the *whole* project object, so both keys are present on
+    # virtually every save. That's fine: the real gate is `new_slug !=
+    # current_slug` below, so this also self-heals any project whose folder
+    # name was already stale (e.g. from before this rename logic existed)
+    # the next time it's saved for any reason, not only on an explicit
+    # title/author edit.
+    current_slug = storage.resolve_slug(project_id)
+    if 'title' in patch or 'author' in patch:
+        new_slug = make_slug(project.get('author', ''), project.get('title', ''))
+        if new_slug != current_slug:
+            slug, i = new_slug, 2
+            while slug != current_slug and storage.load_project(slug) is not None:
+                slug = f'{new_slug}-{i}'
+                i += 1
+            if slug != current_slug:
+                shutil.move(str(storage.project_dir(current_slug)), str(storage.project_dir(slug)))
+                storage.save_redirect(current_slug, slug)
+                project['id'] = slug
+                current_slug = slug
+
+    storage.save_project(current_slug, project)
     return project
 
 

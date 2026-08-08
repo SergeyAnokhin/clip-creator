@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 
 import pytest
 
@@ -291,3 +292,221 @@ def test_start_job_records_usage_row_with_unknown_cost(monkeypatch, usage_ledger
     assert rec['units']['tracks'] == 1
     # No pricing.py catalog row for Mureka - cost must stay unknown (None), never 0.
     assert rec['cost']['amount'] is None
+
+
+# ---------- _extract_error_message ----------
+
+def test_extract_error_message_reads_mureka_error_shape():
+    resp = _FakeResponse(400, {'error': {'message': 'Invalid Request, The audio duration should be at least 30 seconds.'}})
+    assert mureka._extract_error_message(resp) == 'Invalid Request, The audio duration should be at least 30 seconds.'
+
+
+def test_extract_error_message_falls_back_on_non_json_body():
+    resp = _FakeResponse(502, text='<html>Bad Gateway</html>')
+    resp.json = lambda: (_ for _ in ()).throw(ValueError('not json'))
+    assert mureka._extract_error_message(resp) == '502: <html>Bad Gateway</html>'
+
+
+def test_extract_error_message_falls_back_when_error_key_missing():
+    resp = _FakeResponse(500, {'detail': 'something else'}, text='{"detail": "something else"}')
+    assert mureka._extract_error_message(resp) == '500: {"detail": "something else"}'
+
+
+def test_upload_reference_audio_error_message_is_clean_not_raw_json(monkeypatch):
+    _install(monkeypatch, [_FakeResponse(
+        400, {'error': {'message': 'Invalid Request, The audio duration should be at least 30 seconds.'}},
+        text='{"error": {"message": "Invalid Request, The audio duration should be at least 30 seconds."}}',
+    )])
+    with pytest.raises(RuntimeError, match='at least 30 seconds') as exc_info:
+        asyncio.run(mureka.upload_reference_audio(b'short', 'ref.mp3', 'key'))
+    # The old behavior dumped the raw JSON blob into the message - assert
+    # that's gone, not just that *a* substring matches.
+    assert '{"error"' not in str(exc_info.value)
+
+
+# ---------- get_billing ----------
+
+def test_get_billing_success(monkeypatch):
+    fake_client = _install(monkeypatch, [_FakeResponse(200, {
+        'account_id': 153100679643137, 'balance': 2991, 'total_recharge': 3000,
+        'total_spending': 9, 'concurrent_request_limit': 1, 'trace_id': 't1',
+    })])
+
+    result = asyncio.run(mureka.get_billing('test-key'))
+
+    assert result['balance'] == 2991
+    call = fake_client.calls[0]
+    assert call['url'] == 'https://api.mureka.ai/v1/account/billing'
+    assert call['headers'] == {'Authorization': 'Bearer test-key'}
+
+
+def test_get_billing_missing_key_raises():
+    with pytest.raises(RuntimeError, match='Mureka'):
+        asyncio.run(mureka.get_billing(''))
+
+
+def test_get_billing_error_status_raises_with_clean_message(monkeypatch):
+    _install(monkeypatch, [_FakeResponse(401, {'error': {'message': 'Invalid API key'}})])
+    with pytest.raises(RuntimeError, match='Invalid API key'):
+        asyncio.run(mureka.get_billing('bad-key'))
+
+
+# ---------- extend (song/extend) ----------
+
+def test_submit_extend_builds_minimal_body(monkeypatch):
+    fake_client = _install(monkeypatch, [_FakeResponse(200, {'id': 't1', 'status': 'preparing'})])
+
+    data, debug_request = asyncio.run(mureka._submit_extend('song_1', 'more lyrics', 8000, None, None, 'key'))
+
+    assert data == {'id': 't1', 'status': 'preparing'}
+    assert debug_request['url'] == 'https://api.mureka.ai/v1/song/extend'
+    assert fake_client.calls[0]['json'] == {'song_id': 'song_1', 'lyrics': 'more lyrics', 'extend_at': 8000}
+
+
+def test_submit_extend_includes_model_and_extend_type(monkeypatch):
+    fake_client = _install(monkeypatch, [_FakeResponse(200, {'id': 't1', 'status': 'preparing'})])
+
+    asyncio.run(mureka._submit_extend('song_1', 'lyrics', 12000, 'mureka-8', 'head', 'key'))
+
+    assert fake_client.calls[0]['json'] == {
+        'song_id': 'song_1', 'lyrics': 'lyrics', 'extend_at': 12000, 'model': 'mureka-8', 'extend_type': 'head',
+    }
+
+
+def test_submit_extend_missing_key_raises():
+    with pytest.raises(RuntimeError, match='Mureka'):
+        asyncio.run(mureka._submit_extend('song_1', 'l', 8000, None, None, ''))
+
+
+def test_start_extend_job_success_appends_tracks_tagged_with_source(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    from app import storage
+
+    storage.save_project('poem-a', {'id': 'poem-a', 'mureka': {'tracks': [], 'reference_audio': []}})
+
+    _install(monkeypatch, [
+        _FakeResponse(200, {'id': 'task_ext', 'status': 'preparing'}),
+        _FakeResponse(200, {
+            'status': 'succeeded',
+            'choices': [{'index': 0, 'id': 'song_2', 'url': 'https://cdn.mureka.ai/ext.mp3', 'duration': 60000}],
+        }),
+        _FakeResponse(200, content=b'EXTENDED-MP3'),
+    ])
+
+    async def scenario():
+        job_id = mureka.start_extend_job(
+            'poem-a', 'trk_source', 'song_1', 'continuation lyrics', 30000, None, None,
+            {'api_keys': {'mureka': 'k'}},
+        )
+        return await _wait_for_terminal(job_id)
+
+    job = asyncio.run(scenario())
+
+    assert job['status'] == 'completed'
+    assert len(job['tracks']) == 1
+    track = job['tracks'][0]
+    assert track['extended_from_track_id'] == 'trk_source'
+    assert track['lyrics'] == 'continuation lyrics'
+    assert track['params'] == {'extend_at': 30000, 'extend_type': None}
+
+    project = storage.load_project('poem-a')
+    assert len(project['mureka']['tracks']) == 1
+
+
+def test_start_extend_job_failure_records_error(tmp_path, monkeypatch):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
+    _install(monkeypatch, [_FakeResponse(400, {'error': {'message': 'Song not found'}})])
+
+    async def scenario():
+        job_id = mureka.start_extend_job(
+            'poem-a', 'trk_source', 'song_1', 'lyrics', 30000, None, None, {'api_keys': {'mureka': 'k'}},
+        )
+        return await _wait_for_terminal(job_id)
+
+    job = asyncio.run(scenario())
+    assert job['status'] == 'failed'
+    assert 'Song not found' in job['error']
+
+
+# ---------- stem_track ----------
+
+def test_stem_track_success_downloads_zip(tmp_path, monkeypatch):
+    _install(monkeypatch, [
+        _FakeResponse(200, {'zip_url': 'https://cdn.mureka.ai/stems.zip', 'expires_at': 123}),
+        _FakeResponse(200, content=b'ZIPDATA'),
+    ])
+    dest = tmp_path / 'stem_abc.zip'
+
+    result = asyncio.run(mureka.stem_track(b'fake-mp3-bytes', None, 'key', dest))
+
+    assert result['zip_url'] == 'https://cdn.mureka.ai/stems.zip'
+    assert dest.read_bytes() == b'ZIPDATA'
+
+
+def test_stem_track_sends_base64_data_uri_and_model(tmp_path, monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'zip_url': 'https://cdn.mureka.ai/stems.zip'}),
+        _FakeResponse(200, content=b'ZIPDATA'),
+    ])
+    dest = tmp_path / 'stem.zip'
+
+    asyncio.run(mureka.stem_track(b'AB', 'audio-separation-2', 'key', dest))
+
+    body = fake_client.calls[0]['json']
+    assert body['model'] == 'audio-separation-2'
+    assert body['url'].startswith('data:audio/mpeg;base64,')
+
+
+def test_stem_track_rejects_oversized_file(tmp_path):
+    dest = tmp_path / 'stem.zip'
+    with pytest.raises(RuntimeError, match='MB'):
+        asyncio.run(mureka.stem_track(b'x' * (mureka._STEM_MAX_BYTES + 1), None, 'key', dest))
+
+
+def test_stem_track_missing_key_raises(tmp_path):
+    dest = tmp_path / 'stem.zip'
+    with pytest.raises(RuntimeError, match='Mureka'):
+        asyncio.run(mureka.stem_track(b'x', None, '', dest))
+
+
+def test_stem_track_records_usage_on_error(tmp_path, monkeypatch, usage_ledger):
+    _install(monkeypatch, [_FakeResponse(500, text='boom')])
+    dest = tmp_path / 'stem.zip'
+    ctx = usage_ledger.context('mureka_stem', 'poem-c', {}, model=None)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(mureka.stem_track(b'x', None, 'key', dest, usage_ctx=ctx))
+
+    records = usage_ledger.query()['records']
+    assert len(records) == 1
+    assert records[0]['status'] == 'error'
+
+
+# ---------- trim_audio (ffmpeg) ----------
+
+def test_trim_audio_missing_ffmpeg_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(mureka.shutil, 'which', lambda _name: None)
+    with pytest.raises(RuntimeError, match='ffmpeg'):
+        asyncio.run(mureka.trim_audio(tmp_path / 'src.mp3', 0, 30000, tmp_path / 'out.mp3'))
+
+
+def test_trim_audio_rejects_empty_range(tmp_path):
+    (tmp_path / 'src.mp3').write_bytes(b'fake')
+    with pytest.raises(RuntimeError, match='диапазон'):
+        asyncio.run(mureka.trim_audio(tmp_path / 'src.mp3', 30000, 30000, tmp_path / 'out.mp3'))
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_trim_audio_real_ffmpeg_produces_output(tmp_path):
+    import subprocess
+    src = tmp_path / 'src.wav'
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=5', str(src)],
+        check=True, capture_output=True,
+    )
+    dest = tmp_path / 'trimmed.mp3'
+
+    asyncio.run(mureka.trim_audio(src, 500, 3000, dest))
+
+    assert dest.is_file()
+    assert dest.stat().st_size > 0

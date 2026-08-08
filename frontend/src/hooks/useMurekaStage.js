@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 
-const EMPTY_MUREKA = { style_input: '', lyrics_input: '', reference_audio: [], tracks: [] };
+const EMPTY_MUREKA = { style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: [] };
 
 /** Mureka stage: real audio generation (unlike the Suno stage, which only
  * writes a style/lyrics text pair for pasting elsewhere - see
@@ -23,12 +23,19 @@ export function useMurekaStage({
   const [generating, setGenerating] = useState(false);
   const [murekaError, setMurekaError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [jobStage, setJobStage] = useState(null);
   const [uploadingReference, setUploadingReference] = useState(false);
+  const [uploadingReferenceSource, setUploadingReferenceSource] = useState(false);
+  const [trimmingReference, setTrimmingReference] = useState(false);
+  const [billing, setBilling] = useState(null);
+  const [extendingTrackIds, setExtendingTrackIds] = useState([]);
+  const [stemmingTrackIds, setStemmingTrackIds] = useState([]);
   const elapsedTimerRef = useRef(null);
 
   useEffect(() => {
     if (generating) {
       setElapsedSeconds(0);
+      setJobStage(null);
       elapsedTimerRef.current = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
     } else if (elapsedTimerRef.current) {
       clearInterval(elapsedTimerRef.current);
@@ -39,12 +46,17 @@ export function useMurekaStage({
     };
   }, [generating]);
 
+  function loadBilling() {
+    api.getMurekaBilling().then(setBilling).catch(() => setBilling(null));
+  }
+
   function resetForProject(project) {
     setModel('auto');
     setN(2);
     setGender('');
     setReferenceId('');
     setMurekaError(null);
+    loadBilling();
     const existing = project?.mureka;
     if (!existing || existing.style_input === undefined || existing.lyrics_input === undefined) {
       setActiveProject((p) => ({
@@ -68,9 +80,15 @@ export function useMurekaStage({
     updateProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), lyrics_input: value } }), { immediate: false });
   }
 
-  async function pollJob(projectId, jobId) {
+  /** Polls a job (generate or extend - same {status, tracks, error, stage}
+   * shape, see providers/mureka.py's get_job) until terminal, reporting the
+   * real intermediate Mureka status (preparing/queued/running/streaming) to
+   * the caller on every tick via `onTick` instead of just an elapsed-seconds
+   * counter. */
+  async function pollJob(projectId, jobId, onTick) {
     for (;;) {
       const job = await api.getMurekaJob(projectId, jobId);
+      onTick?.(job);
       if (job.status === 'completed' || job.status === 'failed') return job;
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
@@ -90,13 +108,14 @@ export function useMurekaStage({
         style: mureka.style_input, lyrics: mureka.lyrics_input,
         model, n, gender: gender || undefined, reference_id: referenceId || undefined,
       });
-      const job = await pollJob(activeProject.id, jobId);
+      const job = await pollJob(activeProject.id, jobId, (j) => setJobStage(j.stage || null));
       if (job.status === 'completed' && job.tracks?.length) {
         setActiveProject((p) => ({
           ...p,
           mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: [...(p.mureka?.tracks || []), ...job.tracks] },
         }));
         showToast(L.toast_generated);
+        loadBilling();
       } else {
         const message = job.error || L.mureka_generateFailed;
         setMurekaError(message);
@@ -152,6 +171,22 @@ export function useMurekaStage({
     }
   }
 
+  /** Copies a previously generated track's style/lyrics/params back into the
+   * current generation form, so "generate again with these settings" doesn't
+   * require retyping anything. Pure client-side - the track already carries
+   * everything it was generated with (see providers/mureka.py's _run_job). */
+  function reuseTrackSettings(track) {
+    if (!track) return;
+    setStyleInput(track.style || '');
+    setLyricsInput(track.lyrics || '');
+    if (track.model) setModel(track.model.replace(/^mureka:/, ''));
+    const params = track.params || {};
+    if (params.n) setN(params.n);
+    setGender(params.gender || '');
+    setReferenceId(params.reference_id || '');
+    showToast(L.mureka_reuseSettingsApplied);
+  }
+
   async function uploadReferenceAudio(file) {
     if (!activeProject || !file) return;
     setUploadingReference(true);
@@ -177,17 +212,120 @@ export function useMurekaStage({
     }
   }
 
+  /** ReferenceAudioTrimmer.jsx flow: the raw file is uploaded and kept local
+   * first (never sent to Mureka as-is - it may be under Mureka's 30s
+   * minimum), then trimmed server-side (ffmpeg) once the user picks a
+   * window; only that trimmed clip ever reaches Mureka (trimReferenceSource
+   * below), same as uploadReferenceAudio's flow. */
+  async function uploadReferenceSource(file) {
+    if (!activeProject || !file) return null;
+    setUploadingReferenceSource(true);
+    try {
+      const result = await api.uploadMurekaReferenceSource(activeProject.id, file);
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), reference_sources: result.reference_sources } }));
+      return result.reference_sources[result.reference_sources.length - 1] || null;
+    } catch (err) {
+      showToast(err?.detail || L.mureka_uploadReferenceFailed);
+      return null;
+    } finally {
+      setUploadingReferenceSource(false);
+    }
+  }
+  async function deleteReferenceSource(sourceId) {
+    if (!activeProject) return;
+    try {
+      const result = await api.deleteMurekaReferenceSource(activeProject.id, sourceId);
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), reference_sources: result.reference_sources } }));
+    } catch {
+      showToast(L.mureka_deleteReferenceFailed);
+    }
+  }
+  async function trimReferenceSource(sourceId, startMs, endMs) {
+    if (!activeProject) return false;
+    setTrimmingReference(true);
+    try {
+      const result = await api.trimMurekaReferenceSource(activeProject.id, sourceId, Math.round(startMs), Math.round(endMs));
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), reference_audio: result.reference_audio } }));
+      const last = result.reference_audio[result.reference_audio.length - 1];
+      if (last) setReferenceId(last.mureka_file_id);
+      showToast(L.mureka_trimSuccess);
+      return true;
+    } catch (err) {
+      showToast(err?.detail || L.mureka_trimFailed);
+      return false;
+    } finally {
+      setTrimmingReference(false);
+    }
+  }
+
+  /** "Продлить" (extend) - real Mureka API call (POST .../extend), same
+   * job/poll shape as generate() above. New tracks are appended to the
+   * gallery, tagged with extended_from_track_id server-side. */
+  async function extendTrack(trackId, { lyrics, extendAt, extendType, model: extendModel } = {}) {
+    if (!activeProject) return;
+    const trimmed = (lyrics || '').trim();
+    if (!trimmed) {
+      showToast(L.mureka_extendNoLyricsError);
+      return;
+    }
+    setExtendingTrackIds((ids) => [...ids, trackId]);
+    try {
+      const { job_id: jobId } = await api.extendMurekaTrack(activeProject.id, trackId, {
+        lyrics: trimmed, extend_at: extendAt, extend_type: extendType, model: extendModel,
+      });
+      const job = await pollJob(activeProject.id, jobId);
+      if (job.status === 'completed' && job.tracks?.length) {
+        setActiveProject((p) => ({
+          ...p,
+          mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: [...(p.mureka?.tracks || []), ...job.tracks] },
+        }));
+        showToast(L.toast_generated);
+        loadBilling();
+      } else {
+        showToast(job.error || L.mureka_extendFailed);
+      }
+    } catch (err) {
+      showToast(err?.detail || L.mureka_extendFailed);
+    } finally {
+      setExtendingTrackIds((ids) => ids.filter((id) => id !== trackId));
+      onAiCall?.();
+    }
+  }
+
+  /** "Разделить на дорожки" (stem separation) - synchronous Mureka API call
+   * (POST .../stem), no job/poll: the response already carries the result,
+   * see providers/mureka.py::stem_track. */
+  async function stemTrack(trackId, { model: stemModel } = {}) {
+    if (!activeProject) return;
+    setStemmingTrackIds((ids) => [...ids, trackId]);
+    try {
+      const result = await api.stemMurekaTrack(activeProject.id, trackId, { model: stemModel });
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: result.tracks } }));
+      showToast(L.mureka_stemSuccess);
+      loadBilling();
+    } catch (err) {
+      showToast(err?.detail || L.mureka_stemFailed);
+    } finally {
+      setStemmingTrackIds((ids) => ids.filter((id) => id !== trackId));
+      onAiCall?.();
+    }
+  }
+
   return {
     state: {
       styleInput: mureka.style_input ?? '', lyricsInput: mureka.lyrics_input ?? '',
-      model, n, gender, referenceId, referenceAudio: mureka.reference_audio, tracks: mureka.tracks,
-      generating, elapsedSeconds, murekaError, uploadingReference,
+      model, n, gender, referenceId, referenceAudio: mureka.reference_audio, referenceSources: mureka.reference_sources,
+      tracks: mureka.tracks,
+      generating, elapsedSeconds, jobStage, murekaError, uploadingReference, uploadingReferenceSource, trimmingReference,
+      billing, extendingTrackIds, stemmingTrackIds,
     },
     resetForProject,
     actions: {
       setStyleInput, setLyricsInput, setModel, setN, setGender, setReferenceId,
       onGenerate: generate, onRate: rateTrack, onSelectMain: selectMainTrack, onToggleTag: toggleTrackTag, onDelete: deleteTrack,
       uploadReferenceAudio, deleteReferenceAudio,
+      uploadReferenceSource, deleteReferenceSource, trimReferenceSource,
+      reuseTrackSettings, extendTrack, stemTrack, loadBilling,
     },
   };
 }

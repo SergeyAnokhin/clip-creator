@@ -971,3 +971,235 @@ def test_delete_mureka_reference_audio_removes_file_and_entry(client, monkeypatc
 def test_delete_mureka_reference_audio_missing_returns_404(client):
     pid = client.get('/api/projects').json()[0]['id']
     assert client.delete(f'/api/projects/{pid}/mureka/reference-audio/does-not-exist').status_code == 404
+
+
+# ---------- Reference-audio trimmer (upload source -> trim -> reference_audio) ----------
+
+def test_upload_mureka_reference_source_writes_file_and_appends(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('long-song.mp3', b'raw-audio-bytes', 'audio/mpeg')},
+    )
+    assert resp.status_code == 200
+    sources = resp.json()['reference_sources']
+    assert len(sources) == 1
+    assert sources[0]['filename'] == 'long-song.mp3'
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / sources[0]['file_path']
+    assert written.read_bytes() == b'raw-audio-bytes'
+
+
+def test_upload_mureka_reference_source_rejects_bad_extension(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('notes.txt', b'hello', 'text/plain')},
+    )
+    assert resp.status_code == 415
+
+
+def test_delete_mureka_reference_source_removes_file_and_entry(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    upload = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('song.mp3', b'raw-bytes', 'audio/mpeg')},
+    )
+    source = upload.json()['reference_sources'][0]
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / source['file_path']
+    assert written.is_file()
+
+    resp = client.delete(f'/api/projects/{pid}/mureka/reference-sources/{source["id"]}')
+
+    assert resp.status_code == 200
+    assert resp.json()['reference_sources'] == []
+    assert not written.is_file()
+
+
+def test_trim_mureka_reference_source_requires_valid_range(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    upload = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('song.mp3', b'raw-bytes', 'audio/mpeg')},
+    )
+    source_id = upload.json()['reference_sources'][0]['id']
+
+    resp = client.post(f'/api/projects/{pid}/mureka/reference-sources/{source_id}/trim', json={'start_ms': 5000, 'end_ms': 5000})
+    assert resp.status_code == 422
+
+
+def test_trim_mureka_reference_source_missing_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(f'/api/projects/{pid}/mureka/reference-sources/does-not-exist/trim', json={'start_ms': 0, 'end_ms': 30000})
+    assert resp.status_code == 404
+
+
+def test_trim_mureka_reference_source_success_calls_ffmpeg_then_upload(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    upload = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('song.mp3', b'raw-bytes', 'audio/mpeg')},
+    )
+    source_id = upload.json()['reference_sources'][0]['id']
+
+    async def fake_trim_audio(src_path, start_ms, end_ms, dest_path):
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(b'trimmed-mp3-bytes')
+
+    monkeypatch.setattr(generation_router.mureka, 'trim_audio', fake_trim_audio)
+    monkeypatch.setattr(
+        generation_router.mureka, 'upload_reference_audio',
+        AsyncMock(return_value={'id': 'mureka_file_trimmed'}),
+    )
+
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources/{source_id}/trim',
+        json={'start_ms': 0, 'end_ms': 30000},
+    )
+
+    assert resp.status_code == 200
+    refs = resp.json()['reference_audio']
+    assert len(refs) == 1
+    assert refs[0]['mureka_file_id'] == 'mureka_file_trimmed'
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / refs[0]['file_path']
+    assert written.read_bytes() == b'trimmed-mp3-bytes'
+
+
+def test_trim_mureka_reference_source_ffmpeg_failure_returns_502(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    upload = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources',
+        files={'file': ('song.mp3', b'raw-bytes', 'audio/mpeg')},
+    )
+    source_id = upload.json()['reference_sources'][0]['id']
+
+    async def fake_trim_audio(*args, **kwargs):
+        raise RuntimeError('ffmpeg не найден в PATH')
+
+    monkeypatch.setattr(generation_router.mureka, 'trim_audio', fake_trim_audio)
+
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/reference-sources/{source_id}/trim',
+        json={'start_ms': 0, 'end_ms': 30000},
+    )
+    assert resp.status_code == 502
+
+
+# ---------- Extend / stem track operations ----------
+
+def test_extend_mureka_track_requires_lyrics(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {'id': 'song_1'}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/extend', json={'lyrics': '  '})
+    assert resp.status_code == 422
+
+
+def test_extend_mureka_track_requires_song_id(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/extend', json={'lyrics': 'more'})
+    assert resp.status_code == 422
+
+
+def test_extend_mureka_track_starts_job_defaulting_extend_at_to_duration(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 45000, 'raw': {'id': 'song_1'}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    captured = {}
+
+    def fake_start_extend_job(slug, source_track_id, song_id, lyrics, extend_at, model, extend_type, settings, usage_ctx=None):
+        captured.update(slug=slug, source_track_id=source_track_id, song_id=song_id, lyrics=lyrics, extend_at=extend_at)
+        return 'job_ext_1'
+
+    monkeypatch.setattr(generation_router.mureka, 'start_extend_job', fake_start_extend_job)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/extend', json={'lyrics': 'continuation'})
+
+    assert resp.status_code == 200
+    assert resp.json() == {'job_id': 'job_ext_1'}
+    assert captured == {
+        'slug': pid, 'source_track_id': 'trk_x', 'song_id': 'song_1', 'lyrics': 'continuation', 'extend_at': 45000,
+    }
+
+
+def test_extend_mureka_track_missing_track_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/does-not-exist/extend', json={'lyrics': 'x'})
+    assert resp.status_code == 404
+
+
+def test_stem_mureka_track_success_appends_stem_entry(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    music_dir = data_root / 'projects' / pid / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    (music_dir / 'trk_x.mp3').write_bytes(b'fake-mp3')
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}, 'stems': []},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    async def fake_stem_track(content, model, api_key, dest_zip_path, usage_ctx=None):
+        dest_zip_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_zip_path.write_bytes(b'zip-bytes')
+        return {'zip_url': 'https://cdn.mureka.ai/x.zip', 'expires_at': 999}
+
+    monkeypatch.setattr(generation_router.mureka, 'stem_track', fake_stem_track)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/stem', json={'model': 'audio-separation-1'})
+
+    assert resp.status_code == 200
+    tracks = resp.json()['tracks']
+    assert len(tracks[0]['stems']) == 1
+    assert tracks[0]['stems'][0]['model'] == 'audio-separation-1'
+    written = data_root / 'projects' / pid / tracks[0]['stems'][0]['file_path']
+    assert written.read_bytes() == b'zip-bytes'
+
+
+def test_stem_mureka_track_provider_failure_returns_502(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    music_dir = data_root / 'projects' / pid / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    (music_dir / 'trk_x.mp3').write_bytes(b'fake-mp3')
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    monkeypatch.setattr(generation_router.mureka, 'stem_track', AsyncMock(side_effect=RuntimeError('boom')))
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/stem', json={})
+    assert resp.status_code == 502
+
+
+def test_stem_mureka_track_missing_audio_file_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/does-not-exist.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/stem', json={})
+    assert resp.status_code == 404

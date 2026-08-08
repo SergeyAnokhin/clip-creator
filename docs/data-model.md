@@ -9,6 +9,7 @@ app_data/
   settings.json
   model_catalog.json          # last-known-good model list per provider (see below)
   projects/
+    _redirects.json           # {old_slug: new_slug} - see "Project rename" below
     <slug>/                  # slug = "Author - Title", filesystem-sanitized = project id
       config.json            # the whole project
       images/scene_{n}_{shorthex}.{png|jpg|webp}
@@ -16,7 +17,9 @@ app_data/
       titlecard/{shorthex}.{png|jpg|webp}
       titlecard/posters/{shorthex}.png   # Poster constructor output (flattened)
       music/{track_id}.mp3               # Mureka-generated tracks, downloaded immediately (see below)
-      music/references/ref_{uuid}.{ext}  # user-uploaded reference audio (mp3/m4a)
+      music/{stem_id}.zip                # stem-separation output (see MurekaTrack.stems below)
+      music/references/ref_{uuid}.{ext}  # trimmed reference audio actually sent to Mureka
+      music/reference-sources/{id}.{ext} # raw uploaded file, pre-trim staging area (ReferenceAudioTrimmer.jsx)
   logos/logo_{shorthex}.{png|webp}       # global, cross-project - see settings.logos
   usage/
     YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
@@ -27,7 +30,7 @@ app_data/
 | Field | Type | Notes |
 | --- | --- | --- |
 | `id` | str | = folder slug; collisions get `-2`, `-3`, … |
-| `author`, `title` | str | Fall back to `"Неизвестный автор"` / `"Новое стихотворение"`. Editing these later does **not** rename the folder/`id` — the slug is fixed at creation time, so a project's folder name and its current `author`/`title` can legitimately diverge (don't assume the folder name reflects current content when navigating `app_data/projects/` by hand) |
+| `author`, `title` | str | Fall back to `"Неизвестный автор"` / `"Новое стихотворение"`. Editing either one **renames the folder and `id` to match** (`routers/projects.py::patch_project` recomputes the slug, moves the folder, and records a redirect — see "Project rename" below); the response's `id` may differ from the one the request was sent to, and callers must adopt it (`useProjects.js`'s `adoptRenamedId`) |
 | `created_at`, `updated_at` | str | ISO-8601 `…Z`; `updated_at` refreshed on every write |
 | `tags` | str[] | Home-screen chips only |
 | `blocks` | Block[] | Source of truth for the lyrics builder |
@@ -45,7 +48,24 @@ app_data/
 | `source_url` | str | Original URL, if the project came from one |
 | `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{reference_image_paths: [], variants: [], posters: []}` (`text_block` is seeded lazily on first stage visit, see below) |
 | `active_title_card_wish_ids` | str[] | Ids of `settings.title_card_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (poster wishes vs. scene/imagery ones) |
-| `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], tracks: []}` |
+| `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: []}` |
+
+**Project rename** (`app_data/projects/_redirects.json`): when a `PATCH` changes
+`title`/`author`, `routers/projects.py::patch_project` moves the project's
+folder to the new slug (uniquified like `create_project`'s `-2`/`-3` suffix on
+collision) and appends `{old_slug: new_slug}` to this flat, never-pruned
+redirect map. `storage.resolve_slug`/`project_dir`/`project_lock` transparently
+follow the chain, so any caller still holding the old slug — a background
+generation job that started before the rename finished, or a stale client
+request — lands in the renamed folder instead of recreating an orphaned old
+one. `resolve_slug` only follows a redirect when `slug` **isn't itself a
+real, currently-existing project** (checks for `<slug>/config.json` on disk
+first) — slugs are content-derived, not permanently unique, so a vacated old
+slug can later coincide with a wholly unrelated project's own real address;
+without that check, opening the unrelated project would silently load (and
+overwrite) the renamed one's data instead (confirmed live, 2026-08). See
+`architecture.md`'s "Project rename" section for the failure mode this
+avoids.
 
 **Block**: `{id, type, importance, content}` — `type` is
 `intro|verse|chorus|bridge|outro|interlude`; `content` is plain multi-line text.
@@ -157,7 +177,7 @@ per-layer style fields; `align` is `'left'\|'center'\|'right'` (defaults to
 `'left'` on any older layer missing the key); `effects` reuses the exact
 same `{glow{...}, clone{...}, opacity}` shape as `title_card`/`logo` layers.
 
-**Mureka**: `{style_input, lyrics_input, reference_audio[], tracks[]}` — the
+**Mureka**: `{style_input, lyrics_input, reference_audio[], reference_sources[], tracks[]}` — the
 Mureka stage's own state, seeded once (lazily, only if `style_input`/
 `lyrics_input` are `undefined`) from the project's `style`/`lyrics` the first
 time the stage loads (`useMurekaStage.js`'s `resetForProject`), then freely
@@ -165,26 +185,45 @@ editable independent of the Suno-stage originals — this is literally what
 gets sent to Mureka's `song/generate`, so it doubles as the "what goes to the
 model" preview the stage shows. `reference_audio` is
 `[{id, mureka_file_id, file_path, filename, uploaded_at}]` — `file_path` a
-local copy under `music/references/`, `mureka_file_id` the id Mureka's
-`files/upload` returned for it (usable as `reference_id` on a generate call).
-`tracks` is append-only, one entry per generated song:
+local copy under `music/references/` (already trimmed to a valid window,
+mp3), `mureka_file_id` the id Mureka's `files/upload` returned for it (usable
+as `reference_id` on a generate call). `reference_sources` is
+`[{id, file_path, filename, uploaded_at}]` — the **untrimmed** file a user
+just uploaded (`music/reference-sources/`, any decodable audio format),
+staged only so `ReferenceAudioTrimmer.jsx` can let them pick a ≥30s window
+before anything reaches Mureka (which hard-rejects reference audio under
+30s); normally deleted again right after a successful trim or a cancelled
+edit (`useMurekaStage.js`'s `deleteReferenceSource`), so this array is
+usually empty. `tracks` is append-only, one entry per generated song:
 
 **MurekaTrack**: `{track_id, task_id, choice_index, file_path, duration_ms,
 model, style, lyrics, params{n, gender, reference_id}, rating, is_selected,
-tag_ids[], generated_at, raw}` — `file_path` under `music/` (always `.mp3`,
-downloaded immediately since Mureka's own `url` expires after 30 days).
-`style`/`lyrics`/`params` are a snapshot of exactly what was sent for this
-track (a "regenerate 3 tracks" call can produce several `MurekaTrack`s from
-one task, one per `choices[]` entry — `choice_index` is that entry's index).
+tag_ids[], generated_at, raw, extended_from_track_id?, stems?}` — `file_path`
+under `music/` (always `.mp3`, downloaded immediately since Mureka's own
+`url` expires after 30 days). `style`/`lyrics`/`params` are a snapshot of
+exactly what was sent for this track (a "regenerate 3 tracks" call can
+produce several `MurekaTrack`s from one task, one per `choices[]` entry —
+`choice_index` is that entry's index; for a track produced by "Продлить"
+(extend), `params` is `{extend_at, extend_type}` instead and
+`extended_from_track_id` points back at the source track's `track_id`).
 `rating` (0-5) and `is_selected` mirror `Image`'s shape, but **`is_selected`
 is set only by an explicit user action** (`PATCH /api/projects/{id}` with a
 recomputed `tracks` array — see the API table below) — unlike `Image`, it is
 never auto-promoted from the highest rating; this stage treats "sounds good"
 (rating) and "this is the one I'll use" (`is_selected`) as independent
 judgments. `tag_ids` references `settings.music_tags` entries (see below).
-`raw` is the untouched `choices[]` entry Mureka returned (`url`/`flac_url`/
-`wav_url`/`lyrics_sections`) — kept for reference even though only the plain
-MP3 is downloaded to disk.
+`raw` is the untouched `choices[]` entry Mureka returned
+(`url`/`flac_url`/`wav_url`/`id`/`lyrics_sections` — the latter has per-line/
+per-word timing, used by `KaraokeLyrics.jsx`/`lib/lyricsTiming.js` while the
+track plays; confirmed via Mureka's own OpenAPI schema that `Song` has no
+image/cover field at all) — kept for reference even though only the plain MP3
+is downloaded to disk; `raw.id` is the Mureka `song_id` "Продлить" needs.
+`stems` (only present once "Разделить на дорожки" has run at least once) is
+`[{id, file_path, model, expires_at, created_at}]` — `file_path` a downloaded
+copy of the stem-separation zip (`music/{stem_id}.zip`; the CDN `zip_url`
+Mureka returns expires, same convention as everything else in this file),
+`model` one of `audio-separation-1\|2\|3` (stem count/format, see
+`providers/mureka.py`).
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
@@ -218,7 +257,8 @@ scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], p
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
 title_card_wish_library[], background_remover_method, background_remover_local_params{bg,threshold},
 background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse},
-outpaint_quality_mode, logos[], poster_templates[], music_tags[]}`.
+outpaint_quality_mode, logos[], poster_templates[], music_tags[],
+suno_base_prompt_user_presets[], mureka_base_prompt_user_presets[]}`.
 The Title Card stage's "remove background" button offers 3 interchangeable methods (see `architecture.md`),
 each with its own param group here (Settings → Providers): `background_remover_method` is which one the
 button defaults to when no `method` is passed per-call (`'local'\|'fal'\|'replicate'`, default `'replicate'`);
@@ -284,7 +324,18 @@ partial merge server-side, so the frontend can persist e.g. just
   A/B testing. Each entry is `{id, service, name, description, prompt}` —
   `service` groups them in the UI ("Suno": vocal-first vs. canonical
   genre-first field ordering; "Mureka": vocal cues only in the Style-block vs.
-  also as in-text parenthetical directives like `(whispering)`).
+  also as in-text parenthetical directives like `(whispering)`). This
+  read-only list is merged with the **user-managed** ones below before being
+  served.
+- `suno_base_prompt_user_presets` / `mureka_base_prompt_user_presets` — unlike
+  the built-in presets above, these are freely added/renamed/deleted from
+  Settings → "Музыкальные промпты" (`BasePromptPresetEditor.jsx`, one instance
+  per list), `{id, name, prompt}[]`, plain-array CRUD'd through the regular
+  partial-merge `PUT` (no dedicated endpoint, same pattern as
+  `title_card_base_prompt_presets`). `GET /api/settings/suno-prompt-presets`
+  converts each to `{id, service: 'Suno'|'Mureka', name, description: '', prompt}`
+  and appends them to the built-in list, so they show up in the same
+  `groupPresetsByService` picker on the Suno stage without any separate UI.
 - `suno_reference_examples` — curated example style+lyrics blocks, sent
   alongside the base prompt as "reference, don't copy verbatim" material.
 - `suno_wish_library` — global, reusable wish "cards", each
@@ -369,12 +420,21 @@ partial merge server-side, so the frontend can persist e.g. just
   `PUT /api/usage/pricing`, not the general settings `PUT` — **not** included
   in the Settings screen's backup export/import.
 - `music_tags` — user-defined quality-review labels for Mureka tracks,
-  `{id, label}[]`, global (cross-project) and plain-array CRUD'd through the
-  regular partial-merge `PUT` (`useSettings.js`'s `addMusicTag`/
+  `{id, label, color}[]`, global (cross-project) and plain-array CRUD'd
+  through the regular partial-merge `PUT` (`useSettings.js`'s `addMusicTag`/
   `removeMusicTag`/`updateMusicTag`, same pattern as `poster_templates` — no
-  dedicated endpoint, no LLM call). Assigned to a track via its `tag_ids`
-  (see `MurekaTrack` above); edited from Settings → Музыкальные промпты
-  ("Теги для оценки треков"), same inline add/edit/delete UI as `special_tags`.
+  dedicated endpoint, no LLM call). Seeded with 8 default tags
+  (`routers/settings.py`'s `DEFAULT_MUSIC_TAGS`) instead of empty. `color` is
+  auto-assigned from a fixed 10-hex palette (`MUSIC_TAG_COLORS` in
+  `routers/settings.py`, mirrored in `frontend/src/lib/musicTagColors.js` —
+  keep both in sync), cycling by list position — never hand-picked, so two
+  tags never collide visually; `GET /api/settings` backfills a `color` onto
+  any tag that predates this field (`normalize_music_tags`). Assigned to a
+  track via its `tag_ids` (see `MurekaTrack` above) — the Mureka stage only
+  shows a track's *added* tags as colored badges, with a "+" popover to add
+  from the rest; edited from Settings → Музыкальные промпты ("Теги для
+  оценки треков"), same inline add/edit/delete UI as `special_tags`, rendered
+  as a colored `.chip` instead of plain text.
 - The Settings screen's "Backup" controls (`SettingsScreen.jsx`, general and
   providers tabs) export/import `api_keys` separately from every other
   settings field as downloadable JSON files. This is pure client-side file
@@ -414,6 +474,7 @@ reference-image upload (multipart).
 | `GET /api/settings/models/{provider}` | `provider` = `google\|google_free\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/`google_free`/OpenRouter/DeepSeek query the provider's real API with the stored key (`google_free` hits the same Gemini endpoint as `google`, just with its own key); Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
 | `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)). Also upserted into the persisted model catalog |
 | `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
+| `GET /api/settings/mureka-billing` | → `{account_id, balance, total_recharge, total_spending, concurrent_request_limit, trace_id}` — passthrough of Mureka's `GET /v1/account/billing` (confirmed live, 2026-08), backs the balance pill on the Mureka stage. The currency/unit of `balance` isn't documented anywhere on Mureka's side, so it's shown as-is, no invented conversion; `502` if the call fails (e.g. no API key) |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
 | `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit of an existing wish's title and/or text (either field, or both); no LLM call, so no usage tracking; `404` if `id` is unknown, `422` if a given field is blank |
 | `POST /api/settings/scene-wish-library` / `PATCH .../{id}` | Same shape and behaviour as `/settings/wish-library`, against `scene_wish_library` instead — a separate library for scene/imagery wishes |
@@ -433,10 +494,15 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/title-card/poster` | multipart: `file` (flattened PNG) + `background_path`, `title_card_variant_id`, `logo_id?`, `layers` (JSON), `canvas_size` (JSON), `poster_id?` → `{poster, posters}`. Creates a new `Poster`, or re-renders one in place (same `file_path`) when `poster_id` matches an existing entry. `422` if `background_path`/`title_card_variant_id` don't resolve |
 | `DELETE /api/projects/{id}/title-card/poster/{poster_id}` | → `{posters}` — removes one from `project.title_card.posters` and deletes its file |
 | `POST /api/projects/{id}/mureka/generate` | `{style, lyrics, model, n, gender?, reference_id?}` → `{job_id}` — one job per click (unlike scene images, Mureka's own `n` (1-3) returns several songs from a single task); `422` if `lyrics` is blank |
-| `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', tracks: MurekaTrack[]\|null, error: str\|null, debug}` — polled every 3s (longer than image jobs — Mureka generation runs 30-90s), in-memory-only job state (`providers/mureka.py`'s own `_jobs` dict) |
+| `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', tracks: MurekaTrack[]\|null, error: str\|null, stage: str\|null, debug}` — polled every 3s (longer than image jobs — Mureka generation runs 30-90s), in-memory-only job state (`providers/mureka.py`'s own `_jobs` dict). `stage` mirrors Mureka's own intermediate task status (`preparing\|queued\|running\|streaming`) while `status` is still `'pending'` — shown next to the elapsed-seconds counter instead of just a spinner. Shared by `/mureka/generate` and `/mureka/tracks/{id}/extend` below (same job shape) |
 | `DELETE /api/projects/{id}/mureka/tracks/{track_id}` | → `{tracks}` — removes one from `project.mureka.tracks` and deletes its `.mp3` file |
-| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) to get the `mureka_file_id` usable as `reference_id`; `415` on a bad extension, `502` if the Mureka upload call fails |
+| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) to get the `mureka_file_id` usable as `reference_id`; `415` on a bad extension, `502` if the Mureka upload call fails. Normally called with an already-trimmed clip from the `/reference-sources/{id}/trim` route below, not a raw upload |
 | `DELETE /api/projects/{id}/mureka/reference-audio/{ref_id}` | → `{reference_audio}` |
+| `POST /api/projects/{id}/mureka/reference-sources` | multipart `file` (any decodable audio format) → `{reference_sources}` — stages a raw upload under `music/reference-sources/` **without** touching Mureka (which hard-rejects reference audio under 30s); `415` on a bad extension |
+| `DELETE /api/projects/{id}/mureka/reference-sources/{source_id}` | → `{reference_sources}` |
+| `POST /api/projects/{id}/mureka/reference-sources/{source_id}/trim` | `{start_ms, end_ms}` → `{reference_audio}` — cuts `[start_ms, end_ms)` from the staged source via `ffmpeg` (system dependency, see README) and forwards the result through the same flow as `/mureka/reference-audio` above; `422` if the range is invalid, `502` on an `ffmpeg` or Mureka failure (missing `ffmpeg` on `PATH` surfaces here with a clear message) |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/extend` | `{lyrics, extend_at?, extend_type?, model?}` → `{job_id}` — real Mureka `song/extend` call ("Продлить"), same job/poll shape as `/mureka/generate`; `extend_at` defaults to the track's own `duration_ms` (extend from the end). `422` if `lyrics` is blank or the track has no Mureka `song_id` (`track.raw.id`) to extend from — e.g. an already-extended track past Mureka's ~1-month window |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/stem` | `{model?}` (`audio-separation-1\|2\|3`) → `{tracks}` — real Mureka `song/stem` call ("Разделить на дорожки"), **synchronous** (no job/poll — unlike every other real Mureka call here); appends to the track's `stems[]`. `404` if the track's `.mp3` is missing from disk, `502` on a provider failure |
 | `POST /api/settings/logos` | multipart `file` (png/webp) + `name?` → `{logos}` — appends to the global `settings.logos`, file under `app_data/logos/` |
 | `DELETE /api/settings/logos/{logo_id}` | → `{logos}` |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |

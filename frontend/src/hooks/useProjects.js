@@ -27,9 +27,24 @@ export function useProjects({ showToast, L }) {
 
   useEffect(() => { refreshProjects(); }, []);
 
+  /** `PATCH /api/projects/{id}` renames the project's folder (and therefore
+   * `id`) when title/author change (routers/projects.py::patch_project) -
+   * every caller here must adopt the response's `id` so the *next* patch
+   * doesn't target a folder that no longer exists under the old name. Only
+   * touches state if `oldId` is still what's current (guards against a
+   * stale/overlapping response landing after the user already navigated
+   * away or renamed again). */
+  function adoptRenamedId(oldId, newId) {
+    if (!newId || newId === oldId) return;
+    setActiveProject((prev) => (prev && prev.id === oldId ? { ...prev, id: newId } : prev));
+    setProjects((prev) => prev.map((p) => (p.id === oldId ? { ...p, id: newId } : p)));
+  }
+
   const debouncedPatch = useMemo(
     () => debounce((id, project) => {
-      api.patchProject(id, project).catch(() => showToast('Не удалось сохранить'));
+      api.patchProject(id, project)
+        .then((response) => adoptRenamedId(id, response?.id))
+        .catch(() => showToast('Не удалось сохранить'));
     }, 400),
     [],
   );
@@ -39,7 +54,9 @@ export function useProjects({ showToast, L }) {
       if (!prev) return prev;
       const next = patchFn(prev);
       if (immediate) {
-        api.patchProject(next.id, next).catch(() => showToast('Не удалось сохранить'));
+        api.patchProject(next.id, next)
+          .then((response) => adoptRenamedId(next.id, response?.id))
+          .catch(() => showToast('Не удалось сохранить'));
       } else {
         debouncedPatch(next.id, next);
       }
@@ -56,7 +73,8 @@ export function useProjects({ showToast, L }) {
     debouncedPatch.cancel();
     if (activeProject) {
       try {
-        await api.patchProject(activeProject.id, activeProject);
+        const response = await api.patchProject(activeProject.id, activeProject);
+        adoptRenamedId(activeProject.id, response?.id);
       } catch {
         showToast('Не удалось сохранить');
       }

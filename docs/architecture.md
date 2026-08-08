@@ -31,6 +31,12 @@ multiple local dev sessions can each run on their own port. `main.py`'s CORS
 middleware allows any `http://localhost:<port>` origin (regex, not a fixed
 value) so it doesn't need editing when the frontend's port changes.
 
+`ffmpeg` must be on `PATH` (a **system** binary, not a pip package — nothing
+else in this repo shells out to an external tool) for the Mureka reference-
+audio trimmer (`providers/mureka.py::trim_audio`, invoked via
+`asyncio.create_subprocess_exec`) — without it, trimming fails with a clear
+error rather than silently, but the backend doesn't check for it at startup.
+
 ## The workflow
 
 A project moves through six stages, all inside one workflow screen:
@@ -1145,6 +1151,28 @@ state, not in any hook.
   upload/delete) now holds it for the whole sequence, so a second job's
   `load_project` can't start until the first one's `save_project` has landed.
   Unrelated projects still save fully concurrently, one lock per slug.
+- **Project rename (redirect mechanism).** A project's folder name/`id` used
+  to be permanently fixed at creation (`make_slug(author, title)`), even
+  after editing `title`/`author` later — `routers/projects.py::patch_project`
+  now renames the folder to match. The obvious risk: a background job
+  (Mureka generation, scene images, …) that captured the *old* slug before a
+  rename finishes and only saves its result 30-90s later would otherwise
+  either write into a resurrected, orphaned old-name folder or crash — the
+  same class of failure as the concurrent-save race above, just triggered by
+  a rename instead of two overlapping jobs. Fixed with a redirect map
+  (`app_data/projects/_redirects.json`, `storage.resolve_slug`) that
+  `project_dir`/`project_lock` resolve first, so every caller — old slug or
+  new — transparently lands on the current folder and shares the same lock.
+  A second, sharper failure mode surfaced in live testing: slugs are
+  content-derived (author+title), not permanently unique, so a project's
+  *vacated* old slug can later coincide with a completely different,
+  currently-real project's own address (e.g. two projects both left at
+  default "Неизвестный автор"/"Новое стихотворение" values) — resolving
+  that slug blindly would silently load/overwrite the unrelated project
+  instead of leaving it alone. `resolve_slug` checks for a real
+  `config.json` at the given slug *before* ever consulting the redirect
+  map, so an existing project's own address always wins.
+  See `data-model.md`'s "Project rename" for the on-disk shape.
 - **Uploaded filenames are never trusted.** Reference images are stored as
   `ref_{uuid}.{ext}`, so there's no path-traversal surface.
 - **i18n parity.** Every user-facing string goes in both `DICT.ru` and

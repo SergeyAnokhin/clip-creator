@@ -133,4 +133,15 @@ export const api = {
     return requestForm(`${projectPath(id)}/mureka/reference-audio`, { method: 'POST', body: form });
   },
   deleteMurekaReferenceAudio: (id, refId) => request(`${projectPath(id)}/mureka/reference-audio/${encodeURIComponent(refId)}`, { method: 'DELETE' }),
+
+  getMurekaBilling: () => request('/api/settings/mureka-billing'),
+  uploadMurekaReferenceSource: (id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return requestForm(`${projectPath(id)}/mureka/reference-sources`, { method: 'POST', body: form });
+  },
+  deleteMurekaReferenceSource: (id, sourceId) => request(`${projectPath(id)}/mureka/reference-sources/${encodeURIComponent(sourceId)}`, { method: 'DELETE' }),
+  trimMurekaReferenceSource: (id, sourceId, startMs, endMs) => request(`${projectPath(id)}/mureka/reference-sources/${encodeURIComponent(sourceId)}/trim`, { method: 'POST', body: JSON.stringify({ start_ms: startMs, end_ms: endMs }) }),
+  extendMurekaTrack: (id, trackId, body) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/extend`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  stemMurekaTrack: (id, trackId, body) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/stem`, { method: 'POST', body: JSON.stringify(body || {}) }),
 };
