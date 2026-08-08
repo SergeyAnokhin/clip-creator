@@ -190,7 +190,7 @@ function TrackCard({
           <details>
             <summary>{L.mureka_detailsRaw}</summary>
             <div className="json-tree-scroll">
-              <JsonTreeView data={track.raw} />
+              <JsonTreeView L={L} data={track.raw} />
             </div>
           </details>
         </div>
@@ -385,7 +385,8 @@ export default function MurekaStage({
 
       {detailTrack && (
         <MurekaTrackDetailModal
-          L={L} projectId={project.id} track={detailTrack} index={detailIndex}
+          L={L} projectId={project.id} projectTitle={project.title} projectAuthor={project.author}
+          track={detailTrack} index={detailIndex}
           onClose={() => setDetailTrackId(null)}
         />
       )}

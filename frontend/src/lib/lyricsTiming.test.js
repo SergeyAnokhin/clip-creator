@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { currentLineIndex, flattenLyricsLines, interpolateSectionLines, isBeyondKnownTiming } from './lyricsTiming.js';
+import {
+  currentLineIndex, flattenLyricsLines, interpolateSectionLines, isBeyondKnownTiming, lastKnownEnd,
+} from './lyricsTiming.js';
 
 const RAW = {
   lyrics_sections: [
-    { section_type: 'intro' }, // no `lines`, no `start`/`end` at all - nothing to show
+    { section_type: 'intro' }, // no `lines`, no `start`/`end` at all - still shown as a static marker row
     {
       section_type: 'verse',
       lines: [
@@ -57,10 +59,11 @@ describe('interpolateSectionLines', () => {
 });
 
 describe('flattenLyricsLines', () => {
-  it('keeps timed lines in order, dropping a section with no timing at all', () => {
+  it('keeps timed lines in order and surfaces a fully-untimed section as a static marker instead of dropping it', () => {
     expect(flattenLyricsLines(RAW)).toEqual([
-      { text: 'Line one', start: 600, end: 13360, words: [], sectionType: 'verse', isSection: false, interpolated: false },
-      { text: 'Line two', start: 13640, end: 20360, words: [], sectionType: 'verse', isSection: false, interpolated: false },
+      { text: null, start: null, end: null, words: [], sectionType: 'intro', isSection: true, interpolated: false, static: true },
+      { text: 'Line one', start: 600, end: 13360, words: [], sectionType: 'verse', isSection: false, interpolated: false, static: false },
+      { text: 'Line two', start: 13640, end: 20360, words: [], sectionType: 'verse', isSection: false, interpolated: false, static: false },
     ]);
   });
 
@@ -77,8 +80,8 @@ describe('flattenLyricsLines', () => {
       ],
     };
     expect(flattenLyricsLines(raw)).toEqual([
-      { text: null, start: 0, end: 8000, words: [], sectionType: 'intro', isSection: true, interpolated: false },
-      { text: 'First verse line', start: 8000, end: 12000, words: [], sectionType: 'verse', isSection: false, interpolated: false },
+      { text: null, start: 0, end: 8000, words: [], sectionType: 'intro', isSection: true, interpolated: false, static: false },
+      { text: 'First verse line', start: 8000, end: 12000, words: [], sectionType: 'verse', isSection: false, interpolated: false, static: false },
     ]);
   });
 
@@ -91,28 +94,63 @@ describe('flattenLyricsLines', () => {
     };
     const rows = flattenLyricsLines(raw);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ text: 'untimed opener', start: 0, end: 500, interpolated: true });
-    expect(rows[1]).toMatchObject({ text: 'timed closer', start: 500, end: 1000, interpolated: false });
+    expect(rows[0]).toMatchObject({ text: 'untimed opener', start: 0, end: 500, interpolated: true, static: false });
+    expect(rows[1]).toMatchObject({ text: 'timed closer', start: 500, end: 1000, interpolated: false, static: false });
+  });
+
+  // Confirmed against a real generated track (2026-08): a leading run of
+  // sections can carry sung lines with real text but neither the section nor
+  // any of its lines have a `start`/`end` anywhere - nothing to interpolate
+  // from. These used to be dropped entirely (the intro read as skipped);
+  // they now come through as `static: true` rows so the text still shows.
+  it('keeps a section whose lines have text but no timing at all, as static rows', () => {
+    const raw = {
+      lyrics_sections: [{
+        section_type: 'verse', // Mureka's own label - can be untimed intro content despite the name
+        lines: [
+          { text: 'Untimed hook line one', words: [] },
+          { text: 'Untimed hook line two', words: [] },
+        ],
+      }],
+    };
+    expect(flattenLyricsLines(raw)).toEqual([
+      { text: 'Untimed hook line one', start: null, end: null, words: [], sectionType: 'verse', isSection: false, interpolated: false, static: true },
+      { text: 'Untimed hook line two', start: null, end: null, words: [], sectionType: 'verse', isSection: false, interpolated: false, static: true },
+    ]);
   });
 });
 
 describe('currentLineIndex', () => {
   const lines = flattenLyricsLines(RAW);
 
-  it('is -1 before the first line starts', () => {
+  it('is -1 before the first timed line starts (the leading static row has no start to compare)', () => {
     expect(currentLineIndex(lines, 0)).toBe(-1);
   });
 
-  it('picks the active line', () => {
-    expect(currentLineIndex(lines, 700)).toBe(0);
+  it('picks the active line, skipping the static marker row', () => {
+    expect(currentLineIndex(lines, 700)).toBe(1);
   });
 
   it('holds the previous line during a gap between lines', () => {
-    expect(currentLineIndex(lines, 13500)).toBe(0);
+    expect(currentLineIndex(lines, 13500)).toBe(1);
   });
 
   it('picks the last line once it starts', () => {
-    expect(currentLineIndex(lines, 999999)).toBe(1);
+    expect(currentLineIndex(lines, 999999)).toBe(2);
+  });
+});
+
+describe('lastKnownEnd', () => {
+  it('is null with no lines at all', () => {
+    expect(lastKnownEnd([])).toBe(null);
+  });
+
+  it('finds the last timed row, skipping trailing static rows', () => {
+    const lines = [
+      ...flattenLyricsLines(RAW),
+      { text: null, start: null, end: null, words: [], sectionType: 'outro', isSection: true, interpolated: false, static: true },
+    ];
+    expect(lastKnownEnd(lines)).toBe(20360);
   });
 });
 
@@ -130,5 +168,13 @@ describe('isBeyondKnownTiming', () => {
 
   it('is true once playback passes the last known line\'s end - Mureka can stop timing well before the track actually ends', () => {
     expect(isBeyondKnownTiming(lines, 20361)).toBe(true);
+  });
+
+  it('is false when only a trailing static row follows the last timed line', () => {
+    const withTrailingStatic = [...lines, {
+      text: null, start: null, end: null, words: [], sectionType: 'outro', isSection: true, interpolated: false, static: true,
+    }];
+    expect(isBeyondKnownTiming(withTrailingStatic, 20361)).toBe(true);
+    expect(isBeyondKnownTiming(withTrailingStatic, 20360)).toBe(false);
   });
 });

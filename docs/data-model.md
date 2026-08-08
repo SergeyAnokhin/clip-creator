@@ -218,15 +218,35 @@ per-word timing (ms), used by `KaraokeLyrics.jsx`/`MurekaTrackDetailModal.jsx`/
 `lib/lyricsTiming.js` while the track plays; confirmed via Mureka's own
 OpenAPI schema that `Song` has no image/cover field at all) — kept for
 reference even though only the plain MP3 is downloaded to disk; `raw.id` is
-the Mureka `song_id` "Продлить" needs. **Two data-quality quirks confirmed
+the Mureka `song_id` "Продлить" needs. **Three data-quality quirks confirmed
 against real generated tracks, not hypothetical** — `lib/lyricsTiming.js`
-and its consumers are built around both: (1) `lyrics_sections` timing can
-stop well before the track's actual `duration_ms` (one real response timed
-lines only up to ~43% of the track, with no further sections after — not an
-`extend`, nothing truncated on our end); (2) a line's `words[]` array has
-been seen offset by one line from that line's own `text` (each line's words
-actually spell out the *previous* line's text), so `words[].text` is never
-rendered, only `.start`/`.end` would be trustworthy.
+and its consumers (`KaraokeLyrics.jsx`, `MurekaTrackDetailModal.jsx`) are
+built around all three: (1) `lyrics_sections` timing can stop well before
+the track's actual `duration_ms` (one real response timed lines only up to
+~43% of the track, with no further sections after — not an `extend`,
+nothing truncated on our end); (2) a line's `words[]` array has been seen
+offset by one line from that line's own `text` (each line's words actually
+spell out the *previous* line's text), so `words[].text` is never rendered,
+only `.start`/`.end` would be trustworthy; (3) a leading run of sections can
+carry **no** `start`/`end` at all — neither on the section nor on any of its
+lines (one real response: an `intro` section and the `verse` right after it,
+both fully untimed, together holding the track's actual opening vocal hook)
+— `flattenLyricsLines` still emits these as rows (`static: true`, `start`/
+`end` both `null`) instead of dropping them, so the intro reads as intro
+text instead of silently vanishing from the karaoke view. **Checked against
+Mureka's own published OpenAPI schema at platform.mureka.ai/docs (2026-08):
+neither `POST /v1/song/generate` nor `GET /v1/song/query/{task_id}` expose
+any parameter that affects how much of a track gets timed — quirks (1) and
+(3) are inherent to what Mureka's alignment step returns, not something a
+request parameter on our side controls.** One further wrinkle spotted on the
+same real response, documented but *not* corrected in code because there's
+no way to derive the true offset from the API response alone: once a
+section's lines *do* have timing, comparing those timestamps against the
+track actually playing (by ear) suggested they may be measured from where
+Mureka's alignment first locked on, not from the track's true start — i.e.
+the untimed leading content in (3) can make every later timestamp read
+several seconds to tens of seconds earlier than reality. Treat any
+`lyrics_sections` timestamp as *approximate*, not frame-accurate.
 `stems` (only present once "Разделить на дорожки" has run at least once) is
 `[{id, file_path, model, expires_at, created_at}]` — `file_path` a downloaded
 copy of the stem-separation zip (`music/{stem_id}.zip`; the CDN `zip_url`

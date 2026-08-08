@@ -613,6 +613,31 @@
   font-style: italic;
 }
 
+.json-tree-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.json-tree-toolbar-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.json-tree-toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+}
+
 /* ---------- Crop/outpaint editor (ImageCropEditor.jsx) ---------- */
 
 .crop-editor-card {
@@ -2078,6 +2103,15 @@
   color: var(--text-faint);
 }
 
+.mureka-detail-line.is-static {
+  cursor: default;
+  color: var(--text-faint);
+}
+
+.mureka-detail-line.is-static:hover {
+  background: none;
+}
+
 .mureka-detail-line-time {
   flex-shrink: 0;
   width: 66px;
@@ -2129,6 +2163,33 @@
   word-break: break-word;
   font-size: 12px;
   margin: 6px 0 0;
+}
+
+.mureka-detail-style-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0;
+}
+
+.mureka-detail-header-text {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mureka-detail-header-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mureka-detail-header-sub {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- Settings ---------- */

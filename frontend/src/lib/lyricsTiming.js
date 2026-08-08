@@ -40,54 +40,75 @@ export function interpolateSectionLines(section) {
 
 /** Flattens a Mureka track's `raw.lyrics_sections` into one ordered list for
  * KaraokeLyrics.jsx / MurekaTrackDetailModal.jsx, ms timing throughout:
- * `{text, start, end, words, sectionType, isSection, interpolated}`.
- * A sung line missing timing even after `interpolateSectionLines` (no
- * neighbour to interpolate from) is dropped - nothing to highlight there.
- * A section with no lines at all (e.g. a purely instrumental intro) is
- * *not* dropped as long as Mureka gave it its own `start`/`end`: it becomes
- * one `isSection: true` marker row spanning that window, so a karaoke view
- * built from this list shows *something* through the intro instead of
- * jumping straight to the first sung line and looking like the intro was
- * skipped. */
+ * `{text, start, end, words, sectionType, isSection, interpolated, static}`.
+ * Nothing with actual content is ever silently dropped, even when Mureka
+ * gave it no timing at all - confirmed against a real generated track
+ * (2026-08): a leading run of sections (there, an `intro` and the following
+ * `verse` - Mureka's own `section_type`, not ours) can carry no `start`/`end`
+ * whatsoever on the section *or* any of its lines, which used to mean the
+ * whole thing vanished from the karaoke view (looked like the intro was
+ * skipped). Such lines now come through with `start: null, end: null,
+ * static: true` - `formatMs`/`seekTo` in both consumers already render `null`
+ * as "-"/no-op, so they show up as always-visible, never-highlighted text.
+ * A section with no lines at all (instrumental, or simply untimed) becomes
+ * one `isSection: true` marker row the same way, `static: true` when it has
+ * no `start`/`end` either (rendered as "♪ {sectionType}" with no timestamp). */
 export function flattenLyricsLines(raw) {
   const sections = raw?.lyrics_sections || [];
   const rows = [];
   for (const section of sections) {
     const lines = interpolateSectionLines(section);
     if (!lines.length) {
-      if (section.start != null && section.end != null) {
-        rows.push({
-          text: null, start: section.start, end: section.end, words: [],
-          sectionType: section.section_type || null, isSection: true, interpolated: false,
-        });
-      }
+      rows.push({
+        text: null, start: section.start ?? null, end: section.end ?? null, words: [],
+        sectionType: section.section_type || null, isSection: true, interpolated: false,
+        static: section.start == null || section.end == null,
+      });
       continue;
     }
     for (const line of lines) {
-      if (line.start == null || line.end == null || !line.text) continue;
+      if (!line.text) continue;
+      const timed = line.start != null && line.end != null;
       rows.push({
-        text: line.text, start: line.start, end: line.end, words: line.words || [],
-        sectionType: section.section_type || null, isSection: false, interpolated: !!line.interpolated,
+        text: line.text, start: timed ? line.start : null, end: timed ? line.end : null,
+        words: line.words || [], sectionType: section.section_type || null,
+        isSection: false, interpolated: !!line.interpolated, static: !timed,
       });
     }
   }
   return rows;
 }
 
-/** Index of the line active at `currentMs` - the last line whose `start` is
- * at or before `currentMs`, so a gap between two lines (an instrumental
- * break) still shows the most recent one instead of blanking the panel. -1
- * before the first line starts. */
+/** Index of the line active at `currentMs` - the last *timed* line whose
+ * `start` is at or before `currentMs`, so a gap between two lines (an
+ * instrumental break) still shows the most recent one instead of blanking
+ * the panel. `static: true` rows (see `flattenLyricsLines`) have no `start`
+ * to compare and are skipped rather than breaking the scan - they're shown
+ * unconditionally by the consumer, never as "current". -1 before the first
+ * timed line starts. */
 export function currentLineIndex(lines, currentMs) {
   let idx = -1;
   for (let i = 0; i < lines.length; i++) {
+    if (lines[i].start == null) continue;
     if (lines[i].start <= currentMs) idx = i;
     else break;
   }
   return idx;
 }
 
-/** True once playback has moved past the last row `flattenLyricsLines`
+/** The last non-null `end` in `lines` (walking backward past any trailing
+ * `static` rows, which have no `end` to compare), or `null` if none of them
+ * carry timing at all. Shared by `isBeyondKnownTiming` and by callers that
+ * show "Mureka only timed lines up to {time}" (e.g.
+ * MurekaTrackDetailModal.jsx's coverage hint). */
+export function lastKnownEnd(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].end != null) return lines[i].end;
+  }
+  return null;
+}
+
+/** True once playback has moved past the last *timed* row `flattenLyricsLines`
  * could produce - confirmed against a real generated track (not a
  * hypothetical): Mureka's own `lyrics_sections` can simply stop over
  * halfway through the song (one real response timed lines up to ~100s of a
@@ -99,6 +120,6 @@ export function currentLineIndex(lines, currentMs) {
  * track reads as broken, not as "no data". Callers should treat this as
  * "nothing to show" rather than keep highlighting the last known line. */
 export function isBeyondKnownTiming(lines, currentMs) {
-  if (!lines.length) return false;
-  return currentMs > lines[lines.length - 1].end;
+  const end = lastKnownEnd(lines);
+  return end != null && currentMs > end;
 }

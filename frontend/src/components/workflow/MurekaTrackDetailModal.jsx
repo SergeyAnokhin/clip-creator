@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
-import { currentLineIndex, flattenLyricsLines, isBeyondKnownTiming } from '../../lib/lyricsTiming.js';
+import { currentLineIndex, flattenLyricsLines, isBeyondKnownTiming, lastKnownEnd } from '../../lib/lyricsTiming.js';
 import JsonTreeView from '../common/JsonTreeView.jsx';
 
 /** `1:02.340` - line/word timestamps shown with millisecond precision (the
@@ -37,11 +37,12 @@ function formatMs(ms) {
  * worth the complexity without trustworthy word text to show alongside it -
  * the raw `words` arrays are still fully visible in the JSON tree below for
  * anyone who wants to look. */
-export default function MurekaTrackDetailModal({ L, projectId, track, index, onClose }) {
+export default function MurekaTrackDetailModal({ L, projectId, projectTitle, projectAuthor, track, index, onClose }) {
   const audioRef = useRef(null);
   const activeRowRef = useRef(null);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const rows = useMemo(() => flattenLyricsLines(track?.raw), [track]);
+  const coverageEnd = lastKnownEnd(rows);
 
   const pastKnownTiming = isBeyondKnownTiming(rows, currentTimeMs);
   const activeIdx = pastKnownTiming ? -1 : currentLineIndex(rows, currentTimeMs);
@@ -78,7 +79,15 @@ export default function MurekaTrackDetailModal({ L, projectId, track, index, onC
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card modal-card-lg mureka-detail-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <span>{L.mureka_tracksLabel} {index + 1}{track.style ? ` — ${track.style}` : ''}</span>
+          <div className="mureka-detail-header-text">
+            <div className="mureka-detail-header-title">
+              {projectTitle || L.mureka_tracksLabel}{projectAuthor ? ` — ${projectAuthor}` : ''}
+            </div>
+            <div className="mureka-detail-header-sub">
+              {L.mureka_tracksLabel} {index + 1} · {formatMs(track.duration_ms)}
+              {track.raw?.id ? ` · ID ${track.raw.id}` : ''}
+            </div>
+          </div>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>
             <X size={15} />
           </button>
@@ -90,9 +99,9 @@ export default function MurekaTrackDetailModal({ L, projectId, track, index, onC
           onTimeUpdate={() => setCurrentTimeMs((audioRef.current?.currentTime || 0) * 1000)}
         />
 
-        {!!rows.length && track.duration_ms > rows[rows.length - 1].end + 1000 && (
+        {coverageEnd != null && track.duration_ms > coverageEnd + 1000 && (
           <div className="mureka-detail-coverage-hint">
-            ⚠ {L.mureka_detailPartialCoverage.replace('{time}', formatMs(rows[rows.length - 1].end))}
+            ⚠ {L.mureka_detailPartialCoverage.replace('{time}', formatMs(coverageEnd))}
           </div>
         )}
 
@@ -107,7 +116,7 @@ export default function MurekaTrackDetailModal({ L, projectId, track, index, onC
               <div
                 key={item.key}
                 ref={item.i === activeIdx ? activeRowRef : undefined}
-                className={`mureka-detail-line${item.i === activeIdx ? ' is-current' : ''}${item.row.isSection ? ' is-instrumental' : ''}`}
+                className={`mureka-detail-line${item.i === activeIdx ? ' is-current' : ''}${item.row.isSection ? ' is-instrumental' : ''}${item.row.static ? ' is-static' : ''}`}
                 onClick={() => seekTo(item.row.start)}
               >
                 <span className="mureka-detail-line-time">{formatMs(item.row.start)}</span>
@@ -115,6 +124,9 @@ export default function MurekaTrackDetailModal({ L, projectId, track, index, onC
                   {item.row.isSection ? `♪ ${item.row.sectionType || L.mureka_karaokeInstrumental}` : item.row.text}
                 </span>
                 {item.row.interpolated && <span className="mureka-detail-line-approx" title={L.mureka_detailInterpolatedHint}>~</span>}
+                {item.row.static && !item.row.isSection && (
+                  <span className="mureka-detail-line-approx" title={L.mureka_detailStaticHint}>–</span>
+                )}
               </div>
             )))}
           </div>
@@ -124,7 +136,10 @@ export default function MurekaTrackDetailModal({ L, projectId, track, index, onC
             <div className="mureka-detail-meta-row"><b>{L.mureka_detailDuration}:</b> {formatMs(track.duration_ms)}</div>
             {track.raw?.id && <div className="mureka-detail-meta-row"><b>{L.mureka_detailSongId}:</b> {track.raw.id}</div>}
             {track.raw?.index != null && <div className="mureka-detail-meta-row"><b>{L.mureka_detailChoiceIndex}:</b> {track.raw.index}</div>}
-            <div className="mureka-detail-meta-row"><b>{L.mureka_detailsStyle}:</b> {track.style || '—'}</div>
+            <details>
+              <summary>{L.mureka_detailsStyle}</summary>
+              <div className="mureka-detail-style-text">{track.style || '—'}</div>
+            </details>
             {!!track.stems?.length && (
               <div className="mureka-detail-meta-row">
                 <b>{L.mureka_detailsStems}:</b>{' '}
@@ -142,7 +157,7 @@ export default function MurekaTrackDetailModal({ L, projectId, track, index, onC
             <details>
               <summary>{L.mureka_detailsRaw}</summary>
               <div className="json-tree-scroll">
-                <JsonTreeView data={track.raw} />
+                <JsonTreeView L={L} data={track.raw} />
               </div>
             </details>
           </div>
