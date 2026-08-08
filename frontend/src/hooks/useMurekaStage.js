@@ -30,6 +30,9 @@ export function useMurekaStage({
   const [billing, setBilling] = useState(null);
   const [extendingTrackIds, setExtendingTrackIds] = useState([]);
   const [stemmingTrackIds, setStemmingTrackIds] = useState([]);
+  const [describingTrackIds, setDescribingTrackIds] = useState([]);
+  const [transcribingTrackIds, setTranscribingTrackIds] = useState([]);
+  const [lyricsVideoTrackIds, setLyricsVideoTrackIds] = useState([]);
   const elapsedTimerRef = useRef(null);
 
   useEffect(() => {
@@ -338,13 +341,75 @@ export function useMurekaStage({
     }
   }
 
+  /** "Описание песни" (song/describe) - synchronous, real Mureka call, no
+   * job/poll (same shape as stemTrack above). Result is appended to the
+   * track's own `descriptions[]` server-side; the caller (MurekaStage.jsx)
+   * reads the updated track back out of state to show in its own modal. */
+  async function describeTrack(trackId) {
+    if (!activeProject) return false;
+    setDescribingTrackIds((ids) => [...ids, trackId]);
+    try {
+      const result = await api.describeMurekaTrack(activeProject.id, trackId);
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: result.tracks } }));
+      loadBilling();
+      return true;
+    } catch (err) {
+      showToast(err?.detail || L.mureka_describeFailed);
+      return false;
+    } finally {
+      setDescribingTrackIds((ids) => ids.filter((id) => id !== trackId));
+      onAiCall?.();
+    }
+  }
+
+  /** "Ноты из песни" (song/transcribe) - same synchronous shape, appends to
+   * `transcriptions[]`. Requires the track's Mureka song_id (raw.id), same
+   * constraint as extendTrack. */
+  async function transcribeTrack(trackId) {
+    if (!activeProject) return false;
+    setTranscribingTrackIds((ids) => [...ids, trackId]);
+    try {
+      const result = await api.transcribeMurekaTrack(activeProject.id, trackId);
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: result.tracks } }));
+      loadBilling();
+      return true;
+    } catch (err) {
+      showToast(err?.detail || L.mureka_transcribeFailed);
+      return false;
+    } finally {
+      setTranscribingTrackIds((ids) => ids.filter((id) => id !== trackId));
+      onAiCall?.();
+    }
+  }
+
+  /** "Видео с текстом" (lyrics-video/generate) - same synchronous shape,
+   * appends to `lyrics_videos[]`. Also requires the track's Mureka song_id. */
+  async function generateLyricsVideo(trackId, { title, aspectRatio } = {}) {
+    if (!activeProject) return false;
+    setLyricsVideoTrackIds((ids) => [...ids, trackId]);
+    try {
+      const result = await api.lyricsVideoMurekaTrack(activeProject.id, trackId, {
+        title: title || undefined, aspect_ratio: aspectRatio || undefined,
+      });
+      setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: result.tracks } }));
+      loadBilling();
+      return true;
+    } catch (err) {
+      showToast(err?.detail || L.mureka_lyricsVideoFailed);
+      return false;
+    } finally {
+      setLyricsVideoTrackIds((ids) => ids.filter((id) => id !== trackId));
+      onAiCall?.();
+    }
+  }
+
   return {
     state: {
       styleInput: mureka.style_input ?? '', lyricsInput: mureka.lyrics_input ?? '',
       model, n, gender, referenceId, referenceAudio: mureka.reference_audio, referenceSources: mureka.reference_sources,
       tracks: mureka.tracks,
       generating, elapsedSeconds, jobStage, murekaError, uploadingReference, uploadingReferenceSource, trimmingReference,
-      billing, extendingTrackIds, stemmingTrackIds,
+      billing, extendingTrackIds, stemmingTrackIds, describingTrackIds, transcribingTrackIds, lyricsVideoTrackIds,
     },
     resetForProject,
     actions: {
@@ -353,7 +418,7 @@ export function useMurekaStage({
       onSetKaraokeSync: setKaraokeSync,
       uploadReferenceAudio, deleteReferenceAudio,
       uploadReferenceSource, deleteReferenceSource, trimReferenceSource,
-      reuseTrackSettings, extendTrack, stemTrack, loadBilling,
+      reuseTrackSettings, extendTrack, stemTrack, describeTrack, transcribeTrack, generateLyricsVideo, loadBilling,
     },
   };
 }

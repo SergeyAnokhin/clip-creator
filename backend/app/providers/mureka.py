@@ -16,6 +16,16 @@ Confirmed against platform.mureka.ai/docs, 2026-08:
   'reference'`, mp3/m4a, exactly 30s - excess trimmed by Mureka) ->
   `{id, bytes, created_at, filename, purpose}` - the returned `id` is what
   `reference_id` on `song/generate` expects.
+- `POST https://api.mureka.ai/v1/song/describe` `{url}` (a hosted link or a
+  base64 data URI, <=10MB decoded - same technique `song/stem` uses) ->
+  `{instrument[], genres[], tags[], description}`, synchronous, no track
+  needed on Mureka's side.
+- `POST https://api.mureka.ai/v1/song/transcribe` `{song_id}` -> `{zip_url,
+  expires_at}` (a .musicxml + .pdf pair), synchronous like `song/stem`.
+- `POST https://api.mureka.ai/v1/lyrics-video/generate` `{song_id, title?,
+  aspect_ratio?}` -> `{url}` (mp4, valid 30 days), synchronous. All three
+  confirmed against platform.mureka.ai/docs, 2026-08 - none of them go
+  through the task/poll dance `song/generate`/`song/extend` use.
 
 Unlike `images.py`'s per-variant job (`start_jobs` -> one job per requested
 image), Mureka's own `n` parameter returns several songs from a *single*
@@ -422,6 +432,105 @@ async def stem_track(
         raise RuntimeError(str(exc)) from exc
     usage.record(usage_ctx, model=model_label, kind='audio', status='ok',
                  duration_ms=int((time.monotonic() - started) * 1000), response=str(dest_zip_path.name))
+    return result
+
+
+# ---------- Song insight/utility calls (describe / transcribe / lyrics-video) ----------
+# Three more real, synchronous Mureka calls (no task/poll, unlike generate/
+# extend) - each returns its result directly in the response body, same
+# shape as song/stem above. describe works on any audio (no Mureka-side
+# track needed, so it's sent as a base64 data URI like song/stem); transcribe
+# and lyrics-video both operate on an existing Mureka `song_id` (a track's
+# `raw['id']`, same id "Продлить"/extend uses) rather than re-uploading
+# bytes. No pricing.py catalog row for any of the three (Mureka doesn't
+# report a per-call cost) - same "cost: unknown" convention as every other
+# mureka.py call.
+
+async def describe_song(content: bytes, api_key: str, usage_ctx: dict | None = None) -> dict:
+    started = time.monotonic()
+    model_label = 'mureka:song-describe'
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Mureka')
+    if len(content) > _STEM_MAX_BYTES:
+        raise RuntimeError(
+            f'Файл трека больше {_STEM_MAX_BYTES // (1024 * 1024)}MB - Mureka API не принимает такой размер для описания',
+        )
+    data_uri = f'data:audio/mpeg;base64,{base64.b64encode(content).decode("ascii")}'
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    try:
+        async with httpx.AsyncClient(timeout=60) as http_client:
+            resp = await http_client.post(f'{_API_BASE}/v1/song/describe', headers=headers, json={'url': data_uri})
+        if resp.status_code != 200:
+            raise RuntimeError(f'Mureka API (song/describe): {_extract_error_message(resp)}')
+        result = resp.json()
+    except Exception as exc:
+        usage.record(usage_ctx, model=model_label, kind='audio', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), error=str(exc))
+        raise RuntimeError(str(exc)) from exc
+    usage.record(usage_ctx, model=model_label, kind='audio', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000), response=result.get('description', ''))
+    return result
+
+
+async def transcribe_song(song_id: str, api_key: str, dest_zip_path: Path, usage_ctx: dict | None = None) -> dict:
+    started = time.monotonic()
+    model_label = 'mureka:song-transcribe'
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Mureka')
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    try:
+        async with httpx.AsyncClient(timeout=60) as http_client:
+            resp = await http_client.post(f'{_API_BASE}/v1/song/transcribe', headers=headers, json={'song_id': song_id})
+        if resp.status_code != 200:
+            raise RuntimeError(f'Mureka API (song/transcribe): {_extract_error_message(resp)}')
+        result = resp.json()
+        zip_url = result.get('zip_url')
+        if not zip_url:
+            raise RuntimeError('Mureka: ответ не содержит ссылку на архив с нотами')
+        zip_bytes = await _download(zip_url)
+        dest_zip_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_zip_path.write_bytes(zip_bytes)
+    except Exception as exc:
+        usage.record(usage_ctx, model=model_label, kind='audio', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), error=str(exc))
+        raise RuntimeError(str(exc)) from exc
+    usage.record(usage_ctx, model=model_label, kind='audio', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000), response=str(dest_zip_path.name))
+    return result
+
+
+async def generate_lyrics_video(
+    song_id: str, title: str | None, aspect_ratio: str | None, api_key: str, dest_path: Path,
+    usage_ctx: dict | None = None,
+) -> dict:
+    started = time.monotonic()
+    model_label = 'mureka:lyrics-video'
+    if not api_key:
+        raise RuntimeError('Нет API-ключа Mureka')
+    body: dict = {'song_id': song_id}
+    if title:
+        body['title'] = title
+    if aspect_ratio:
+        body['aspect_ratio'] = aspect_ratio
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    try:
+        async with httpx.AsyncClient(timeout=120) as http_client:
+            resp = await http_client.post(f'{_API_BASE}/v1/lyrics-video/generate', headers=headers, json=body)
+        if resp.status_code != 200:
+            raise RuntimeError(f'Mureka API (lyrics-video/generate): {_extract_error_message(resp)}')
+        result = resp.json()
+        video_url = result.get('url')
+        if not video_url:
+            raise RuntimeError('Mureka: ответ не содержит ссылку на видео')
+        video_bytes = await _download(video_url)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(video_bytes)
+    except Exception as exc:
+        usage.record(usage_ctx, model=model_label, kind='audio', status='error',
+                     duration_ms=int((time.monotonic() - started) * 1000), error=str(exc))
+        raise RuntimeError(str(exc)) from exc
+    usage.record(usage_ctx, model=model_label, kind='audio', status='ok',
+                 duration_ms=int((time.monotonic() - started) * 1000), response=str(dest_path.name))
     return result
 
 

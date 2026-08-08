@@ -1,14 +1,17 @@
 import { useRef, useState } from 'react';
 import {
-  Check, ChevronDown, ChevronUp, Loader2, Maximize2, MoreVertical, Music4, Plus, RotateCcw,
-  Scissors, Star, Trash2, Upload, Wand2, X, Zap,
+  Check, ChevronDown, ChevronUp, FileText, Info, Loader2, Maximize2, MoreVertical, Music4, Plus, RotateCcw,
+  Scissors, Star, Trash2, Upload, Video, Wand2, X, Zap,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { pickReadableTextColor } from '../../lib/musicTagColors.js';
 import JsonTreeView from '../common/JsonTreeView.jsx';
 import CopyButton from './CopyButton.jsx';
 import KaraokeLyrics from './KaraokeLyrics.jsx';
+import MurekaDescribeModal from './MurekaDescribeModal.jsx';
+import MurekaLyricsVideoModal from './MurekaLyricsVideoModal.jsx';
 import MurekaTrackDetailModal from './MurekaTrackDetailModal.jsx';
+import MurekaTranscriptionModal from './MurekaTranscriptionModal.jsx';
 import ReferenceAudioTrimmer from './ReferenceAudioTrimmer.jsx';
 
 const MODELS = ['auto', 'mureka-7.6', 'mureka-o2', 'mureka-8', 'mureka-9'];
@@ -36,6 +39,7 @@ function formatElapsed(totalSeconds, L) {
 function TrackCard({
   L, projectId, track, index, allTags, onRate, onSelectMain, onToggleTag, onDelete,
   onReuseSettings, onExtend, onStem, onOpenDetail, extending, stemming,
+  onDescribe, onTranscribe, onGenerateLyricsVideo, describing, transcribing, generatingVideo,
 }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
@@ -92,6 +96,21 @@ function TrackCard({
                 </button>
                 <button onClick={() => { onStem(track.track_id); setActionsMenuOpen(false); }} disabled={stemming}>
                   {stemming ? <Loader2 size={12} className="spin" /> : <Scissors size={12} />} {L.mureka_stemBtn}
+                </button>
+                <button onClick={() => { onDescribe(track); setActionsMenuOpen(false); }} disabled={describing}>
+                  {describing ? <Loader2 size={12} className="spin" /> : <Info size={12} />} {L.mureka_describeBtn}
+                </button>
+                <button
+                  onClick={() => { onTranscribe(track); setActionsMenuOpen(false); }} disabled={transcribing || !track.raw?.id}
+                  title={!track.raw?.id ? L.mureka_extendUnavailable : undefined}
+                >
+                  {transcribing ? <Loader2 size={12} className="spin" /> : <FileText size={12} />} {L.mureka_transcribeBtn}
+                </button>
+                <button
+                  onClick={() => { onGenerateLyricsVideo(track); setActionsMenuOpen(false); }} disabled={generatingVideo || !track.raw?.id}
+                  title={!track.raw?.id ? L.mureka_extendUnavailable : undefined}
+                >
+                  {generatingVideo ? <Loader2 size={12} className="spin" /> : <Video size={12} />} {L.mureka_lyricsVideoBtn}
                 </button>
                 <div className="mureka-menu-cost-hint">{L.mureka_costUnknownHint}</div>
               </div>
@@ -202,14 +221,33 @@ function TrackCard({
 export default function MurekaStage({
   L, project, isMobile, styleInput, lyricsInput, model, n, gender, referenceId, referenceAudio, referenceSources,
   tracks, generating, elapsedSeconds, jobStage, murekaError, uploadingReference, uploadingReferenceSource, trimmingReference,
-  billing, extendingTrackIds, stemmingTrackIds, musicTags, actions,
+  billing, extendingTrackIds, stemmingTrackIds, describingTrackIds, transcribingTrackIds, lyricsVideoTrackIds,
+  musicTags, actions,
 }) {
-  const [referenceMenuOpen, setReferenceMenuOpen] = useState(false);
+  const [referenceBrowserOpen, setReferenceBrowserOpen] = useState(true);
   const [trimmingSource, setTrimmingSource] = useState(null);
   const [detailTrackId, setDetailTrackId] = useState(null);
+  // Which per-track insight modal (if any) is open - {type, trackId}. type
+  // is 'describe'|'transcribe'|'lyrics-video', matching the 3 result modals
+  // below; each opens only after its (paid) API call has actually succeeded.
+  const [insightModal, setInsightModal] = useState(null);
   const fileInputRef = useRef(null);
   const detailIndex = (tracks || []).findIndex((t) => t.track_id === detailTrackId);
   const detailTrack = detailIndex >= 0 ? tracks[detailIndex] : null;
+  const insightTrack = insightModal ? (tracks || []).find((t) => t.track_id === insightModal.trackId) : null;
+
+  async function handleDescribe(track) {
+    const ok = await actions.describeTrack(track.track_id);
+    if (ok) setInsightModal({ type: 'describe', trackId: track.track_id });
+  }
+  async function handleTranscribe(track) {
+    const ok = await actions.transcribeTrack(track.track_id);
+    if (ok) setInsightModal({ type: 'transcribe', trackId: track.track_id });
+  }
+  async function handleGenerateLyricsVideo(track) {
+    const ok = await actions.generateLyricsVideo(track.track_id);
+    if (ok) setInsightModal({ type: 'lyrics-video', trackId: track.track_id });
+  }
 
   async function handleReferenceFile(e) {
     const file = e.target.files?.[0];
@@ -232,6 +270,20 @@ export default function MurekaStage({
   }
 
   const selectedReference = (referenceAudio || []).find((r) => r.mureka_file_id === referenceId);
+  // Selected clip's own upload, if it still exists - lets "изменить участок"
+  // reopen the trimmer against the exact same file instead of the user
+  // having to relocate it in the list below.
+  const selectedReferenceSource = selectedReference?.source_id
+    ? (referenceSources || []).find((s) => s.id === selectedReference.source_id)
+    : null;
+  // Group trimmed clips under the raw upload they were cut from, so the
+  // picker reads as "file -> its windows" instead of one flat list where
+  // it's unclear which clip came from which upload (or what window it is).
+  const clipsBySourceId = {};
+  (referenceAudio || []).forEach((clip) => {
+    if (clip.source_id) (clipsBySourceId[clip.source_id] ||= []).push(clip);
+  });
+  const looseClips = (referenceAudio || []).filter((clip) => !clip.source_id);
   const stageLabels = {
     preparing: L.mureka_stagePreparing, queued: L.mureka_stageQueued,
     running: L.mureka_stageRunning, streaming: L.mureka_stageStreaming,
@@ -297,21 +349,92 @@ export default function MurekaStage({
               <option value="female">{L.mureka_genderFemale}</option>
             </select>
           </div>
-          <div style={{ position: 'relative' }}>
-            <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 6 }}>{L.mureka_referenceLabel}</div>
-            <button className="field" style={{ cursor: 'pointer', textAlign: 'left', minWidth: 180 }} onClick={() => setReferenceMenuOpen((o) => !o)}>
-              {selectedReference ? selectedReference.filename : L.mureka_referenceNone}
-            </button>
-            {referenceMenuOpen && (
-              <div className="mureka-reference-menu">
-                <button onClick={() => { actions.setReferenceId(''); setReferenceMenuOpen(false); }}>
-                  {L.mureka_referenceNone}
+        </div>
+      </div>
+
+      <div className="glass-card" style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div className="suno-panel-title" style={{ margin: 0 }}>{L.mureka_referenceLabel}</div>
+          <button className="mureka-details-toggle" onClick={() => setReferenceBrowserOpen((o) => !o)}>
+            {referenceBrowserOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            {selectedReference ? L.mureka_referenceChangeTrackBtn : L.mureka_referenceBrowseBtn}
+          </button>
+        </div>
+
+        {selectedReference ? (
+          <div className="mureka-reference-selected">
+            <div className="mureka-reference-selected-info">
+              <Music4 size={12} />
+              <span className="mureka-reference-selected-name">{selectedReference.filename}</span>
+              {selectedReference.start_ms != null && (
+                <span className="mureka-reference-selected-range">
+                  {formatTrackDuration(selectedReference.start_ms)}–{formatTrackDuration(selectedReference.end_ms)}
+                </span>
+              )}
+            </div>
+            <audio
+              className="mureka-reference-selected-audio" controls
+              src={mediaUrl(`projects/${project.id}/${selectedReference.file_path}`)}
+            />
+            <div className="mureka-reference-selected-actions">
+              {selectedReferenceSource && (
+                <button className="btn-ghost" style={{ border: 'none', cursor: 'pointer' }} onClick={() => setTrimmingSource(selectedReferenceSource)}>
+                  <Scissors size={11} /> {L.mureka_referenceChangeRangeBtn}
                 </button>
-                {(referenceAudio || []).map((ref) => (
+              )}
+              <button className="btn-ghost" style={{ border: 'none', cursor: 'pointer' }} onClick={() => actions.setReferenceId('')}>
+                <X size={11} /> {L.mureka_referenceClearBtn}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mureka-reference-empty-hint">{L.mureka_referenceNone}</div>
+        )}
+
+        {referenceBrowserOpen && (
+          <div className="mureka-reference-browser">
+            {(referenceSources || []).map((source) => (
+              <div key={source.id} className="mureka-reference-source-group">
+                <div className="mureka-reference-source-row">
+                  <span className="mureka-reference-source-name">{source.filename}</span>
+                  <span className="mureka-reference-source-actions">
+                    <button title={L.mureka_referenceTrimNewBtn} onClick={() => setTrimmingSource(source)}>
+                      <Scissors size={11} />
+                    </button>
+                    <button title={L.mureka_referenceSourceDeleteTitle} onClick={() => actions.deleteReferenceSource(source.id)}>
+                      <X size={11} />
+                    </button>
+                  </span>
+                </div>
+                <div className="mureka-reference-clip-chips">
+                  {(clipsBySourceId[source.id] || []).map((clip) => (
+                    <span key={clip.id} className="mureka-reference-clip-chip-wrap">
+                      <button
+                        className={`mureka-reference-clip-chip${clip.mureka_file_id === referenceId ? ' is-active' : ''}`}
+                        onClick={() => actions.setReferenceId(clip.mureka_file_id)}
+                      >
+                        {formatTrackDuration(clip.start_ms)}–{formatTrackDuration(clip.end_ms)}
+                      </button>
+                      <button title={L.mureka_referenceDeleteTitle} onClick={() => actions.deleteReferenceAudio(clip.id)}>
+                        <X size={9} />
+                      </button>
+                    </span>
+                  ))}
+                  {!(clipsBySourceId[source.id] || []).length && (
+                    <span className="mureka-reference-clip-chip-empty">{L.mureka_referenceNoClipsYet}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {!!looseClips.length && (
+              <>
+                <div className="mureka-reference-menu-divider">{L.mureka_referenceOtherClipsLabel}</div>
+                {looseClips.map((ref) => (
                   <span key={ref.id} className="mureka-reference-menu-row">
                     <button
                       className={ref.mureka_file_id === referenceId ? 'is-active' : ''}
-                      onClick={() => { actions.setReferenceId(ref.mureka_file_id); setReferenceMenuOpen(false); }}
+                      onClick={() => actions.setReferenceId(ref.mureka_file_id)}
                     >
                       {ref.filename}
                     </button>
@@ -320,28 +443,19 @@ export default function MurekaStage({
                     </button>
                   </span>
                 ))}
-                {!!(referenceSources || []).length && (
-                  <div className="mureka-reference-menu-divider">{L.mureka_referenceSourcesLabel}</div>
-                )}
-                {(referenceSources || []).map((source) => (
-                  <span key={source.id} className="mureka-reference-menu-row">
-                    <button onClick={() => { setTrimmingSource(source); setReferenceMenuOpen(false); }}>
-                      <Scissors size={11} /> {source.filename}
-                    </button>
-                    <button title={L.mureka_referenceSourceDeleteTitle} onClick={() => actions.deleteReferenceSource(source.id)}>
-                      <X size={11} />
-                    </button>
-                  </span>
-                ))}
-                <button onClick={() => { setReferenceMenuOpen(false); fileInputRef.current?.click(); }} disabled={uploadingReferenceSource || uploadingReference}>
-                  {(uploadingReferenceSource || uploadingReference) ? <Loader2 size={12} className="spin" /> : <Upload size={12} />}
-                  {(uploadingReferenceSource || uploadingReference) ? L.mureka_referenceUploading : L.mureka_referenceUpload}
-                </button>
-              </div>
+              </>
             )}
+
+            <button
+              className="mureka-reference-upload-btn" onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingReferenceSource || uploadingReference}
+            >
+              {(uploadingReferenceSource || uploadingReference) ? <Loader2 size={12} className="spin" /> : <Upload size={12} />}
+              {(uploadingReferenceSource || uploadingReference) ? L.mureka_referenceUploading : L.mureka_referenceUpload}
+            </button>
             <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/flac,.mp3,.m4a,.wav,.ogg,.flac" style={{ display: 'none' }} onChange={handleReferenceFile} />
           </div>
-        </div>
+        )}
         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 10 }}>{L.mureka_referenceHint}</div>
       </div>
 
@@ -380,6 +494,10 @@ export default function MurekaStage({
               onOpenDetail={(t) => setDetailTrackId(t.track_id)}
               extending={(extendingTrackIds || []).includes(track.track_id)}
               stemming={(stemmingTrackIds || []).includes(track.track_id)}
+              onDescribe={handleDescribe} onTranscribe={handleTranscribe} onGenerateLyricsVideo={handleGenerateLyricsVideo}
+              describing={(describingTrackIds || []).includes(track.track_id)}
+              transcribing={(transcribingTrackIds || []).includes(track.track_id)}
+              generatingVideo={(lyricsVideoTrackIds || []).includes(track.track_id)}
             />
           ))}
         </div>
@@ -404,6 +522,16 @@ export default function MurekaStage({
           onClose={() => setDetailTrackId(null)}
           onSetKaraokeSync={(sync) => actions.onSetKaraokeSync(detailTrack.track_id, sync)}
         />
+      )}
+
+      {insightModal?.type === 'describe' && (
+        <MurekaDescribeModal L={L} track={insightTrack} onClose={() => setInsightModal(null)} />
+      )}
+      {insightModal?.type === 'transcribe' && (
+        <MurekaTranscriptionModal L={L} projectId={project.id} track={insightTrack} onClose={() => setInsightModal(null)} />
+      )}
+      {insightModal?.type === 'lyrics-video' && (
+        <MurekaLyricsVideoModal L={L} projectId={project.id} track={insightTrack} onClose={() => setInsightModal(null)} />
       )}
     </>
   );

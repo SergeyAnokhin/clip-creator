@@ -521,6 +521,118 @@ def test_stem_track_records_usage_on_error(tmp_path, monkeypatch, usage_ledger):
     assert records[0]['status'] == 'error'
 
 
+# ---------- describe_song ----------
+
+def test_describe_song_success_sends_base64_data_uri(monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {
+            'instrument': ['piano', 'strings'], 'genres': ['ballad'], 'tags': ['sad', 'slow'],
+            'description': 'A melancholic piano ballad.',
+        }),
+    ])
+
+    result = asyncio.run(mureka.describe_song(b'fake-mp3-bytes', 'key'))
+
+    assert result['genres'] == ['ballad']
+    assert result['description'] == 'A melancholic piano ballad.'
+    body = fake_client.calls[0]['json']
+    assert body['url'].startswith('data:audio/mpeg;base64,')
+
+
+def test_describe_song_rejects_oversized_file():
+    with pytest.raises(RuntimeError, match='MB'):
+        asyncio.run(mureka.describe_song(b'x' * (mureka._STEM_MAX_BYTES + 1), 'key'))
+
+
+def test_describe_song_missing_key_raises():
+    with pytest.raises(RuntimeError, match='Mureka'):
+        asyncio.run(mureka.describe_song(b'x', ''))
+
+
+def test_describe_song_error_status_raises(monkeypatch):
+    _install(monkeypatch, [_FakeResponse(400, {'error': {'message': 'bad audio'}})])
+    with pytest.raises(RuntimeError, match='bad audio'):
+        asyncio.run(mureka.describe_song(b'x', 'key'))
+
+
+def test_describe_song_records_usage_on_success(monkeypatch, usage_ledger):
+    _install(monkeypatch, [_FakeResponse(200, {'instrument': [], 'genres': [], 'tags': [], 'description': 'x'})])
+    ctx = usage_ledger.context('mureka_describe', 'poem-d', {})
+
+    asyncio.run(mureka.describe_song(b'x', 'key', usage_ctx=ctx))
+
+    records = usage_ledger.query()['records']
+    assert len(records) == 1
+    assert records[0]['status'] == 'ok'
+    assert records[0]['task'] == 'mureka_describe'
+
+
+# ---------- transcribe_song ----------
+
+def test_transcribe_song_success_downloads_zip(tmp_path, monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'zip_url': 'https://cdn.mureka.ai/notes.zip', 'expires_at': 456}),
+        _FakeResponse(200, content=b'NOTES-ZIP'),
+    ])
+    dest = tmp_path / 'xscr_abc.zip'
+
+    result = asyncio.run(mureka.transcribe_song('song_1', 'key', dest))
+
+    assert result['expires_at'] == 456
+    assert dest.read_bytes() == b'NOTES-ZIP'
+    assert fake_client.calls[0]['json'] == {'song_id': 'song_1'}
+
+
+def test_transcribe_song_missing_key_raises(tmp_path):
+    with pytest.raises(RuntimeError, match='Mureka'):
+        asyncio.run(mureka.transcribe_song('song_1', '', tmp_path / 'x.zip'))
+
+
+def test_transcribe_song_error_status_raises(tmp_path, monkeypatch):
+    _install(monkeypatch, [_FakeResponse(400, {'error': {'message': 'song too old'}})])
+    with pytest.raises(RuntimeError, match='song too old'):
+        asyncio.run(mureka.transcribe_song('song_1', 'key', tmp_path / 'x.zip'))
+
+
+# ---------- generate_lyrics_video ----------
+
+def test_generate_lyrics_video_success_downloads_mp4(tmp_path, monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'url': 'https://cdn.mureka.ai/lyrics.mp4'}),
+        _FakeResponse(200, content=b'MP4DATA'),
+    ])
+    dest = tmp_path / 'lvid_abc.mp4'
+
+    result = asyncio.run(mureka.generate_lyrics_video('song_1', 'My Title', '9:16', 'key', dest))
+
+    assert result['url'] == 'https://cdn.mureka.ai/lyrics.mp4'
+    assert dest.read_bytes() == b'MP4DATA'
+    assert fake_client.calls[0]['json'] == {'song_id': 'song_1', 'title': 'My Title', 'aspect_ratio': '9:16'}
+
+
+def test_generate_lyrics_video_omits_optional_fields_when_not_given(tmp_path, monkeypatch):
+    fake_client = _install(monkeypatch, [
+        _FakeResponse(200, {'url': 'https://cdn.mureka.ai/lyrics.mp4'}),
+        _FakeResponse(200, content=b'MP4DATA'),
+    ])
+    dest = tmp_path / 'lvid.mp4'
+
+    asyncio.run(mureka.generate_lyrics_video('song_1', None, None, 'key', dest))
+
+    assert fake_client.calls[0]['json'] == {'song_id': 'song_1'}
+
+
+def test_generate_lyrics_video_missing_key_raises(tmp_path):
+    with pytest.raises(RuntimeError, match='Mureka'):
+        asyncio.run(mureka.generate_lyrics_video('song_1', None, None, '', tmp_path / 'x.mp4'))
+
+
+def test_generate_lyrics_video_error_status_raises(tmp_path, monkeypatch):
+    _install(monkeypatch, [_FakeResponse(400, {'error': {'message': 'no lyrics found'}})])
+    with pytest.raises(RuntimeError, match='no lyrics found'):
+        asyncio.run(mureka.generate_lyrics_video('song_1', None, None, 'key', tmp_path / 'x.mp4'))
+
+
 # ---------- trim_audio (ffmpeg) ----------
 
 def test_trim_audio_missing_ffmpeg_raises(tmp_path, monkeypatch):

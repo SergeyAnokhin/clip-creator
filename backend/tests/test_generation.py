@@ -1249,3 +1249,170 @@ def test_stem_mureka_track_missing_audio_file_returns_404(client):
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/stem', json={})
     assert resp.status_code == 404
+
+
+# ---------- describe / transcribe / lyrics-video track operations ----------
+
+def test_describe_mureka_track_success_appends_description(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    music_dir = data_root / 'projects' / pid / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    (music_dir / 'trk_x.mp3').write_bytes(b'fake-mp3')
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    async def fake_describe_song(content, api_key, usage_ctx=None):
+        return {'instrument': ['piano'], 'genres': ['ballad'], 'tags': ['sad'], 'description': 'A sad piano ballad.'}
+
+    monkeypatch.setattr(generation_router.mureka, 'describe_song', fake_describe_song)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/describe')
+
+    assert resp.status_code == 200
+    descriptions = resp.json()['tracks'][0]['descriptions']
+    assert len(descriptions) == 1
+    assert descriptions[0]['genres'] == ['ballad']
+    assert descriptions[0]['description'] == 'A sad piano ballad.'
+
+
+def test_describe_mureka_track_provider_failure_returns_502(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    music_dir = data_root / 'projects' / pid / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    (music_dir / 'trk_x.mp3').write_bytes(b'fake-mp3')
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    monkeypatch.setattr(generation_router.mureka, 'describe_song', AsyncMock(side_effect=RuntimeError('boom')))
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/describe')
+    assert resp.status_code == 502
+
+
+def test_describe_mureka_track_missing_audio_file_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/does-not-exist.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/describe')
+    assert resp.status_code == 404
+
+
+def test_transcribe_mureka_track_success_appends_transcription(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {'id': 'song_1'}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    async def fake_transcribe_song(song_id, api_key, dest_zip_path, usage_ctx=None):
+        assert song_id == 'song_1'
+        dest_zip_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_zip_path.write_bytes(b'notes-zip')
+        return {'zip_url': 'https://cdn.mureka.ai/notes.zip', 'expires_at': 999}
+
+    monkeypatch.setattr(generation_router.mureka, 'transcribe_song', fake_transcribe_song)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/transcribe')
+
+    assert resp.status_code == 200
+    transcriptions = resp.json()['tracks'][0]['transcriptions']
+    assert len(transcriptions) == 1
+    assert transcriptions[0]['expires_at'] == 999
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / transcriptions[0]['file_path']
+    assert written.read_bytes() == b'notes-zip'
+
+
+def test_transcribe_mureka_track_requires_song_id(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/transcribe')
+    assert resp.status_code == 422
+
+
+def test_transcribe_mureka_track_provider_failure_returns_502(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {'id': 'song_1'}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    monkeypatch.setattr(generation_router.mureka, 'transcribe_song', AsyncMock(side_effect=RuntimeError('boom')))
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/transcribe')
+    assert resp.status_code == 502
+
+
+def test_lyrics_video_mureka_track_success_appends_video(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {'id': 'song_1'}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    async def fake_generate_lyrics_video(song_id, title, aspect_ratio, api_key, dest_path, usage_ctx=None):
+        assert song_id == 'song_1'
+        assert aspect_ratio == '16:9'
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(b'mp4-bytes')
+        return {'url': 'https://cdn.mureka.ai/lyrics.mp4'}
+
+    monkeypatch.setattr(generation_router.mureka, 'generate_lyrics_video', fake_generate_lyrics_video)
+
+    resp = client.post(
+        f'/api/projects/{pid}/mureka/tracks/trk_x/lyrics-video', json={'aspect_ratio': '16:9'},
+    )
+
+    assert resp.status_code == 200
+    videos = resp.json()['tracks'][0]['lyrics_videos']
+    assert len(videos) == 1
+    assert videos[0]['aspect_ratio'] == '16:9'
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / videos[0]['file_path']
+    assert written.read_bytes() == b'mp4-bytes'
+
+
+def test_lyrics_video_mureka_track_requires_song_id(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/lyrics-video', json={})
+    assert resp.status_code == 422
+
+
+def test_lyrics_video_mureka_track_provider_failure_returns_502(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    project['mureka'] = {'reference_audio': [], 'tracks': [
+        {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'duration_ms': 30000, 'raw': {'id': 'song_1'}},
+    ]}
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    monkeypatch.setattr(generation_router.mureka, 'generate_lyrics_video', AsyncMock(side_effect=RuntimeError('boom')))
+
+    resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/lyrics-video', json={})
+    assert resp.status_code == 502

@@ -144,4 +144,7 @@ export const api = {
   trimMurekaReferenceSource: (id, sourceId, startMs, endMs) => request(`${projectPath(id)}/mureka/reference-sources/${encodeURIComponent(sourceId)}/trim`, { method: 'POST', body: JSON.stringify({ start_ms: startMs, end_ms: endMs }) }),
   extendMurekaTrack: (id, trackId, body) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/extend`, { method: 'POST', body: JSON.stringify(body || {}) }),
   stemMurekaTrack: (id, trackId, body) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/stem`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  describeMurekaTrack: (id, trackId) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/describe`, { method: 'POST' }),
+  transcribeMurekaTrack: (id, trackId) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/transcribe`, { method: 'POST' }),
+  lyricsVideoMurekaTrack: (id, trackId, body) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}/lyrics-video`, { method: 'POST', body: JSON.stringify(body || {}) }),
 };

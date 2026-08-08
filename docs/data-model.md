@@ -206,7 +206,7 @@ is append-only, one entry per generated song:
 **MurekaTrack**: `{track_id, task_id, choice_index, file_path, duration_ms,
 model, style, lyrics, params{n, gender, reference_id}, rating, is_selected,
 tag_ids[], generated_at, raw, reference_used?, extended_from_track_id?,
-stems?}` — `file_path`
+stems?, descriptions?, transcriptions?, lyrics_videos?}` — `file_path`
 under `music/` (always `.mp3`, downloaded immediately since Mureka's own
 `url` expires after 30 days). `style`/`lyrics`/`params` are a snapshot of
 exactly what was sent for this track (a "regenerate 3 tracks" call can
@@ -267,6 +267,26 @@ copy of the stem-separation zip (`music/{stem_id}.zip`; the CDN `zip_url`
 Mureka returns expires, same convention as everything else in this file),
 `model` one of `audio-separation-1\|2\|3` (stem count/format, see
 `providers/mureka.py`).
+
+`descriptions`/`transcriptions`/`lyrics_videos` (each absent until its
+button has been pressed at least once) are append-only arrays, one entry per
+call, mirroring `stems[]`'s "keep history, don't replace" shape — repeat
+calls add another entry rather than overwriting the previous result:
+`descriptions` is `[{id, instrument[], genres[], tags[], description,
+created_at}]` (Mureka `song/describe` - genre/instrument/mood, no file
+involved); `transcriptions` is `[{id, file_path, expires_at, created_at}]`
+(Mureka `song/transcribe` - `file_path` a downloaded copy of the
+`.musicxml`+`.pdf` zip under `music/{id}.zip`, same expiring-CDN-link
+convention as `stems`); `lyrics_videos` is `[{id, file_path, title,
+aspect_ratio, created_at}]` (Mureka `lyrics-video/generate` - `file_path` a
+downloaded mp4 under `music/{id}.mp4`). `transcribe`/`lyrics-video` both key
+off the track's Mureka `song_id` (`raw.id`) rather than re-uploading audio,
+same id `/extend` uses, so they share `/extend`'s "no `song_id`" `422`
+failure mode for a track past Mureka's ~1-month retention window; `describe`
+has no such constraint since it uploads the track's own `.mp3` directly
+(same base64-data-URI technique and 10MB cap as `/stem`). None of the three
+has a `pricing.py` catalog row (Mureka doesn't report a per-call cost for
+any of them) - same "cost: unknown" convention as the rest of this file.
 
 `karaoke_sync` (absent until the user taps or marks anything in
 `MurekaTrackDetailModal.jsx`) is `{anchors: {[rowIndex]: userMs}, tempo_marks:
@@ -567,6 +587,9 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/mureka/reference-sources/{source_id}/trim` | `{start_ms, end_ms}` → `{reference_audio}` — cuts `[start_ms, end_ms)` from the staged source via `ffmpeg` (system dependency, see README) and forwards the result through the same flow as `/mureka/reference-audio` above, tagging the new `reference_audio` entry with `source_id`/`start_ms`/`end_ms`; `422` if the range is invalid, `502` on an `ffmpeg` or Mureka failure (missing `ffmpeg` on `PATH` surfaces here with a clear message). The source itself is left in `reference_sources` — callable again with a different range to produce another clip from the same upload |
 | `POST /api/projects/{id}/mureka/tracks/{track_id}/extend` | `{lyrics, extend_at?, extend_type?, model?}` → `{job_id}` — real Mureka `song/extend` call ("Продлить"), same job/poll shape as `/mureka/generate`; `extend_at` defaults to the track's own `duration_ms` (extend from the end). `422` if `lyrics` is blank or the track has no Mureka `song_id` (`track.raw.id`) to extend from — e.g. an already-extended track past Mureka's ~1-month window |
 | `POST /api/projects/{id}/mureka/tracks/{track_id}/stem` | `{model?}` (`audio-separation-1\|2\|3`) → `{tracks}` — real Mureka `song/stem` call ("Разделить на дорожки"), **synchronous** (no job/poll — unlike every other real Mureka call here); appends to the track's `stems[]`. `404` if the track's `.mp3` is missing from disk, `502` on a provider failure |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/describe` | no body → `{tracks}` — real Mureka `song/describe` call ("Описание песни"), synchronous like `/stem`; sends the track's own `.mp3` as a base64 data URI (same technique and 10MB cap as `/stem`) and appends `{id, instrument[], genres[], tags[], description, created_at}` to the track's `descriptions[]`. `404` if the track's `.mp3` is missing from disk, `502` on a provider failure |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/transcribe` | no body → `{tracks}` — real Mureka `song/transcribe` call ("Ноты из песни"), synchronous; uses the track's Mureka `song_id` (`raw.id`, same id `/extend` uses) rather than re-uploading audio, downloads the resulting `.musicxml`+`.pdf` zip immediately (CDN link expires) to `music/{id}.zip`, and appends `{id, file_path, expires_at, created_at}` to `transcriptions[]`. `422` if the track has no `song_id`, `502` on a provider failure |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/lyrics-video` | `{title?, aspect_ratio?}` (`aspect_ratio ∈ 16:9\|9:16\|3:4\|4:3`, Mureka defaults to `9:16`) → `{tracks}` — real Mureka `lyrics-video/generate` call ("Видео с текстом"), synchronous; also keyed off `raw.id`, downloads the resulting mp4 immediately to `music/{id}.mp4`, and appends `{id, file_path, title, aspect_ratio, created_at}` to `lyrics_videos[]`. `title` defaults to the project's own title when omitted. `422` if the track has no `song_id`, `502` on a provider failure |
 | `POST /api/settings/logos` | multipart `file` (png/webp) + `name?` → `{logos}` — appends to the global `settings.logos`, file under `app_data/logos/` |
 | `DELETE /api/settings/logos/{logo_id}` | → `{logos}` |
 | `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |

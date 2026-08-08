@@ -870,3 +870,144 @@ async def stem_mureka_track(project_id: str, track_id: str, body: dict = Body(de
         project['updated_at'] = _now()
         storage.save_project(project_id, project)
     return {'tracks': tracks}
+
+
+# ---------- Song insight/utility calls (describe / transcribe / lyrics-video) ----------
+# All three are synchronous, one-shot Mureka calls (no job/poll, same shape
+# as /stem above) - see providers/mureka.py's module docstring for the
+# confirmed request/response shapes. Each appends its result to the track's
+# own array (descriptions/transcriptions/lyrics_videos) rather than
+# replacing anything, so repeat calls build up a small history instead of
+# losing the previous result.
+
+@router.post('/{project_id}/mureka/tracks/{track_id}/describe')
+async def describe_mureka_track(project_id: str, track_id: str):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    tracks = (project.get('mureka') or {}).get('tracks', [])
+    track = next((t for t in tracks if t.get('track_id') == track_id), None)
+    if track is None:
+        raise HTTPException(404, 'Track not found')
+
+    file_path = storage.project_dir(project_id) / track['file_path']
+    if not file_path.is_file():
+        raise HTTPException(404, 'Audio file not found on disk')
+    content = file_path.read_bytes()
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    api_key = (settings.get('api_keys') or {}).get('mureka', '')
+    usage_ctx = usage.context('mureka_describe', project_id, settings)
+    try:
+        result = await mureka.describe_song(content, api_key, usage_ctx=usage_ctx)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        mureka_field = project.get('mureka') or {}
+        tracks = mureka_field.get('tracks', [])
+        for t in tracks:
+            if t.get('track_id') == track_id:
+                t['descriptions'] = [*t.get('descriptions', []), {
+                    'id': f'desc_{uuid4().hex[:8]}',
+                    'instrument': result.get('instrument') or [], 'genres': result.get('genres') or [],
+                    'tags': result.get('tags') or [], 'description': result.get('description') or '',
+                    'created_at': _now(),
+                }]
+                break
+        mureka_field['tracks'] = tracks
+        project['mureka'] = mureka_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+    return {'tracks': tracks}
+
+
+@router.post('/{project_id}/mureka/tracks/{track_id}/transcribe')
+async def transcribe_mureka_track(project_id: str, track_id: str):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    tracks = (project.get('mureka') or {}).get('tracks', [])
+    track = next((t for t in tracks if t.get('track_id') == track_id), None)
+    if track is None:
+        raise HTTPException(404, 'Track not found')
+    song_id = (track.get('raw') or {}).get('id')
+    if not song_id:
+        raise HTTPException(422, 'У этого трека нет song_id Mureka - расшифровка в ноты недоступна')
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    api_key = (settings.get('api_keys') or {}).get('mureka', '')
+    transcription_id = f'xscr_{uuid4().hex[:8]}'
+    dest_zip_path = storage.project_dir(project_id) / 'music' / f'{transcription_id}.zip'
+    usage_ctx = usage.context('mureka_transcribe', project_id, settings)
+    try:
+        result = await mureka.transcribe_song(song_id, api_key, dest_zip_path, usage_ctx=usage_ctx)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        mureka_field = project.get('mureka') or {}
+        tracks = mureka_field.get('tracks', [])
+        for t in tracks:
+            if t.get('track_id') == track_id:
+                t['transcriptions'] = [*t.get('transcriptions', []), {
+                    'id': transcription_id, 'file_path': f'music/{transcription_id}.zip',
+                    'expires_at': result.get('expires_at'), 'created_at': _now(),
+                }]
+                break
+        mureka_field['tracks'] = tracks
+        project['mureka'] = mureka_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+    return {'tracks': tracks}
+
+
+@router.post('/{project_id}/mureka/tracks/{track_id}/lyrics-video')
+async def lyrics_video_mureka_track(project_id: str, track_id: str, body: dict = Body(default={})):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    tracks = (project.get('mureka') or {}).get('tracks', [])
+    track = next((t for t in tracks if t.get('track_id') == track_id), None)
+    if track is None:
+        raise HTTPException(404, 'Track not found')
+    song_id = (track.get('raw') or {}).get('id')
+    if not song_id:
+        raise HTTPException(422, 'У этого трека нет song_id Mureka - видео с текстом недоступно')
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    api_key = (settings.get('api_keys') or {}).get('mureka', '')
+    title = (body.get('title') or project.get('title') or '').strip() or None
+    aspect_ratio = body.get('aspect_ratio') or None
+    video_id = f'lvid_{uuid4().hex[:8]}'
+    dest_path = storage.project_dir(project_id) / 'music' / f'{video_id}.mp4'
+    usage_ctx = usage.context('mureka_lyrics_video', project_id, settings)
+    try:
+        result = await mureka.generate_lyrics_video(song_id, title, aspect_ratio, api_key, dest_path, usage_ctx=usage_ctx)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        mureka_field = project.get('mureka') or {}
+        tracks = mureka_field.get('tracks', [])
+        for t in tracks:
+            if t.get('track_id') == track_id:
+                t['lyrics_videos'] = [*t.get('lyrics_videos', []), {
+                    'id': video_id, 'file_path': f'music/{video_id}.mp4',
+                    'title': title, 'aspect_ratio': aspect_ratio, 'created_at': _now(),
+                }]
+                break
+        mureka_field['tracks'] = tracks
+        project['mureka'] = mureka_field
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+    return {'tracks': tracks}
