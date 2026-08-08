@@ -254,6 +254,27 @@ Mureka returns expires, same convention as everything else in this file),
 `model` one of `audio-separation-1\|2\|3` (stem count/format, see
 `providers/mureka.py`).
 
+`karaoke_sync` (absent until the user taps or marks anything in
+`MurekaTrackDetailModal.jsx`) is `{anchors: {[rowIndex]: userMs}, tempo_marks:
+[{id, time_ms, direction}]}` — the manual correction for the timestamp-drift
+quirk described above, entirely client-derived and never touching `raw`.
+`anchors` keys are indices into that track's `lib/lyricsTiming.js`
+`flattenLyricsLines(raw)` output (stable as long as `raw` itself doesn't
+change); `applyManualAnchors(rows, anchors)` uses them as pinned control
+points and linearly rescales every other line's original timestamp between
+the anchors bracketing it (falling back to interpolating by row position
+when a line - or its neighbouring anchor - has no original timestamp at
+all, e.g. an untimed leading intro), so tapping just the start of each
+verse/chorus is enough to correct the whole track without tapping every
+line. This corrected timeline, not the raw one, drives the "current line"
+highlight in `MurekaTrackDetailModal.jsx`. `tempo_marks` (`direction`:
+`'faster'\|'slower'`) is unrelated bookkeeping — user-placed markers for
+where the track's tempo audibly changes, set via the ↑/↓ hotkeys while the
+modal is open, shown inline in the timeline but never affecting line timing.
+Persisted through the same generic whole-project `PATCH /api/projects/{id}`
+path as rating/tag edits (`useMurekaStage.js`'s `setKaraokeSync` mirrors
+`rateTrack`/`toggleTrackTag`) — no dedicated backend route.
+
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads
 through any route (`routers/projects.py::migrate_legacy_project`), its

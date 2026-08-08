@@ -2044,6 +2044,12 @@
   color: #fcd34d;
 }
 
+.mureka-detail-hotkeys-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .mureka-detail-body {
   display: flex;
   gap: 16px;
@@ -2133,6 +2139,74 @@
   flex-shrink: 0;
   color: var(--text-faint);
   cursor: help;
+}
+
+.mureka-detail-timeline-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 4px;
+}
+
+.mureka-detail-timeline-legend .mureka-detail-line-adjusted {
+  justify-content: flex-start;
+}
+
+.mureka-detail-line-adjusted {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 96px;
+}
+
+.mureka-detail-adjusted-time {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.mureka-detail-adjusted-time.is-anchor {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.mureka-detail-tap-btn, .mureka-detail-untap-btn, .mureka-detail-tempo-remove {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+
+.mureka-detail-tap-btn:hover, .mureka-detail-untap-btn:hover, .mureka-detail-tempo-remove:hover {
+  opacity: 1;
+}
+
+.mureka-detail-tempo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  margin: 2px 0;
+  font-size: 11px;
+  color: #fcd34d;
+}
+
+.mureka-detail-tempo-time {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: var(--text-faint);
+}
+
+.mureka-detail-tempo-remove {
+  margin-left: auto;
 }
 
 .mureka-detail-meta {

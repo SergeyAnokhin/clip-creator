@@ -158,6 +158,33 @@ export function useMurekaStage({
       return { ...p, mureka: { ...current, tracks } };
     });
   }
+
+  /** Persists MurekaTrackDetailModal.jsx's manual karaoke sync corrections
+   * (`{anchors: {[rowIndex]: userMs}, tempo_marks: [{id, time_ms, direction}]}`,
+   * see `lib/lyricsTiming.js`'s `applyManualAnchors`) - debounced like every
+   * other frequent-edit field here since a tap can happen many times in a
+   * row. `updateSync` is applied functionally (`(prevSync) => nextSync`,
+   * `prevSync` always `{anchors: {}, tempo_marks: []}` at minimum) rather
+   * than the caller building the full next object itself: two taps fired
+   * back-to-back (very much the expected usage - tapping several lines in a
+   * row while listening) land in the same React batch, and a caller-built
+   * object would close over the same stale pre-tap `track.karaoke_sync` for
+   * both, so the second tap's save would silently discard the first. Reading
+   * `prevSync` from `p` (the in-flight state `updateProject`'s functional
+   * `setActiveProject` update composes across the batch) instead of from
+   * whatever the modal last rendered avoids that. */
+  function setKaraokeSync(trackId, updateSync) {
+    updateProject((p) => {
+      const current = p.mureka || EMPTY_MUREKA;
+      const tracks = current.tracks.map((t) => {
+        if (t.track_id !== trackId) return t;
+        const prevSync = t.karaoke_sync || { anchors: {}, tempo_marks: [] };
+        const nextSync = typeof updateSync === 'function' ? updateSync(prevSync) : updateSync;
+        return { ...t, karaoke_sync: nextSync };
+      });
+      return { ...p, mureka: { ...current, tracks } };
+    }, { immediate: false });
+  }
   async function deleteTrack(trackId) {
     if (!activeProject) return;
     try {
@@ -323,6 +350,7 @@ export function useMurekaStage({
     actions: {
       setStyleInput, setLyricsInput, setModel, setN, setGender, setReferenceId,
       onGenerate: generate, onRate: rateTrack, onSelectMain: selectMainTrack, onToggleTag: toggleTrackTag, onDelete: deleteTrack,
+      onSetKaraokeSync: setKaraokeSync,
       uploadReferenceAudio, deleteReferenceAudio,
       uploadReferenceSource, deleteReferenceSource, trimReferenceSource,
       reuseTrackSettings, extendTrack, stemTrack, loadBilling,

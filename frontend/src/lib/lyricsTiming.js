@@ -108,6 +108,88 @@ export function lastKnownEnd(lines) {
   return null;
 }
 
+/** True for a row a human actually sings at some instant - everything except
+ * section marker rows and lines that are nothing but Mureka's own bracketed
+ * production tags (`[Instrument: ...]`, `[Female_Vocal]`, etc., each their
+ * own row in `flattenLyricsLines`'s output). Only these get a manual
+ * "tap to mark this line's start" button in MurekaTrackDetailModal.jsx - a
+ * tag-only row has no moment to tap. A line that's mostly tag but *also*
+ * carries real text (rare, but Mureka does mix them, e.g. a bracketed
+ * ad-lib inline with lyrics) still counts as tappable. */
+export function isTappableLine(row) {
+  if (!row || row.isSection || !row.text) return false;
+  return !/^(\s*\[[^\]]*\]\s*)+$/.test(row.text);
+}
+
+/** Rebuilds each row's effective timing from the user's manual anchor taps
+ * (MurekaTrackDetailModal.jsx's "моя"/adjusted column) - the only way to
+ * correct `lyrics_sections` timing, since the offset documented in
+ * docs/data-model.md (Mureka's alignment appears to measure from wherever
+ * it first locked on, not the track's true start) can't be derived from the
+ * API response alone. `anchors` is `{[rowIndex]: userTappedMs}`, `rowIndex`
+ * matching this same `rows` array's indices.
+ *
+ * Between two anchors, every other row in the run is mapped through the
+ * *local* linear scaling from Mureka's own original timestamps, so relative
+ * spacing Mureka got right within that stretch is preserved and only the
+ * drift is corrected; a row (or an anchor's own row) with no usable
+ * original `start` falls back to interpolating by row position instead.
+ * Before the first anchor or after the last, rows are shifted by that
+ * anchor's constant offset (nothing on the other side to scale against) -
+ * and if the row itself has no original `start` to shift, its adjusted
+ * timing is left unresolved (`null`) rather than guessed. With no anchors
+ * at all, every row's original timing passes through unchanged - "if I
+ * haven't tapped anything, fall back to Mureka's data" per the user's own
+ * framing of this feature. Returns a new array (`{...row, adjustedStart,
+ * adjustedEnd, isAnchor}`); input `rows` is untouched. */
+export function applyManualAnchors(rows, anchors) {
+  const anchorList = Object.keys(anchors || {})
+    .map((key) => ({ index: Number(key), ms: anchors[key] }))
+    .filter((a) => Number.isInteger(a.index) && a.index >= 0 && a.index < rows.length && a.ms != null)
+    .sort((a, b) => a.index - b.index);
+
+  return rows.map((row, i) => {
+    const exact = anchorList.find((a) => a.index === i);
+    if (exact) {
+      const adjustedEnd = row.start != null && row.end != null ? exact.ms + (row.end - row.start) : null;
+      return { ...row, adjustedStart: exact.ms, adjustedEnd, isAnchor: true };
+    }
+    if (!anchorList.length) {
+      return { ...row, adjustedStart: row.start, adjustedEnd: row.end, isAnchor: false };
+    }
+
+    let left = null;
+    let right = null;
+    for (const a of anchorList) {
+      if (a.index < i) left = a;
+      else if (a.index > i && !right) right = a;
+    }
+
+    let adjustedStart = null;
+    if (left && right) {
+      const leftRow = rows[left.index];
+      const rightRow = rows[right.index];
+      let t;
+      if (row.start != null && leftRow.start != null && rightRow.start != null && rightRow.start > leftRow.start) {
+        t = Math.min(1, Math.max(0, (row.start - leftRow.start) / (rightRow.start - leftRow.start)));
+      } else {
+        t = (i - left.index) / (right.index - left.index);
+      }
+      adjustedStart = Math.round(left.ms + t * (right.ms - left.ms));
+    } else {
+      const anchor = left || right;
+      const anchorRow = rows[anchor.index];
+      if (row.start != null && anchorRow.start != null) {
+        adjustedStart = row.start + (anchor.ms - anchorRow.start);
+      }
+    }
+
+    const adjustedEnd = adjustedStart != null && row.start != null && row.end != null
+      ? adjustedStart + (row.end - row.start) : null;
+    return { ...row, adjustedStart, adjustedEnd, isAnchor: false };
+  });
+}
+
 /** True once playback has moved past the last *timed* row `flattenLyricsLines`
  * could produce - confirmed against a real generated track (not a
  * hypothetical): Mureka's own `lyrics_sections` can simply stop over

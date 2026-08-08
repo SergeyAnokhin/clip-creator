@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  currentLineIndex, flattenLyricsLines, interpolateSectionLines, isBeyondKnownTiming, lastKnownEnd,
+  applyManualAnchors, currentLineIndex, flattenLyricsLines, interpolateSectionLines,
+  isBeyondKnownTiming, isTappableLine, lastKnownEnd,
 } from './lyricsTiming.js';
 
 const RAW = {
@@ -176,5 +177,89 @@ describe('isBeyondKnownTiming', () => {
     }];
     expect(isBeyondKnownTiming(withTrailingStatic, 20361)).toBe(true);
     expect(isBeyondKnownTiming(withTrailingStatic, 20360)).toBe(false);
+  });
+});
+
+describe('isTappableLine', () => {
+  it('is true for an ordinary lyric line', () => {
+    expect(isTappableLine({ text: 'Еще не раз вы вспомните меня', isSection: false })).toBe(true);
+  });
+
+  it('is false for a section marker row', () => {
+    expect(isTappableLine({ text: null, isSection: true })).toBe(false);
+  });
+
+  it('is false for a row that is nothing but bracketed production tags', () => {
+    expect(isTappableLine({ text: '[Instrument: Pulsing 909 Kick, Warm Bass]', isSection: false })).toBe(false);
+    expect(isTappableLine({ text: '[Female_Vocal][orchestral hit stab]', isSection: false })).toBe(false);
+  });
+
+  it('is true for a line mixing a tag with real sung text', () => {
+    expect(isTappableLine({ text: '[Half-Time] Но каждый раз вы склонитесь без сил', isSection: false })).toBe(true);
+  });
+});
+
+describe('applyManualAnchors', () => {
+  const rows = flattenLyricsLines(RAW); // [intro marker, 'Line one' @600-13360, 'Line two' @13640-20360]
+
+  it('passes original timing through unchanged with no anchors', () => {
+    const result = applyManualAnchors(rows, {});
+    expect(result.map((r) => [r.adjustedStart, r.adjustedEnd, r.isAnchor])).toEqual([
+      [null, null, false],
+      [600, 13360, false],
+      [13640, 20360, false],
+    ]);
+  });
+
+  it('uses the tapped time verbatim on the anchored row itself, preserving its original duration', () => {
+    const result = applyManualAnchors(rows, { 1: 5000 });
+    expect(result[1]).toMatchObject({ adjustedStart: 5000, adjustedEnd: 5000 + (13360 - 600), isAnchor: true });
+  });
+
+  it('shifts rows before the only anchor by its constant offset', () => {
+    const section = { start: 0, end: 1000, lines: [{ start: 100, end: 200, text: 'a' }, { start: 800, end: 900, text: 'b' }] };
+    const twoLine = flattenLyricsLines({ lyrics_sections: [{ ...section, section_type: 'verse' }] });
+    const result = applyManualAnchors(twoLine, { 1: 1000 }); // anchor 'b' 200ms later than its original 800
+    expect(result[0]).toMatchObject({ adjustedStart: 300, adjustedEnd: 400 }); // 'a' shifted by +200 too
+  });
+
+  it('shifts rows after the only anchor by its constant offset', () => {
+    const section = { start: 0, end: 1000, lines: [{ start: 100, end: 200, text: 'a' }, { start: 800, end: 900, text: 'b' }] };
+    const twoLine = flattenLyricsLines({ lyrics_sections: [{ ...section, section_type: 'verse' }] });
+    const result = applyManualAnchors(twoLine, { 0: 50 }); // anchor 'a' 50ms earlier than its original 100
+    expect(result[1]).toMatchObject({ adjustedStart: 750, adjustedEnd: 850 });
+  });
+
+  it('scales rows between two anchors proportionally to their original spacing', () => {
+    const section = {
+      start: 0, end: 4000, section_type: 'verse',
+      lines: [
+        { start: 0, end: 100, text: 'a' },
+        { start: 1000, end: 1100, text: 'mid' },
+        { start: 3000, end: 3100, text: 'b' },
+      ],
+    };
+    const three = flattenLyricsLines({ lyrics_sections: [section] });
+    const result = applyManualAnchors(three, { 0: 0, 2: 6000 }); // stretch the whole run 2x
+    expect(result[1].adjustedStart).toBe(2000); // 'mid' was 1/3 of the way from a to b -> still 1/3 of the way from 0 to 6000
+  });
+
+  it('falls back to interpolating by row position when a bracketed run has no original timing at all', () => {
+    const raw = {
+      lyrics_sections: [{
+        section_type: 'intro',
+        lines: [{ text: 'untimed one' }, { text: 'untimed two' }, { text: 'untimed three' }],
+      }],
+    };
+    const untimed = flattenLyricsLines(raw);
+    const result = applyManualAnchors(untimed, { 0: 0, 2: 2000 });
+    expect(result[1].adjustedStart).toBe(1000); // row 1 sits halfway between row 0 and row 2 by position
+  });
+
+  it('leaves a row unresolved when it has no original start and sits outside any anchor pair', () => {
+    const raw = { lyrics_sections: [{ section_type: 'intro', lines: [{ text: 'untimed' }] }] };
+    const single = flattenLyricsLines(raw);
+    const result = applyManualAnchors(single, {});
+    expect(result[0]).toMatchObject({ adjustedStart: null, adjustedEnd: null });
   });
 });

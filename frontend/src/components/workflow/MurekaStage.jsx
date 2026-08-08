@@ -388,6 +388,7 @@ export default function MurekaStage({
           L={L} projectId={project.id} projectTitle={project.title} projectAuthor={project.author}
           track={detailTrack} index={detailIndex}
           onClose={() => setDetailTrackId(null)}
+          onSetKaraokeSync={(sync) => actions.onSetKaraokeSync(detailTrack.track_id, sync)}
         />
       )}
     </>
