@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react';
 import {
-  Check, ChevronDown, ChevronUp, Loader2, MoreVertical, Music4, Plus, RotateCcw,
+  Check, ChevronDown, ChevronUp, Loader2, Maximize2, MoreVertical, Music4, Plus, RotateCcw,
   Scissors, Star, Trash2, Upload, Wand2, X, Zap,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { pickReadableTextColor } from '../../lib/musicTagColors.js';
+import JsonTreeView from '../common/JsonTreeView.jsx';
 import CopyButton from './CopyButton.jsx';
 import KaraokeLyrics from './KaraokeLyrics.jsx';
+import MurekaTrackDetailModal from './MurekaTrackDetailModal.jsx';
 import ReferenceAudioTrimmer from './ReferenceAudioTrimmer.jsx';
 
 const MODELS = ['auto', 'mureka-7.6', 'mureka-o2', 'mureka-8', 'mureka-9'];
@@ -33,7 +35,7 @@ function formatElapsed(totalSeconds, L) {
 
 function TrackCard({
   L, projectId, track, index, allTags, onRate, onSelectMain, onToggleTag, onDelete,
-  onReuseSettings, onExtend, onStem, extending, stemming,
+  onReuseSettings, onExtend, onStem, onOpenDetail, extending, stemming,
 }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
@@ -73,6 +75,9 @@ function TrackCard({
             <Check size={12} />
           </button>
           <CopyButton L={L} text={mediaUrl(`projects/${projectId}/${track.file_path}`)} />
+          <button className="icon-btn" style={{ width: 26, height: 26 }} title={L.mureka_openDetailBtn} onClick={() => onOpenDetail(track)}>
+            <Maximize2 size={12} />
+          </button>
           <div style={{ position: 'relative' }}>
             <button className="icon-btn" style={{ width: 26, height: 26 }} title={L.mureka_actionsTitle} onClick={() => setActionsMenuOpen((o) => !o)}>
               <MoreVertical size={13} />
@@ -119,7 +124,7 @@ function TrackCard({
         onTimeUpdate={() => setCurrentTimeMs((audioRef.current?.currentTime || 0) * 1000)}
       />
 
-      {playing && <KaraokeLyrics raw={track.raw} currentTimeMs={currentTimeMs} />}
+      {playing && <KaraokeLyrics L={L} raw={track.raw} currentTimeMs={currentTimeMs} />}
 
       <div className="mureka-track-row-footer">
         <div className="image-carousel-stars" style={{ position: 'static', transform: 'none' }}>
@@ -184,7 +189,9 @@ function TrackCard({
           )}
           <details>
             <summary>{L.mureka_detailsRaw}</summary>
-            <pre>{JSON.stringify(track.raw, null, 2)}</pre>
+            <div className="json-tree-scroll">
+              <JsonTreeView data={track.raw} />
+            </div>
           </details>
         </div>
       )}
@@ -199,7 +206,10 @@ export default function MurekaStage({
 }) {
   const [referenceMenuOpen, setReferenceMenuOpen] = useState(false);
   const [trimmingSource, setTrimmingSource] = useState(null);
+  const [detailTrackId, setDetailTrackId] = useState(null);
   const fileInputRef = useRef(null);
+  const detailIndex = (tracks || []).findIndex((t) => t.track_id === detailTrackId);
+  const detailTrack = detailIndex >= 0 ? tracks[detailIndex] : null;
 
   async function handleReferenceFile(e) {
     const file = e.target.files?.[0];
@@ -353,6 +363,7 @@ export default function MurekaStage({
               onToggleTag={actions.onToggleTag} onDelete={actions.onDelete}
               onReuseSettings={actions.reuseTrackSettings}
               onExtend={actions.extendTrack} onStem={actions.stemTrack}
+              onOpenDetail={(t) => setDetailTrackId(t.track_id)}
               extending={(extendingTrackIds || []).includes(track.track_id)}
               stemming={(stemmingTrackIds || []).includes(track.track_id)}
             />
@@ -369,6 +380,13 @@ export default function MurekaStage({
         <ReferenceAudioTrimmer
           L={L} source={trimmingSource} uploading={trimmingReference}
           onConfirm={handleTrimConfirm} onClose={handleTrimClose}
+        />
+      )}
+
+      {detailTrack && (
+        <MurekaTrackDetailModal
+          L={L} projectId={project.id} track={detailTrack} index={detailIndex}
+          onClose={() => setDetailTrackId(null)}
         />
       )}
     </>

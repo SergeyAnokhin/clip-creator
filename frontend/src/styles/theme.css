@@ -544,6 +544,75 @@
   color: var(--text-faint);
 }
 
+/* ---------- JSON tree view (common/JsonTreeView.jsx) ---------- */
+
+.json-tree {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.json-tree-children {
+  padding-left: 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  margin-left: 4px;
+}
+
+.json-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  white-space: pre;
+}
+
+.json-tree-toggle {
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.json-tree-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.json-tree-arrow {
+  display: inline-block;
+  width: 11px;
+  flex-shrink: 0;
+  font-size: 8px;
+  color: var(--text-faint);
+}
+
+.json-tree-key {
+  color: #7dd3fc;
+}
+
+.json-tree-punct {
+  color: var(--text-faint);
+}
+
+.json-tree-summary {
+  color: var(--text-faint);
+  font-style: italic;
+  margin: 0 2px;
+}
+
+.json-tree-string {
+  color: var(--success-text);
+}
+
+.json-tree-number {
+  color: #93c5fd;
+}
+
+.json-tree-boolean {
+  color: #c4b5fd;
+}
+
+.json-tree-null {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 /* ---------- Crop/outpaint editor (ImageCropEditor.jsx) ---------- */
 
 .crop-editor-card {
@@ -1836,6 +1905,10 @@
   color: #ff9d5c;
 }
 
+.mureka-karaoke-line.is-instrumental {
+  font-style: italic;
+}
+
 .mureka-trimmer-waveform {
   position: relative;
   width: 100%;
@@ -1921,6 +1994,141 @@
 
 .mureka-reference-menu-row button:first-child {
   flex: 1;
+}
+
+.json-tree-scroll {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ---------- Mureka track detail modal (MurekaTrackDetailModal.jsx) ---------- */
+
+.mureka-detail-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+}
+
+.mureka-detail-coverage-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #fcd34d;
+}
+
+.mureka-detail-body {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+  min-height: 0;
+  flex: 1;
+}
+
+.mureka-detail-timeline {
+  flex: 1.4;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  font-size: 13px;
+}
+
+.mureka-detail-empty {
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 10px 0;
+}
+
+.mureka-detail-section-header {
+  margin: 14px 0 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.mureka-detail-section-header:first-child {
+  margin-top: 0;
+}
+
+.mureka-detail-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.mureka-detail-line:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mureka-detail-line.is-current {
+  background: rgba(255, 157, 92, 0.12);
+  color: var(--text);
+}
+
+.mureka-detail-line.is-instrumental {
+  font-style: italic;
+  color: var(--text-faint);
+}
+
+.mureka-detail-line-time {
+  flex-shrink: 0;
+  width: 66px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.mureka-detail-line-text {
+  flex: 1;
+}
+
+.mureka-detail-word.is-current {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.mureka-detail-line-approx {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  cursor: help;
+}
+
+.mureka-detail-meta {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 1px solid var(--border-soft);
+  padding-left: 16px;
+}
+
+.mureka-detail-meta-row b {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.mureka-detail-meta summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.mureka-detail-lyrics-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  margin: 6px 0 0;
 }
 
 /* ---------- Settings ---------- */

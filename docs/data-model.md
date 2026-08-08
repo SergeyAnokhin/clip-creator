@@ -214,10 +214,19 @@ never auto-promoted from the highest rating; this stage treats "sounds good"
 judgments. `tag_ids` references `settings.music_tags` entries (see below).
 `raw` is the untouched `choices[]` entry Mureka returned
 (`url`/`flac_url`/`wav_url`/`id`/`lyrics_sections` — the latter has per-line/
-per-word timing, used by `KaraokeLyrics.jsx`/`lib/lyricsTiming.js` while the
-track plays; confirmed via Mureka's own OpenAPI schema that `Song` has no
-image/cover field at all) — kept for reference even though only the plain MP3
-is downloaded to disk; `raw.id` is the Mureka `song_id` "Продлить" needs.
+per-word timing (ms), used by `KaraokeLyrics.jsx`/`MurekaTrackDetailModal.jsx`/
+`lib/lyricsTiming.js` while the track plays; confirmed via Mureka's own
+OpenAPI schema that `Song` has no image/cover field at all) — kept for
+reference even though only the plain MP3 is downloaded to disk; `raw.id` is
+the Mureka `song_id` "Продлить" needs. **Two data-quality quirks confirmed
+against real generated tracks, not hypothetical** — `lib/lyricsTiming.js`
+and its consumers are built around both: (1) `lyrics_sections` timing can
+stop well before the track's actual `duration_ms` (one real response timed
+lines only up to ~43% of the track, with no further sections after — not an
+`extend`, nothing truncated on our end); (2) a line's `words[]` array has
+been seen offset by one line from that line's own `text` (each line's words
+actually spell out the *previous* line's text), so `words[].text` is never
+rendered, only `.start`/`.end` would be trustworthy.
 `stems` (only present once "Разделить на дорожки" has run at least once) is
 `[{id, file_path, model, expires_at, created_at}]` — `file_path` a downloaded
 copy of the stem-separation zip (`music/{stem_id}.zip`; the CDN `zip_url`
