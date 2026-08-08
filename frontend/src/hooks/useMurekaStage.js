@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 
-const EMPTY_MUREKA = { style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: [] };
+export const EMPTY_MUREKA = { style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: [] };
 
 /** Mureka stage: real audio generation (unlike the Suno stage, which only
  * writes a style/lyrics text pair for pasting elsewhere - see

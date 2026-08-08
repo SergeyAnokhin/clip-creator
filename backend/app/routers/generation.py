@@ -608,6 +608,10 @@ async def upload_mureka_reference_audio(project_id: str, file: UploadFile = File
         uploaded = await mureka.upload_reference_audio(contents, file.filename or f'reference{suffix}', api_key)
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
+    console_log.log_step(
+        '📤', 'reference-audio upload',
+        f'project={project_id!r} filename={file.filename!r} bytes={len(contents)} -> mureka_file_id={uploaded.get("id")!r}',
+    )
 
     async with storage.project_lock(project_id):
         project = storage.load_project(project_id)
@@ -764,6 +768,10 @@ async def trim_mureka_reference_source(project_id: str, source_id: str, body: di
         raise HTTPException(502, str(exc)) from exc
     finally:
         trimmed_path.unlink(missing_ok=True)  # only the persisted reference_audio[] copy below is kept
+    console_log.log_step(
+        '📤', 'reference-audio upload (trimmed)',
+        f'project={project_id!r} source_id={source_id!r} {start_ms}ms-{end_ms}ms -> mureka_file_id={uploaded.get("id")!r}',
+    )
 
     async with storage.project_lock(project_id):
         project = storage.load_project(project_id)

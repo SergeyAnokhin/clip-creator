@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
+import { EMPTY_MUREKA } from './useMurekaStage.js';
 
 /** Suno stage: the skill_prompt (freely editable, no more preset templates),
  * the refinement box, and the generated style/lyrics pair. `skillId` is kept
@@ -95,6 +96,11 @@ export function useSunoStage({
       });
       setActiveProject((p) => ({
         ...p, style: result.style, lyrics: result.lyrics, skill_id: result.skill_id, model_used: result.model_used,
+        // Keep the Mureka generation form's style/lyrics in sync with a fresh
+        // regenerate here - otherwise it only ever picks up style/lyrics once,
+        // on project load (see useMurekaStage.js's resetForProject), and a
+        // later regenerate on this stage silently goes stale there.
+        mureka: { ...EMPTY_MUREKA, ...(p.mureka || {}), style_input: result.style, lyrics_input: result.lyrics },
       }));
       // completedAt is stamped client-side (not returned by the backend) -
       // it's just "what time did this finish", shown next to the usage

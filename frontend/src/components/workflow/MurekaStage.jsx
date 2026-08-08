@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, ChevronDown, ChevronUp, FileText, Info, Loader2, Maximize2, MoreVertical, Music4, Plus, RotateCcw,
-  Scissors, Star, Trash2, Upload, Video, Wand2, X, Zap,
+  ArrowDownNarrowWide, ArrowUpNarrowWide, Check, ChevronDown, ChevronUp, FileText, Info, Loader2, Maximize2,
+  MoreVertical, Music4, Plus, RotateCcw, Scissors, Star, Trash2, Upload, Video, Wand2, X, Zap,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { pickReadableTextColor } from '../../lib/musicTagColors.js';
@@ -44,6 +44,16 @@ function formatTrackTimestamp(iso) {
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** Hover tooltip for a reference-audio chip/row: the raw Mureka file id
+ * (what `reference_id` on song/generate actually carries - see
+ * providers/mureka.py's upload_reference_audio) plus when it was uploaded,
+ * so it's traceable against the console's "reference-audio upload" log line
+ * and the request body Mureka's generate call is logged with. */
+function refTooltip(ref, L) {
+  const ts = ref.uploaded_at ? formatTrackTimestamp(ref.uploaded_at) : '';
+  return `${L.mureka_referenceIdLabel} ${ref.mureka_file_id || '—'}${ts ? ` · ${ts}` : ''}`;
 }
 
 function TrackCard({
@@ -285,6 +295,21 @@ export default function MurekaStage({
   const [referenceBrowserOpen, setReferenceBrowserOpen] = useState(true);
   const [trimmingSource, setTrimmingSource] = useState(null);
   const [detailTrackId, setDetailTrackId] = useState(null);
+  // Display-only ordering for the track gallery below, cycled by one button
+  // ('newest' -> 'oldest' -> 'rating' -> ...). Not persisted - tracks[] itself
+  // always stays in generation order (oldest first, new ones appended).
+  const [sortMode, setSortMode] = useState('newest');
+  const sortedTracks = useMemo(() => {
+    const list = tracks || [];
+    if (sortMode === 'oldest') return list;
+    if (sortMode === 'rating') {
+      return [...list].sort((a, b) => (b.rating || 0) - (a.rating || 0) || (b.generated_at || '').localeCompare(a.generated_at || ''));
+    }
+    return [...list].slice().reverse();
+  }, [tracks, sortMode]);
+  function cycleSortMode() {
+    setSortMode((m) => (m === 'newest' ? 'oldest' : m === 'oldest' ? 'rating' : 'newest'));
+  }
   // Which per-track insight modal (if any) is open - {type, trackId}. type
   // is 'describe'|'transcribe'|'lyrics-video', matching the 3 result modals
   // below; each opens only after its (paid) API call has actually succeeded.
@@ -430,6 +455,11 @@ export default function MurekaStage({
                 </span>
               )}
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--text-faint)', marginTop: 2 }}>
+              {L.mureka_referenceIdLabel} <code style={{ userSelect: 'all' }}>{selectedReference.mureka_file_id || '—'}</code>
+              <CopyButton L={L} text={selectedReference.mureka_file_id} />
+              {selectedReference.uploaded_at && <span>· {formatTrackTimestamp(selectedReference.uploaded_at)}</span>}
+            </div>
             <audio
               className="mureka-reference-selected-audio" controls
               src={mediaUrl(`projects/${project.id}/${selectedReference.file_path}`)}
@@ -469,6 +499,7 @@ export default function MurekaStage({
                     <span key={clip.id} className="mureka-reference-clip-chip-wrap">
                       <button
                         className={`mureka-reference-clip-chip${clip.mureka_file_id === referenceId ? ' is-active' : ''}`}
+                        title={refTooltip(clip, L)}
                         onClick={() => actions.setReferenceId(clip.mureka_file_id)}
                       >
                         {formatTrackDuration(clip.start_ms)}–{formatTrackDuration(clip.end_ms)}
@@ -492,6 +523,7 @@ export default function MurekaStage({
                   <span key={ref.id} className="mureka-reference-menu-row">
                     <button
                       className={ref.mureka_file_id === referenceId ? 'is-active' : ''}
+                      title={refTooltip(ref, L)}
                       onClick={() => actions.setReferenceId(ref.mureka_file_id)}
                     >
                       {ref.filename}
@@ -536,12 +568,21 @@ export default function MurekaStage({
         <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 16 }}>⚠️ {murekaError}</div>
       )}
 
-      <div className="suno-panel-title" style={{ marginTop: 8 }}>{L.mureka_tracksLabel}</div>
+      <div className="suno-panel-title" style={{ marginTop: 8, justifyContent: 'space-between' }}>
+        {L.mureka_tracksLabel}
+        {!!tracks?.length && (
+          <button className="icon-btn" style={{ width: 26, height: 26 }} title={L[`mureka_sortMode_${sortMode}`]} onClick={cycleSortMode}>
+            {sortMode === 'newest' && <ArrowDownNarrowWide size={13} />}
+            {sortMode === 'oldest' && <ArrowUpNarrowWide size={13} />}
+            {sortMode === 'rating' && <Star size={13} />}
+          </button>
+        )}
+      </div>
       {!tracks?.length ? (
         <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{L.mureka_noTracksYet}</div>
       ) : (
         <div className="mureka-track-list">
-          {tracks.map((track, i) => (
+          {sortedTracks.map((track, i) => (
             <TrackCard
               key={track.track_id}
               L={L} projectId={project.id} projectTitle={project.title} track={track} index={i} allTags={musicTags || []}

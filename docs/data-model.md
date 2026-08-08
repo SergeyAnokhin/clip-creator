@@ -178,12 +178,16 @@ per-layer style fields; `align` is `'left'\|'center'\|'right'` (defaults to
 same `{glow{...}, clone{...}, opacity}` shape as `title_card`/`logo` layers.
 
 **Mureka**: `{style_input, lyrics_input, reference_audio[], reference_sources[], tracks[]}` — the
-Mureka stage's own state, seeded once (lazily, only if `style_input`/
-`lyrics_input` are `undefined`) from the project's `style`/`lyrics` the first
-time the stage loads (`useMurekaStage.js`'s `resetForProject`), then freely
-editable independent of the Suno-stage originals — this is literally what
-gets sent to Mureka's `song/generate`, so it doubles as the "what goes to the
-model" preview the stage shows. `reference_audio` is
+Mureka stage's own state. `style_input`/`lyrics_input` are seeded lazily
+(only if still `undefined`) from the project's `style`/`lyrics` the first
+time the stage loads (`useMurekaStage.js`'s `resetForProject`), then kept in
+sync with `style`/`lyrics` on every subsequent Suno-stage regenerate too
+(`useSunoStage.js`'s `generateSuno` overwrites both alongside `project.style`/
+`project.lyrics`) - otherwise a later regenerate on the Suno stage would go
+unnoticed here. Editing them directly on the Mureka stage (`setStyleInput`/
+`setLyricsInput`) still works freely in between regenerates - this is
+literally what gets sent to Mureka's `song/generate`, so it doubles as the
+"what goes to the model" preview the stage shows. `reference_audio` is
 `[{id, mureka_file_id, file_path, filename, uploaded_at, source_id?, start_ms?,
 end_ms?}]` — `file_path` a local copy under `music/references/` (already
 trimmed to a valid window, mp3), `mureka_file_id` the id Mureka's
@@ -233,6 +237,10 @@ recomputed `tracks` array — see the API table below) — unlike `Image`, it is
 never auto-promoted from the highest rating; this stage treats "sounds good"
 (rating) and "this is the one I'll use" (`is_selected`) as independent
 judgments. `tag_ids` references `settings.music_tags` entries (see below).
+`tracks[]` itself always stays in generation order (oldest first, new ones
+appended) - `MurekaStage.jsx` renders it through a display-only sort toggle
+(newest first / oldest first / by rating, cycled by one button, default
+newest) that never touches the stored array.
 `raw` is the untouched `choices[]` entry Mureka returned
 (`url`/`flac_url`/`wav_url`/`id`/`lyrics_sections` — the latter has per-line/
 per-word timing (ms), used by `KaraokeLyrics.jsx`/`MurekaTrackDetailModal.jsx`/
@@ -590,7 +598,7 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/mureka/generate` | `{style, lyrics, model, n, gender?, reference_id?}` → `{job_id}` — one job per click (unlike scene images, Mureka's own `n` (1-3) returns several songs from a single task); `422` if `lyrics` is blank |
 | `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', tracks: MurekaTrack[]\|null, error: str\|null, stage: str\|null, debug}` — polled every 3s (longer than image jobs — Mureka generation runs 30-90s), in-memory-only job state (`providers/mureka.py`'s own `_jobs` dict). `stage` mirrors Mureka's own intermediate task status (`preparing\|queued\|running\|streaming`) while `status` is still `'pending'` — shown next to the elapsed-seconds counter instead of just a spinner. Shared by `/mureka/generate` and `/mureka/tracks/{id}/extend` below (same job shape) |
 | `DELETE /api/projects/{id}/mureka/tracks/{track_id}` | → `{tracks}` — removes one from `project.mureka.tracks` and deletes its `.mp3` file |
-| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) to get the `mureka_file_id` usable as `reference_id`; `415` on a bad extension, `502` if the Mureka upload call fails. Normally called with an already-trimmed clip from the `/reference-sources/{id}/trim` route below, not a raw upload |
+| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) to get the `mureka_file_id` usable as `reference_id`; `415` on a bad extension, `502` if the Mureka upload call fails. Normally called with an already-trimmed clip from the `/reference-sources/{id}/trim` route below, not a raw upload. Logs a `console_log.log_step` line (filename → `mureka_file_id`) so the upload is traceable in the backend console against the `reference_id` a later `song/generate` request is logged with; the same id/upload-time pair is also shown in `MurekaStage.jsx`'s reference picker (selected-reference box and each clip's hover tooltip) |
 | `DELETE /api/projects/{id}/mureka/reference-audio/{ref_id}` | → `{reference_audio}` |
 | `POST /api/projects/{id}/mureka/reference-sources` | multipart `file` (any decodable audio format) → `{reference_sources}` — stages a raw upload under `music/reference-sources/` **without** touching Mureka (which hard-rejects reference audio under 30s); `415` on a bad extension |
 | `DELETE /api/projects/{id}/mureka/reference-sources/{source_id}` | → `{reference_sources}` |
