@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Film, Loader2, Mic, MicOff, Sparkles, X } from 'lucide-react';
+import {
+  ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Download, Film, Loader2,
+  Mic, MicOff, Sparkles, Upload, UploadCloud, X,
+} from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
+import { resolveAnimateImage } from '../../lib/scenes.js';
+import CopyButton from './CopyButton.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import TranslateButton from './TranslateButton.jsx';
 import VideoCarousel from './VideoCarousel.jsx';
@@ -67,10 +72,14 @@ function DebugPanel({ L, lastDebug }) {
 
 /** Video (animation) stage - the last step: walks scene-by-scene (prev/next
  * + a jump strip, unlike every other stage's scrollable list-of-cards
- * layout - see useVideoStage.js's docstring for why) sending the scene's
- * `is_selected` image plus its `motion_prompt` (edited here, shared field
- * with Scenes/Images) to an image-to-video model. `videos[]` accumulates
- * per scene like `images[]` does - VideoCarousel.jsx pages through them. */
+ * layout - see useVideoStage.js's docstring for why) sending an image from
+ * the scene's `images[]` (its `animate_image_id` override if the user
+ * clicked a different thumbnail here, else the Images stage's `is_selected`
+ * pick - see `lib/scenes.js`'s `resolveAnimateImage`) plus its
+ * `motion_prompt` (edited here, shared field with Scenes/Images) to an
+ * image-to-video model. `videos[]` accumulates per scene like `images[]`
+ * does - VideoCarousel.jsx pages through them, plus a plain file upload for
+ * a clip animated in an outside tool and brought back in by hand. */
 export default function VideoStage({
   L, project, isMobile,
   currentSceneIndex, videoModel, resolution, aspectRatio, durationSeconds,
@@ -96,6 +105,19 @@ export default function VideoStage({
     prevLengthRef.current = videos.length;
   }, [videos.length]);
 
+  const [imageUploadOpen, setImageUploadOpen] = useState(false);
+  const [imageUploadUrl, setImageUploadUrl] = useState('');
+  const imageFileInputRef = useRef(null);
+  const videoFileInputRef = useRef(null);
+
+  function submitImageUrl() {
+    const url = imageUploadUrl.trim();
+    if (!url) return;
+    actions.onUploadImageUrl(currentSceneIndex, url);
+    setImageUploadUrl('');
+    setImageUploadOpen(false);
+  }
+
   if (!scenes.length) {
     return (
       <>
@@ -110,7 +132,8 @@ export default function VideoStage({
     );
   }
 
-  const selectedImage = (scene.images || []).find((img) => img.is_selected);
+  const sceneImages = scene.images || [];
+  const animateImage = resolveAnimateImage(scene);
   const boundedVideoIndex = Math.min(videoIndex, Math.max(0, videos.length - 1));
 
   return (
@@ -180,19 +203,85 @@ export default function VideoStage({
             />
             <div className="scene-field-actions">
               <TranslateButton L={L} text={scene.motion_prompt} />
+              <CopyButton L={L} text={scene.motion_prompt} />
             </div>
           </div>
 
-          {!selectedImage && (
+          <div className="scene-actions">
+            <div className="scene-actions-left" />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="btn btn-accent-soft" style={{ padding: '7px 12px', fontSize: 12.5 }}
+                onClick={() => setImageUploadOpen((o) => !o)}
+              >
+                <Upload size={13} />
+                {L.uploadSceneImage}
+              </button>
+            </div>
+          </div>
+
+          {imageUploadOpen && (
+            <div className="scene-upload-panel">
+              <button className="btn btn-accent-soft" style={{ padding: '6px 11px', fontSize: 12 }} onClick={() => imageFileInputRef.current?.click()}>
+                {L.uploadFromFile}
+              </button>
+              <input
+                ref={imageFileInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) actions.onUploadImageFile(currentSceneIndex, file);
+                  e.target.value = '';
+                  setImageUploadOpen(false);
+                }}
+              />
+              <input
+                className="field"
+                style={{ flex: 1, minWidth: 160 }}
+                value={imageUploadUrl}
+                onChange={(e) => setImageUploadUrl(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submitImageUrl(); }}
+                placeholder={L.uploadFromUrlPlaceholder}
+              />
+              <button className="btn btn-accent-soft" style={{ padding: '6px 11px', fontSize: 12 }} onClick={submitImageUrl} disabled={!imageUploadUrl.trim()}>
+                {L.uploadFromUrlAction}
+              </button>
+            </div>
+          )}
+
+          {sceneImages.length === 0 ? (
             <div style={{ fontSize: 12.5, color: '#fbbf24', marginTop: 10 }}>⚠️ {L.video_noSelectedImage}</div>
+          ) : (
+            <div className="scene-thumb-strip">
+              {sceneImages.map((img) => (
+                <button
+                  key={img.image_id}
+                  className={`scene-thumb${img.image_id === animateImage?.image_id ? ' is-active' : ''}`}
+                  title={L.video_pickImageTitle}
+                  onClick={() => actions.onSelectAnimateImage(currentSceneIndex, img.image_id)}
+                >
+                  <img src={mediaUrl(`projects/${project.id}/${img.file_path}`)} alt="" />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
         <div className="glass-card scene-image-panel">
-          {selectedImage ? (
+          {animateImage ? (
             <div className="image-carousel is-fill">
               <div className="image-carousel-frame">
-                <img src={mediaUrl(`projects/${project.id}/${selectedImage.file_path}`)} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                <img src={mediaUrl(`projects/${project.id}/${animateImage.file_path}`)} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                <a
+                  className="image-carousel-download-btn"
+                  href={mediaUrl(`projects/${project.id}/${animateImage.file_path}`)}
+                  download
+                  title={L.video_downloadImageTitle}
+                >
+                  <Download size={13} />
+                </a>
               </div>
             </div>
           ) : (
@@ -299,6 +388,24 @@ export default function VideoStage({
           emptyLabel={L.modelPickerEmpty}
           prices={modelPrices}
           L={L}
+        />
+        <button
+          className="btn btn-accent-soft" style={{ padding: '10px 16px', fontSize: 13 }}
+          onClick={() => videoFileInputRef.current?.click()}
+        >
+          <UploadCloud size={14} />
+          {L.video_uploadVideoButton}
+        </button>
+        <input
+          ref={videoFileInputRef}
+          type="file"
+          accept="video/*"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) actions.onUploadVideoFile(currentSceneIndex, file);
+            e.target.value = '';
+          }}
         />
       </div>
 

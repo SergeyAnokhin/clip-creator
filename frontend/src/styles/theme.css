@@ -1477,6 +1477,26 @@
   color: var(--accent-ink);
 }
 
+.image-carousel-download-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.image-carousel-download-btn:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 .image-thumb-stars {
   display: flex;
   gap: 2px;

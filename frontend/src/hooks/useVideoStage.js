@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
+import { resolveAnimateImage } from '../lib/scenes.js';
 
 export const RESOLUTIONS = ['720p', '1080p'];
 export const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16'];
@@ -108,8 +109,9 @@ export function useVideoStage({
     if (!activeProject) return;
     const scene = activeProject.scenes[currentSceneIndex];
     if (!scene) return;
-    if (!(scene.images || []).some((img) => img.is_selected)) {
-      showToast('Сначала выберите изображение сцены на этапе «Изображения»');
+    const sourceImage = resolveAnimateImage(scene);
+    if (!sourceImage) {
+      showToast('У сцены нет ни одной картинки для анимации');
       return;
     }
     setVideoLoading(true);
@@ -117,7 +119,7 @@ export function useVideoStage({
     try {
       await flushPendingSave();
       const { job_ids: jobIds } = await api.generateSceneVideos(activeProject.id, currentSceneIndex, {
-        count: 1, model: videoModel, motion_prompt: scene.motion_prompt,
+        count: 1, model: videoModel, motion_prompt: scene.motion_prompt, image_id: sourceImage.image_id,
         aspect_ratio: aspectRatio === 'auto' ? undefined : aspectRatio,
         resolution, duration_seconds: durationSeconds,
         active_video_wish_ids: activeProject.active_video_wish_ids,
@@ -161,6 +163,63 @@ export function useVideoStage({
       })),
     }));
   }
+  /** Picks which of the scene's already-attached images this stage animates,
+   * independent of the Images stage's `is_selected` "main image" flag - see
+   * `lib/scenes.js`'s `resolveAnimateImage` docstring for why this is a
+   * separate field rather than reusing `is_selected`. */
+  function selectAnimateImage(sceneIdx, imageId) {
+    updateProject((p) => ({
+      ...p,
+      scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, animate_image_id: imageId } : s)),
+    }));
+  }
+  /** Same upload flow as `useImagesStage.js`'s `uploadSceneImageFile`/`Url`
+   * (same endpoint, same `scene.images` array) so a picture can be attached
+   * to a scene without leaving the Video stage - the freshly uploaded image
+   * is also made the one this stage animates, since that's presumably why
+   * it was just uploaded here. */
+  async function uploadSceneImageFile(sceneIdx, file) {
+    if (!activeProject || !file) return;
+    try {
+      const { image } = await api.uploadSceneImageFile(activeProject.id, sceneIdx, file);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, images: [...(s.images || []), image], animate_image_id: image.image_id } : s)),
+      }));
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось загрузить изображение');
+    }
+  }
+  async function uploadSceneImageUrl(sceneIdx, url) {
+    if (!activeProject || !url) return;
+    try {
+      const { image } = await api.uploadSceneImageUrl(activeProject.id, sceneIdx, url);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, images: [...(s.images || []), image], animate_image_id: image.image_id } : s)),
+      }));
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось загрузить изображение по ссылке');
+    }
+  }
+  /** "Bring your own clip" - a scene's video animated in an outside tool
+   * from its image+motion_prompt and dropped in by hand, alongside ones
+   * generated through `generateVideo` above (see `upload_scene_video`). */
+  async function uploadSceneVideoFile(sceneIdx, file) {
+    if (!activeProject || !file) return;
+    try {
+      const { video: uploaded } = await api.uploadSceneVideoFile(activeProject.id, sceneIdx, file);
+      setActiveProject((p) => ({
+        ...p,
+        scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, videos: [...(s.videos || []), uploaded] } : s)),
+      }));
+      showToast(L.toast_generated);
+    } catch {
+      showToast('Не удалось загрузить видео');
+    }
+  }
   async function deleteVideo(sceneIdx, vidIdx) {
     if (!activeProject) return;
     const video = activeProject.scenes[sceneIdx]?.videos?.[vidIdx];
@@ -187,6 +246,9 @@ export function useVideoStage({
       setResolution, setAspectRatio, setDurationSeconds, setVideoWishText,
       onMotionChange, addVideoWish, toggleVideoWish, generateVideo,
       onRate: rateVideo, onSelectMain: selectMainVideo, onDelete: deleteVideo,
+      onSelectAnimateImage: selectAnimateImage,
+      onUploadImageFile: uploadSceneImageFile, onUploadImageUrl: uploadSceneImageUrl,
+      onUploadVideoFile: uploadSceneVideoFile,
     },
   };
 }

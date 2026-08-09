@@ -559,6 +559,50 @@ def test_delete_scene_video_out_of_range_scene_returns_404(client):
     assert client.delete(f'/api/projects/{pid}/scenes/99/videos/x').status_code == 404
 
 
+def test_upload_scene_video_file_writes_file_and_appends(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    before = len(client.get(f'/api/projects/{pid}').json()['scenes'][0].get('videos', []))
+
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/0/videos/upload',
+        files={'file': ('mine.mp4', b'fake-mp4-bytes', 'video/mp4')},
+    )
+
+    assert resp.status_code == 200
+    video_record = resp.json()['video']
+    assert video_record['model'] == 'upload'
+    assert video_record['cost'] == 0
+    assert video_record['is_selected'] is False
+    assert video_record['file_path'].startswith('videos/scene_1_') and video_record['file_path'].endswith('.mp4')
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / video_record['file_path']
+    assert written.is_file()
+    assert written.read_bytes() == b'fake-mp4-bytes'
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert len(saved['scenes'][0]['videos']) == before + 1
+    assert saved['scenes'][0]['videos'][-1]['video_id'] == video_record['video_id']
+
+
+def test_upload_scene_video_rejects_bad_extension(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/0/videos/upload',
+        files={'file': ('notes.txt', b'hello', 'text/plain')},
+    )
+    assert resp.status_code == 415
+
+
+def test_upload_scene_video_out_of_range_scene_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/99/videos/upload',
+        files={'file': ('mine.mp4', b'data', 'video/mp4')},
+    )
+    assert resp.status_code == 404
+
+
 def test_add_video_wish_creates_card_and_activates_it_for_project(client):
     pid = client.get('/api/projects').json()[0]['id']
 

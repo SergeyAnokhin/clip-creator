@@ -341,3 +341,27 @@ def start_jobs(
 
 def get_job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
+
+
+def save_uploaded_video(slug: str, scene_index: int, content: bytes, ext: str) -> dict:
+    """Writes an already-validated video file into the same `videos/` dir and
+    `scene.videos` dict shape `_run_job` produces for AI-generated videos -
+    used by the scene-video-upload endpoint so a clip animated elsewhere (a
+    different tool, a manual edit) and dropped in by hand is indistinguishable
+    from a generated one to the rest of the UI (carousel, rating, delete,
+    select-main). `model`/`motion_prompt`/`aspect_ratio`/`resolution`/
+    `duration_seconds`/`generation_ms`/`source_image_id` are all `None`/`0`
+    "not AI-generated" values, mirroring `images.save_uploaded_image`."""
+    scene_number = scene_index + 1
+    videos_dir = storage.project_dir(slug) / 'videos'
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    video_id = f'vid_{uuid4().hex[:8]}'
+    filename = f'scene_{scene_number}_{video_id.removeprefix("vid_")}.{ext}'
+    (videos_dir / filename).write_bytes(content)
+    return {
+        'video_id': video_id, 'file_path': f'videos/{filename}',
+        'rating': 0, 'is_selected': False, 'generated_at': _now(),
+        'model': 'upload', 'motion_prompt': None, 'aspect_ratio': None,
+        'resolution': None, 'duration_seconds': None, 'generation_ms': None,
+        'cost': 0, 'source_image_id': None,
+    }

@@ -88,6 +88,11 @@ export const api = {
   generateSceneVideos: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/videos`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getSceneVideoJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/videos/jobs/${encodeURIComponent(jobId)}`),
   deleteSceneVideo: (id, sceneIndex, videoId) => request(`${projectPath(id)}/scenes/${sceneIndex}/videos/${encodeURIComponent(videoId)}`, { method: 'DELETE' }),
+  uploadSceneVideoFile: (id, sceneIndex, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return requestForm(`${projectPath(id)}/scenes/${sceneIndex}/videos/upload`, { method: 'POST', body: form });
+  },
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),

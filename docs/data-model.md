@@ -75,8 +75,15 @@ avoids.
 a compact single-line card. `importance` (1-5) is **dead** — still written for
 backward compatibility, never read or edited.
 
-**Scene**: `{lyric_segment, static_prompt, motion_prompt, images[], videos[]}`
-— `videos` is absent/`[]` until the Video stage first generates one.
+**Scene**: `{lyric_segment, static_prompt, motion_prompt, images[], videos[],
+animate_image_id?}` — `videos` is absent/`[]` until the Video stage first
+generates one. `animate_image_id` is an optional override, set by clicking a
+thumbnail in the Video stage's own per-scene picker: it names which
+`images[].image_id` gets animated, independent of that image's `is_selected`
+flag (picking an image to animate must not change the scene's main picture
+elsewhere). Resolution order (`lib/scenes.js`'s `resolveAnimateImage`, mirrored
+server-side by the `image_id` override on `POST .../scenes/{n}/videos` below):
+`animate_image_id` match → the `is_selected` image → the first image → none.
 
 **Image**: `{image_id, file_path, rating, is_selected, generated_at, model,
 aspect_ratio, cost, source_image_id?}` — `file_path` is relative to the
@@ -640,6 +647,7 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/scenes/{n}/videos` | `{count?, model, motion_prompt?, image_id?, aspect_ratio?, resolution?, duration_seconds?, active_video_wish_ids?}` → `{job_ids}` — animates one scene image (`image_id`, or the scene's own `is_selected` image if omitted — `422` if neither exists) using `motion_prompt` (defaults to the scene's own field) plus resolved active video wishes (`video.build_prompt`); `model` must be `provider ∈ google\|google_free\|openrouter`. Same immediate-return/background-job shape as scene images (`providers/video.py`'s `start_jobs`) |
 | `GET /api/projects/{id}/scenes/{n}/videos/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', video: Video\|null, error: str\|null, debug: {request, response}\|null}` — polled every 3s by the frontend (`useVideoStage.js`, video generation runs for minutes); in-memory-only job state (`providers/video.py`'s own `_jobs` dict) |
 | `DELETE /api/projects/{id}/scenes/{n}/videos/{video_id}` | → `{videos}` — removes one from `scene.videos` and deletes its file |
+| `POST /api/projects/{id}/scenes/{n}/videos/upload` | multipart `file` (`.mp4\|.mov\|.webm\|.mkv`) → `{video}` — appends a user's own clip (animated in an outside tool from the scene's picture+`motion_prompt`, then brought back in by hand) to `scene.videos` alongside generated ones; `model: 'upload'`, `cost: 0`, everything else generation-only (`motion_prompt`, `aspect_ratio`, `resolution`, `duration_seconds`, `generation_ms`, `source_image_id`) left `null`. File-only, no pasted-URL variant (unlike the scene-image upload); `415` on an unrecognized extension |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
 | `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |

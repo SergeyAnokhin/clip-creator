@@ -12,6 +12,7 @@ from .settings import DEFAULT_SETTINGS
 router = APIRouter(prefix='/api/projects', tags=['generation'])
 
 _ALLOWED_REFERENCE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.gif'}
+_ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.webm', '.mkv'}
 _ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.m4a'}
 # Reference-audio *sources* (ReferenceAudioTrimmer.jsx) are a staging area,
 # not what actually gets sent to Mureka - the trimmed clip that comes out
@@ -382,6 +383,36 @@ async def delete_scene_video(project_id: str, scene_index: int, video_id: str):
         file_path.unlink()
 
     return {'videos': remaining}
+
+
+@router.post('/{project_id}/scenes/{scene_index}/videos/upload')
+async def upload_scene_video(project_id: str, scene_index: int, file: UploadFile = File(...)):
+    """Adds a user's own finished clip to a scene's `videos[]` - e.g. one
+    animated in an outside tool from the scene's image+motion_prompt and
+    brought back in by hand, instead of only ever generating one through this
+    app. File-only (unlike the image upload endpoint): a pasted-URL path
+    would need the same SSRF-guarded downloader as `images.download_user_image_url`
+    for a feature nobody asked for here, so it's skipped for now - see
+    video.save_uploaded_video for the storage shape."""
+    suffix = ('.' + file.filename.rsplit('.', 1)[-1].lower()) if file.filename and '.' in file.filename else ''
+    if suffix not in _ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(415, 'Unsupported video type')
+    content = await file.read()
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        scene_list = project.get('scenes', [])
+        if scene_index < 0 or scene_index >= len(scene_list):
+            raise HTTPException(404, 'Scene not found')
+
+        new_video = video.save_uploaded_video(project_id, scene_index, content, suffix.removeprefix('.'))
+        scene_list[scene_index]['videos'] = [*scene_list[scene_index].get('videos', []), new_video]
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    return {'video': new_video}
 
 
 @router.post('/{project_id}/reference-images')
