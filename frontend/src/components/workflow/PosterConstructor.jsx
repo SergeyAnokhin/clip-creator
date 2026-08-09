@@ -192,6 +192,15 @@ function parseTextBlock(textBlock) {
   return { title: lines[0] || '', author: lines[1] || '' };
 }
 
+/** The font size a freshly placed text layer of this type gets, scaled off
+ * the background width - also used as the "reset to default" target for the
+ * font-size slider in TextLayerPanel, since there's no single global default
+ * (badge and halo text are sized very differently, and both scale with the
+ * poster). */
+function defaultTextFontSize(textType, bgWidth) {
+  return Math.round(bgWidth * (textType === 'badge' ? 0.026 : 0.075));
+}
+
 /** Builds a freshly placed text layer of the given type - `badge` (a black
  * pill, white Forum text, defaults to the author line) or `halo` (large
  * Montserrat text with a soft drop-shadow "halo", defaults to the title
@@ -199,7 +208,7 @@ function parseTextBlock(textBlock) {
  * `parseTextBlock`'s result, with `fallback` used when text_block is empty. */
 function makeTextLayer(textType, bg, defaults, fallback) {
   const isBadge = textType === 'badge';
-  const fontSize = Math.round(bg.width * (isBadge ? 0.026 : 0.075));
+  const fontSize = defaultTextFontSize(textType, bg.width);
   return makeLayer({
     kind: 'text', textType,
     text: (isBadge ? defaults.author : defaults.title) || (isBadge ? fallback.author : fallback.title),
@@ -618,12 +627,39 @@ function OverlayText({ layer, isSelected, onSelect, onChange, bgWidth, bgHeight,
   );
 }
 
-function EffectSlider({ label, value, min, max, step = 1, unit = '', onChange }) {
+/** Small inline reset control shown next to a slider/color's current value
+ * once it has drifted from `defaultValue` - lets the user snap a single
+ * effect knob back to its neutral value without hunting for a top-level
+ * "reset all" action. Rendered only when `defaultValue` is passed in, so
+ * callers that don't have a meaningful neutral value (e.g. clone offsets)
+ * simply omit it and get no button. */
+function ResetToDefault({ onClick, L }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={L.poster_resetToDefault}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 16, height: 16, padding: 0, border: 'none', borderRadius: 4,
+        background: 'transparent', color: 'var(--text-dim)', cursor: 'pointer', flexShrink: 0,
+      }}
+    >
+      <RotateCcw size={11} />
+    </button>
+  );
+}
+
+function EffectSlider({ label, value, min, max, step = 1, unit = '', defaultValue, onChange, L }) {
+  const canReset = defaultValue !== undefined && value !== defaultValue;
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
-      <span style={{ color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span>{label}</span>
-        <span>{value}{unit}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span>{value}{unit}</span>
+          {canReset && <ResetToDefault onClick={() => onChange(defaultValue)} L={L} />}
+        </span>
       </span>
       <input
         type="range" min={min} max={max} step={step} value={value}
@@ -634,10 +670,12 @@ function EffectSlider({ label, value, min, max, step = 1, unit = '', onChange })
   );
 }
 
-function ColorField({ label, value, onChange }) {
+function ColorField({ label, value, defaultValue, onChange, L }) {
+  const canReset = defaultValue !== undefined && value !== defaultValue;
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-dim)' }}>
       <span style={{ flex: 1 }}>{label}</span>
+      {canReset && <ResetToDefault onClick={() => onChange(defaultValue)} L={L} />}
       <input
         type="color" value={value} onChange={(e) => onChange(e.target.value)}
         style={{ width: 28, height: 22, padding: 0, border: 'none', borderRadius: 4, background: 'none', cursor: 'pointer' }}
@@ -662,6 +700,7 @@ function EffectsPanel({ label, effects, onChange, L }) {
 
       <EffectSlider
         label={L.poster_effect_opacity} value={Math.round(opacity * 100)} min={5} max={100} unit="%"
+        defaultValue={100} L={L}
         onChange={(v) => onChange({ ...effects, opacity: v / 100 })}
       />
 
@@ -672,11 +711,21 @@ function EffectsPanel({ label, effects, onChange, L }) {
         </label>
         {glow.enabled && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 20 }}>
-            <ColorField label={L.poster_effect_color} value={glow.color} onChange={(v) => patchGlow({ color: v })} />
-            <EffectSlider label={L.poster_effect_blur} value={glow.blur} min={0} max={250} onChange={(v) => patchGlow({ blur: v })} />
-            <EffectSlider label={L.poster_effect_distance} value={glow.distance} min={0} max={200} onChange={(v) => patchGlow({ distance: v })} />
+            <ColorField
+              label={L.poster_effect_color} value={glow.color} defaultValue="#000000" L={L}
+              onChange={(v) => patchGlow({ color: v })}
+            />
+            <EffectSlider
+              label={L.poster_effect_blur} value={glow.blur} min={0} max={250} defaultValue={0} L={L}
+              onChange={(v) => patchGlow({ blur: v })}
+            />
+            <EffectSlider
+              label={L.poster_effect_distance} value={glow.distance} min={0} max={200} defaultValue={0} L={L}
+              onChange={(v) => patchGlow({ distance: v })}
+            />
             <EffectSlider
               label={L.poster_effect_intensity} value={Math.round((glow.opacity / 5) * 100)} min={0} max={100} unit="%"
+              defaultValue={0} L={L}
               onChange={(v) => patchGlow({ opacity: (v / 100) * 5 })}
             />
           </div>
@@ -779,7 +828,7 @@ function GlassPanel({ glass, onChange, onRemove, L }) {
  * color, plus the pill color when the layer is a badge. The shared
  * opacity/glow controls stay in `EffectsPanel`, rendered separately right
  * after this panel - this one only owns the text-specific fields. */
-function TextLayerPanel({ layer, onChange, L }) {
+function TextLayerPanel({ layer, defaultFontSize, onChange, L }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10, borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)' }}>
       <div className="scene-prompt-label">{layer.textType === 'badge' ? L.poster_textBadgeLabel : L.poster_textHaloLabel}</div>
@@ -830,6 +879,7 @@ function TextLayerPanel({ layer, onChange, L }) {
       </label>
       <EffectSlider
         label={L.poster_fontSizeLabel} value={layer.fontSize} min={10} max={400}
+        defaultValue={defaultFontSize} L={L}
         onChange={(v) => onChange({ fontSize: v })}
       />
       <ColorField label={L.poster_textColorLabel} value={layer.color} onChange={(v) => onChange({ color: v })} />
@@ -1584,6 +1634,7 @@ export default function PosterConstructor({
                 {selected.kind === 'text' && (
                   <TextLayerPanel
                     layer={selectedLayer}
+                    defaultFontSize={defaultTextFontSize(selectedLayer.textType, bg.width)}
                     onChange={(patch) => updateLayer('text', selected.id, patch)}
                     L={L}
                   />

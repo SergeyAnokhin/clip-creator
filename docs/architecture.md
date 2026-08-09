@@ -805,6 +805,16 @@ solid than the opacity slider alone implies - accepted for a simple,
 low-risk render path, since the common case (opacity at/near 100%) is
 unaffected.
 
+Every slider/color field above with an unambiguous neutral value - layer
+opacity (100%), glow color (`#000000`), glow blur/distance/intensity (0),
+and (in `TextLayerPanel`) font size - shows a small inline reset icon once
+its value differs from that default, so a single knob can be snapped back
+without re-deriving the number by hand. Font size has no fixed default since
+badge/halo text scales with the poster; its reset target is
+`defaultTextFontSize(textType, bg.width)`, the same formula used to size a
+freshly placed layer. Clone's offsets/opacity/blur and the glass panel's
+sliders have no such button - there's no single "neutral" value for them.
+
 Both bake into the flattened PNG at save time; the backend stores `effects`
 opaquely inside `layers` (no schema validation), see `docs/data-model.md`'s
 **Poster** entry. (Earlier versions of this panel had a **backdrop** effect

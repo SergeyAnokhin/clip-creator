@@ -156,8 +156,12 @@ caveats (e.g. `google:gemini-3.5-flash-lite`'s price was sourced via its
 OpenRouter listing rather than Google's own page). Everything else still
 comes from `settings.pricing_overrides`, entered by hand in Settings → Prices
 or imported from a JSON file (see "Pricing export/import" below); `source` in
-the catalog is `'builtin'` for a verified hardcoded row, `'override'` for a
-user-entered one, and a model with neither just shows as unpriced. If a price
+the catalog is `'builtin'` for a verified hardcoded row, `'catalog'` for a
+model with no price at all yet, and otherwise whatever the override row's own
+`source` field says — `'manual'` for one typed into the Prices tab, `'import'`
+for one loaded from a JSON file (unless that file's row already carried its
+own `source` string, which is preserved as-is). An override saved before this
+field existed has no `source` key and falls back to `'manual'`. If a price
 is ever added or corrected in `BUILTIN_PRICING`, bump `pricing.PRICING_VERSION`
 — because catalog costs are recomputed on read, that also fixes history, not
 just future calls.
@@ -284,7 +288,7 @@ panel only has whatever `POST .../suno/generate` returns.
 | [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `periodTotals` loads lazily via `loadPeriodTotals` (called when the pill first expands); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
 | [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared header cost pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header. Collapsed: today's spend only. Click: expands an in-place popover with today/week/month/all-time and an "Все расходы →" link — that link is the only way to reach the full Usage screen from here. Also shows a "Сэкономлено сегодня" line when `periodTotals.today.saved_cost > 0` (a `google_free` call happened today) |
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |
-| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, an "overridden" badge + reset button per row, a provider filter + text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog, and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
+| [`components/settings/PricingPanel.jsx`](../frontend/src/components/settings/PricingPanel.jsx) | Settings → Prices tab: the merged catalog (a small set of verified `BUILTIN_PRICING` rows + overrides + unpriced catalog-only rows, see above) with editable input/output/per-image fields, a small colored source icon (✓ green = builtin/verified, pencil blue = manual, upload purple = imported, tooltip via `settings_pricingSource_*`) + reset button per row, a provider filter, a kind filter (all/text/image/video), an "only unpriced" checkbox, and text search (same multi-term matching as `ModelFavorites`, needed once the catalog brings in a provider's full model list), a form for pricing a model not yet in the catalog (always tagged `source: 'manual'`), and an Export/Import pair (see below) for round-tripping the whole catalog through an external pricing lookup |
 | `ModelPicker.jsx` / `ModelFavorites.jsx` | Both accept an optional `prices`/`L` prop and append a price suffix to each model's label (`· $0.30/$2.50`, `· $0.04 за кадр`, or `price ?` — the token price needs no unit suffix since "per 1M" is the only unit used app-wide, but the image price keeps `L.price_perImage` since that unit isn't obvious). `ModelFavorites`' default toggle is a fixed-size circular button (`.model-default-toggle` in `theme.css`) so the row layout never shifts between the "default" and "not default" states |
 | `components/workflow/SunoStage.jsx`'s `UsageSummaryLine` | Compact, icon-led strip (🔤 tokens in→out, 💰 cost - `≈` prefix means estimated/`cost.source !== 'provider'`, no prefix means the provider billed that exact amount, 🕐 finish time, ⏱ response time) rendered from `lastDebug.usage` + a client-stamped `lastDebug.completedAt`. Sits directly under the debug panel's title and is shown **regardless of whether the panel itself is expanded** (`DebugPanel`'s `hasUsage` check) - the whole point is not needing to open raw JSON to see what a call cost |
 | `useSunoStage.js`'s `elapsedSeconds` / `sunoError` | `elapsedSeconds`: a `setInterval`-driven ticking counter, started/stopped by a `sunoLoading` effect (not managed inside `generateSuno()` itself, so it can't drift out of sync with the loading spinner) — shown next to the "⏳ Генерация текста и стиля..." line while a generate call is in flight. `sunoError`: unlike the toast (which auto-dismisses after a few seconds), this is rendered in the same spot the loading line occupies and **persists until the next `generateSuno()` call** clears it — a timeout or provider error stays visible instead of flashing past. Both the toast and this persistent line show the same message (`err.detail`, see below); the failure is also `console.error`'d for devtools visibility. `useTitleCardStage.js`'s `elapsedSeconds`/`titleCardError` mirror this exact pattern (keyed off `generating` instead of `sunoLoading`), rendered under the "Сгенерировать заголовок" button in `TitleCardStage.jsx` |
@@ -306,7 +310,9 @@ and called in the `finally` of `generateSuno`, `generateStoryboard`,
 view — overrides + unpriced catalog-only placeholders, ignoring any unsaved
 local edits) as `versecraft-model-prices.json`:
 `{pricing_version, currency, exported_at, models: {"provider:model_id":
-{kind, input, output, cached_input?} | {kind, per_image}}}`. Unpriced rows
+{kind, input, output, cached_input?, source} | {kind, per_image, source}}}` —
+every row's catalog `source` (`'builtin'`/`'manual'`/`'import'`/`'catalog'`)
+rides along so a re-import can tell where a number came from. Unpriced rows
 are exported with `null` price fields, which is the point — the file is
 meant to be handed to an external research pass (a model that can look up
 current provider pricing) that fills in the missing numbers, then
@@ -314,8 +320,10 @@ re-imported. Import reads the same shape (or a bare `{composite: row}` map
 without the wrapper) and stages every row with a valid `kind` + numeric
 price as a pending override in the panel's local `drafts` — same as a
 manual edit, so it still needs "Save" to persist via `PUT
-/api/usage/pricing`. Rows that are missing, malformed, or still carry `null`
-prices are skipped and counted in the status line rather than guessed.
+/api/usage/pricing`. Each staged row's `source` is taken from the file's own
+`source` string when present, otherwise defaults to `'import'`. Rows that are
+missing, malformed, or still carry `null` prices are skipped and counted in
+the status line rather than guessed.
 Shared file-IO helpers (`downloadJSON`/`readJSONFile`) live in
 [`lib/download.js`](../frontend/src/lib/download.js), also used by the
 Settings "Backup" panel's API-keys/general-settings export/import.

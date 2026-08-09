@@ -155,7 +155,7 @@ def test_put_pricing_persists_override(client):
 
     resp2 = client.get('/api/usage/pricing')
     override_row = next(m for m in resp2.json()['models'] if m['model'] == 'google:gemini-2.5-flash')
-    assert override_row['source'] == 'override'
+    assert override_row['source'] == 'manual'
     assert override_row['input'] == 9.0
 
 

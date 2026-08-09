@@ -18,8 +18,17 @@ comes from
 `settings.pricing_overrides` (entered by hand in Settings -> Prices, or
 imported from a JSON file - see `PricingPanel.jsx`'s Export/Import), so
 `catalog()`'s `source` field is `'builtin'` only for a row that was actually
-checked, `'override'` for a user-entered one, and a model with neither just
-shows as unpriced ("price ?") rather than a plausible-looking wrong number.
+checked, and a model with neither just shows as unpriced ("price ?") rather
+than a plausible-looking wrong number.
+
+An override row may carry its own optional `'source'` string recording how
+*that* price was entered - `'manual'` (typed into the Prices tab) or
+`'import'` (loaded from a JSON file, unless the file itself already tagged
+the row with a source, which is preserved as-is - see `PricingPanel.jsx`'s
+`handleImportFile`). `catalog()` falls back to `'manual'` for an override
+with no `source` key (all overrides used to be manual before `'import'`
+existed). This is separate from the coarse `'builtin'`/`'catalog'` values,
+which describe rows with no override at all.
 
 If a price is ever added or corrected here, it must be an actually verified
 number with its source cited in a comment, not a recalled one - and
@@ -220,6 +229,9 @@ def _is_valid_row(row) -> bool:
     cached = row.get('cached_input')
     if cached is not None and (not isinstance(cached, (int, float)) or isinstance(cached, bool) or cached < 0):
         return False
+    source = row.get('source')
+    if source is not None and (not isinstance(source, str) or not source.strip()):
+        return False
     return True
 
 
@@ -336,6 +348,11 @@ def catalog(overrides: dict | None = None) -> list[dict]:
         if price is None:
             continue
         provider, _, model_id = model.partition(':')
+        override_row = overrides.get(model)
+        if _is_valid_row(override_row):
+            source = override_row.get('source') or 'manual'
+        else:
+            source = 'builtin'
         rows.append({
             'model': model,
             'provider': provider,
@@ -346,7 +363,7 @@ def catalog(overrides: dict | None = None) -> list[dict]:
             'cached_input': price.get('cached_input'),
             'per_image': price.get('per_image'),
             'per_second': price.get('per_second'),
-            'source': 'override' if _is_valid_row(overrides.get(model)) else 'builtin',
+            'source': source,
         })
     return rows
 

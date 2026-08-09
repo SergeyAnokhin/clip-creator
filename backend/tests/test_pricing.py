@@ -201,11 +201,22 @@ def test_estimate_unknown_model_is_none_not_zero():
     assert result['amount'] is None
 
 
-def test_catalog_marks_override_rows():
+def test_catalog_marks_override_rows_manual_by_default():
     overrides = {'some:text-model': {'kind': 'text', 'input': 1.0, 'output': 2.0}}
     rows = {r['model']: r for r in pricing.catalog(overrides)}
-    assert rows['some:text-model']['source'] == 'override'
+    assert rows['some:text-model']['source'] == 'manual'
     assert rows['some:text-model']['input'] == 1.0
+
+
+def test_catalog_preserves_explicit_override_source():
+    overrides = {'some:text-model': {'kind': 'text', 'input': 1.0, 'output': 2.0, 'source': 'import'}}
+    rows = {r['model']: r for r in pricing.catalog(overrides)}
+    assert rows['some:text-model']['source'] == 'import'
+
+
+def test_invalid_source_rejects_the_row():
+    overrides = {'some:text-model': {'kind': 'text', 'input': 1.0, 'output': 2.0, 'source': 42}}
+    assert pricing.get_price('some:text-model', overrides) is None
 
 
 def test_catalog_marks_builtin_rows(monkeypatch):
@@ -262,7 +273,7 @@ def test_catalog_with_known_models_skips_models_already_priced():
     known = {'google:gemini-2.5-flash': 'text'}
     rows = [r for r in pricing.catalog_with_known_models(overrides, known) if r['model'] == 'google:gemini-2.5-flash']
     assert len(rows) == 1
-    assert rows[0]['source'] == 'override'
+    assert rows[0]['source'] == 'manual'
     assert rows[0]['input'] == pytest.approx(0.30)
 
 

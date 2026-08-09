@@ -1,10 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Plus, RotateCcw, Upload } from 'lucide-react';
+import { Check, Download, Pencil, Plus, RotateCcw, Upload } from 'lucide-react';
 import { downloadJSON, readJSONFile } from '../../lib/download.js';
 
 function toNum(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/** Compact colored icon + tooltip telling where a price came from - kept out
+ * of the row's text flow so it doesn't compete for space with the price
+ * inputs themselves (see the user request that drove this: a short/iconic
+ * marker instead of a text badge). No icon for 'catalog' (no price yet). */
+const SOURCE_BADGES = {
+  builtin: { Icon: Check, color: '#4ade80' },
+  manual: { Icon: Pencil, color: '#60a5fa' },
+  import: { Icon: Upload, color: '#c084fc' },
+};
+
+function SourceBadge({ source, L }) {
+  const meta = SOURCE_BADGES[source];
+  if (!meta) return null;
+  const { Icon, color } = meta;
+  return (
+    <span
+      title={L[`settings_pricingSource_${source}`]}
+      style={{ marginLeft: 8, display: 'inline-flex', alignItems: 'center', color, flex: '0 0 auto' }}
+    >
+      <Icon size={13} />
+    </span>
+  );
 }
 
 /** One catalog row: editable price fields (input/output per 1M tokens, or
@@ -27,15 +51,15 @@ function PricingRow({ L, row, isOverride, pendingReset, onChange, onReset }) {
       const i = toNum(input);
       const o = toNum(output);
       if (i === undefined || o === undefined) return;
-      onChange(row.model, { kind: 'text', input: i, output: o });
+      onChange(row.model, { kind: 'text', input: i, output: o, source: 'manual' });
     } else if (row.kind === 'video') {
       const p = toNum(perSecond);
       if (p === undefined) return;
-      onChange(row.model, { kind: 'video', per_second: p });
+      onChange(row.model, { kind: 'video', per_second: p, source: 'manual' });
     } else {
       const p = toNum(perImage);
       if (p === undefined) return;
-      onChange(row.model, { kind: 'image', per_image: p });
+      onChange(row.model, { kind: 'image', per_image: p, source: 'manual' });
     }
   }
 
@@ -47,11 +71,7 @@ function PricingRow({ L, row, isOverride, pendingReset, onChange, onReset }) {
         title={row.model}
       >
         {row.model}
-        {isOverride && !pendingReset && (
-          <span className="chip is-active" style={{ marginLeft: 8, padding: '2px 8px', fontSize: 10 }}>
-            {L.settings_pricingOverride}
-          </span>
-        )}
+        {!pendingReset && <SourceBadge source={row.source} L={L} />}
       </span>
       {row.kind === 'text' ? (
         <>
@@ -101,15 +121,15 @@ function AddPriceRow({ L, onAdd }) {
       const i = toNum(input);
       const o = toNum(output);
       if (i === undefined || o === undefined) return;
-      onAdd(composite, { kind: 'text', input: i, output: o });
+      onAdd(composite, { kind: 'text', input: i, output: o, source: 'manual' });
     } else if (kind === 'video') {
       const p = toNum(perSecond);
       if (p === undefined) return;
-      onAdd(composite, { kind: 'video', per_second: p });
+      onAdd(composite, { kind: 'video', per_second: p, source: 'manual' });
     } else {
       const p = toNum(perImage);
       if (p === undefined) return;
-      onAdd(composite, { kind: 'image', per_image: p });
+      onAdd(composite, { kind: 'image', per_image: p, source: 'manual' });
     }
     setModel(''); setInput(''); setOutput(''); setPerImage(''); setPerSecond('');
   }
@@ -150,6 +170,8 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
   const [providerFilter, setProviderFilter] = useState('');
+  const [kindFilter, setKindFilter] = useState('');
+  const [onlyUnpriced, setOnlyUnpriced] = useState(false);
   const [query, setQuery] = useState('');
   const [importStatus, setImportStatus] = useState('');
   const importFileRef = useRef(null);
@@ -161,6 +183,8 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const rows = allRows.filter((row) => {
     if (providerFilter && row.provider !== providerFilter) return false;
+    if (kindFilter && row.kind !== kindFilter) return false;
+    if (onlyUnpriced && row.source !== 'catalog') return false;
     if (!terms.length) return true;
     const haystack = row.model.toLowerCase();
     return terms.every((t) => haystack.includes(t));
@@ -183,11 +207,12 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
   function exportPrices() {
     const models = {};
     for (const row of allRows) {
-      models[row.model] = row.kind === 'text'
+      const base = row.kind === 'text'
         ? { kind: 'text', input: row.input, output: row.output, ...(row.cached_input != null ? { cached_input: row.cached_input } : {}) }
         : row.kind === 'video'
         ? { kind: 'video', per_second: row.per_second }
         : { kind: 'image', per_image: row.per_image };
+      models[row.model] = { ...base, source: row.source };
     }
     downloadJSON('versecraft-model-prices.json', {
       pricing_version: pricing?.pricing_version,
@@ -214,22 +239,23 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
       let skipped = 0;
       for (const [model, row] of Object.entries(models)) {
         if (!model.includes(':') || !row || typeof row !== 'object') { skipped++; continue; }
+        const source = typeof row.source === 'string' && row.source.trim() ? row.source.trim() : 'import';
         if (row.kind === 'text') {
           const input = toNum(row.input);
           const output = toNum(row.output);
           if (input === undefined || output === undefined) { skipped++; continue; }
           const cached = toNum(row.cached_input);
-          patches[model] = { kind: 'text', input, output, ...(cached !== undefined ? { cached_input: cached } : {}) };
+          patches[model] = { kind: 'text', input, output, ...(cached !== undefined ? { cached_input: cached } : {}), source };
           applied++;
         } else if (row.kind === 'image') {
           const perImage = toNum(row.per_image);
           if (perImage === undefined) { skipped++; continue; }
-          patches[model] = { kind: 'image', per_image: perImage };
+          patches[model] = { kind: 'image', per_image: perImage, source };
           applied++;
         } else if (row.kind === 'video') {
           const perSecond = toNum(row.per_second);
           if (perSecond === undefined) { skipped++; continue; }
-          patches[model] = { kind: 'video', per_second: perSecond };
+          patches[model] = { kind: 'video', per_second: perSecond, source };
           applied++;
         } else {
           skipped++;
@@ -257,11 +283,12 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
     }
   }
 
-  const addedRows = Object.entries(drafts)
+  const addedRows = onlyUnpriced ? [] : Object.entries(drafts)
     .filter(([model, patch]) => patch !== null && !allRows.some((r) => r.model === model))
     .map(([model, patch]) => ({ model, provider: model.split(':')[0], ...patch }))
     .filter((row) => {
       if (providerFilter && row.provider !== providerFilter) return false;
+      if (kindFilter && row.kind !== kindFilter) return false;
       return terms.every((t) => row.model.toLowerCase().includes(t));
     });
 
@@ -308,20 +335,40 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
           ))}
         </div>
       )}
-      <input
-        className="field"
-        style={{ marginBottom: 10 }}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder={L.settings_pricingSearchPlaceholder}
-      />
+      <div className="settings-tabs" style={{ marginBottom: 10 }}>
+        <button className={`chip${!kindFilter ? ' is-active' : ''}`} onClick={() => setKindFilter('')}>
+          {L.settings_pricingAllKinds}
+        </button>
+        <button className={`chip${kindFilter === 'text' ? ' is-active' : ''}`} onClick={() => setKindFilter('text')}>
+          {L.settings_pricingKindText}
+        </button>
+        <button className={`chip${kindFilter === 'image' ? ' is-active' : ''}`} onClick={() => setKindFilter('image')}>
+          {L.settings_pricingKindImage}
+        </button>
+        <button className={`chip${kindFilter === 'video' ? ' is-active' : ''}`} onClick={() => setKindFilter('video')}>
+          {L.settings_pricingKindVideo}
+        </button>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
+        <input
+          className="field"
+          style={{ flex: '1 1 220px', marginBottom: 0 }}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={L.settings_pricingSearchPlaceholder}
+        />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer', flex: '0 0 auto' }}>
+          <input type="checkbox" checked={onlyUnpriced} onChange={(e) => setOnlyUnpriced(e.target.checked)} />
+          {L.settings_pricingOnlyUnpriced}
+        </label>
+      </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {rows.map((row) => {
           const draft = drafts[row.model];
           const pendingReset = draft === null;
           const effectiveRow = draft && draft !== null ? { ...row, ...draft } : row;
-          const isOverride = draft === undefined ? row.source === 'override' : draft !== null;
+          const isOverride = draft === undefined ? row.source === 'manual' || row.source === 'import' : draft !== null;
           return (
             <PricingRow
               key={row.model} L={L} row={effectiveRow} isOverride={isOverride} pendingReset={pendingReset}
