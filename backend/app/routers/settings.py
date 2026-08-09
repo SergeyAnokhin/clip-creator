@@ -3,7 +3,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from .. import storage, usage
-from ..providers import image_models, mureka, text_models, wish_library
+from ..providers import image_models, mureka, text_models, video_models, wish_library
 from ..providers.mureka_prompt_defaults import MUREKA_BASE_PROMPT_PRESETS
 from ..providers.scenes_prompt_defaults import (
     DEFAULT_SCENE_BASE_PROMPT_ABSTRACT, DEFAULT_SCENE_BASE_PROMPT_NARRATIVE,
@@ -21,6 +21,9 @@ _MODEL_PROVIDERS = {'google', 'google_free', 'openrouter', 'deepseek', 'replicat
 # Krea (krea.ai) only does image/video generation, no text/LLM models, so it's
 # valid for the image-models endpoint but not the text one.
 _IMAGE_MODEL_PROVIDERS = _MODEL_PROVIDERS | {'krea'}
+# Only Google (Veo) and OpenRouter (Unified Video API) do image-to-video
+# generation for this app - see providers/video.py's module docstring.
+_VIDEO_MODEL_PROVIDERS = {'google', 'google_free', 'openrouter'}
 _ALLOWED_LOGO_EXTENSIONS = {'.png', '.webp'}
 
 # Music-tag badge colors - assigned automatically (index-based, cycling),
@@ -68,6 +71,16 @@ DEFAULT_SETTINGS = {
     'simple_models': {'favorites': [], 'default': ''},
     'image_models': {'favorites': [], 'default': ''},
     'image_models_simple': {'favorites': [], 'default': ''},
+    # Video stage (providers/video.py) - image-to-video animation of a
+    # scene's picked image. A single favorites list (no cheap/quality tier
+    # split like image_models above - video generation is inherently
+    # expensive/slow enough that a tier toggle wasn't asked for).
+    'video_models': {'favorites': [], 'default': ''},
+    # Same {id, title, text, created_at, use_count?} shape and
+    # clean_wish_and_title flow as scene_wish_library below, but its own
+    # library - video/animation wishes ("плавное движение камеры", "избегай
+    # резких склеек") are a different domain from scene/imagery wishes.
+    'video_wish_library': [],
     'special_tags': ['[Vocal Interlude]', '[Female vocal interlude]'],
     'suno_base_prompt': DEFAULT_SUNO_BASE_PROMPT,
     'suno_reference_examples': DEFAULT_REFERENCE_EXAMPLES,
@@ -150,6 +163,7 @@ def get_settings():
     merged['suno_wish_library'] = wish_library.normalize_wish_library(merged.get('suno_wish_library', []))
     merged['scene_wish_library'] = wish_library.normalize_wish_library(merged.get('scene_wish_library', []))
     merged['title_card_wish_library'] = wish_library.normalize_wish_library(merged.get('title_card_wish_library', []))
+    merged['video_wish_library'] = wish_library.normalize_wish_library(merged.get('video_wish_library', []))
     merged['music_tags'] = normalize_music_tags(merged.get('music_tags', []))
     return merged
 
@@ -193,6 +207,17 @@ async def get_image_models(provider: str):
     api_key = (settings.get('api_keys') or {}).get(provider, '')
     entry = await image_models.list_models(provider, api_key)
     _remember_catalog_entry('image', provider, entry)
+    return entry
+
+
+@router.get('/video-models/{provider}')
+async def get_video_models(provider: str):
+    if provider not in _VIDEO_MODEL_PROVIDERS:
+        raise HTTPException(404, f'Unknown provider: {provider}')
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    api_key = (settings.get('api_keys') or {}).get(provider, '')
+    entry = await video_models.list_models(provider, api_key)
+    _remember_catalog_entry('video', provider, entry)
     return entry
 
 
@@ -316,6 +341,49 @@ def update_scene_wish(wish_id: str, body: dict = Body(...)):
     settings['scene_wish_library'] = wish_lib
     storage.save_settings(settings)
     return {'scene_wish_library': wish_lib, 'wish': wish}
+
+
+@router.post('/video-wish-library')
+async def add_video_wish(body: dict = Body(...)):
+    """Video/animation-prompt пожелания - a library separate from
+    scene_wish_library (see wish_library.add_or_get_wish's docstring): same
+    shape and flow, own per-project toggle (`active_video_wish_ids`, see
+    routers/generation.py)."""
+    text = (body.get('text') or '').strip()
+    if not text:
+        raise HTTPException(422, 'text is required')
+    model = (body.get('model') or '').strip()
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('wish_title', None, settings)
+    result = await wish_library.add_or_get_wish(
+        text, settings, usage_ctx=usage_ctx, model=model, library_key='video_wish_library',
+    )
+    return {'video_wish_library': result['wish_library'], 'wish': result['wish']}
+
+
+@router.patch('/video-wish-library/{wish_id}')
+def update_video_wish(wish_id: str, body: dict = Body(...)):
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    wish_lib = wish_library.normalize_wish_library(settings.get('video_wish_library', []))
+    wish = next((w for w in wish_lib if w['id'] == wish_id), None)
+    if wish is None:
+        raise HTTPException(404, 'Wish not found')
+
+    if 'title' in body:
+        title = (body.get('title') or '').strip()
+        if not title:
+            raise HTTPException(422, 'title is required')
+        wish['title'] = title
+    if 'text' in body:
+        text = (body.get('text') or '').strip()
+        if not text:
+            raise HTTPException(422, 'text is required')
+        wish['text'] = text
+
+    settings['video_wish_library'] = wish_lib
+    storage.save_settings(settings)
+    return {'video_wish_library': wish_lib, 'wish': wish}
 
 
 @router.post('/logos')

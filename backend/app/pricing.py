@@ -37,9 +37,10 @@ Price row shapes:
             'output': USD per 1M output tokens,
             'cached_input': USD per 1M cached input tokens (optional)}
     image: {'kind': 'image', 'per_image': USD per generated image}
+    video: {'kind': 'video', 'per_second': USD per generated video-second}
 """
 
-PRICING_VERSION = '2026-08-07'
+PRICING_VERSION = '2026-08-09'
 CURRENCY = 'USD'
 
 TOKENS_PER_UNIT = 1_000_000
@@ -49,6 +50,7 @@ CHARS_PER_TOKEN = 4
 
 _TEXT_KEYS = ('input', 'output')
 _IMAGE_KEYS = ('per_image',)
+_VIDEO_KEYS = ('per_second',)
 
 # Every row below was looked up on 2026-07-31, not recalled - see the source
 # comment on each one. Anything not listed here is genuinely unpriced; add a
@@ -96,6 +98,16 @@ BUILTIN_PRICING: dict[str, dict] = {
     'google:imagen-4.0-generate-001': {'kind': 'image', 'per_image': 0.04},
     'google:imagen-4.0-fast-generate-001': {'kind': 'image', 'per_image': 0.02},
     'google:imagen-4.0-ultra-generate-001': {'kind': 'image', 'per_image': 0.06},
+
+    # Veo 3.1 video generation - ai.google.dev/gemini-api/docs/pricing (full
+    # page fetched 2026-08-09): billed per output second, audio included in
+    # the price (no separate audio line). Page lists per-resolution tiers
+    # (Standard $0.40 at 720p/1080p, $0.60 at 4k; Fast $0.10/$0.12/$0.30;
+    # Lite $0.05/$0.08) - per_second here is the 720p rate, same convention
+    # as the tiered image models above (per_image = the base/1K tier).
+    'google:veo-3.1-generate-preview': {'kind': 'video', 'per_second': 0.40},
+    'google:veo-3.1-fast-generate-preview': {'kind': 'video', 'per_second': 0.10},
+    'google:veo-3.1-lite-generate-preview': {'kind': 'video', 'per_second': 0.05},
 
     # ---- DeepSeek direct API: https://api-docs.deepseek.com/quick_start/pricing
     # (confirmed against the page's own "Models & Pricing" table, pasted in
@@ -194,7 +206,11 @@ def _is_valid_row(row) -> bool:
     if not isinstance(row, dict):
         return False
     kind = row.get('kind')
-    required = _TEXT_KEYS if kind == 'text' else _IMAGE_KEYS if kind == 'image' else None
+    required = (
+        _TEXT_KEYS if kind == 'text' else
+        _IMAGE_KEYS if kind == 'image' else
+        _VIDEO_KEYS if kind == 'video' else None
+    )
     if required is None:
         return False
     for key in required:
@@ -275,6 +291,12 @@ def compute_cost(model: str, units: dict | None, overrides: dict | None = None) 
         amount += output_tokens * price['output'] / TOKENS_PER_UNIT
         return amount, 'catalog'
 
+    if price['kind'] == 'video':
+        seconds = units.get('seconds')
+        if seconds is None:
+            return None, 'unknown'
+        return seconds * price['per_second'], 'catalog'
+
     images = units.get('images')
     if images is None:
         return None, 'unknown'
@@ -323,6 +345,7 @@ def catalog(overrides: dict | None = None) -> list[dict]:
             'output': price.get('output'),
             'cached_input': price.get('cached_input'),
             'per_image': price.get('per_image'),
+            'per_second': price.get('per_second'),
             'source': 'override' if _is_valid_row(overrides.get(model)) else 'builtin',
         })
     return rows
@@ -343,7 +366,7 @@ def catalog_with_known_models(overrides: dict | None, known_models: dict[str, st
         provider, _, model_id = composite.partition(':')
         rows.append({
             'model': composite, 'provider': provider, 'model_id': model_id, 'kind': kind,
-            'input': None, 'output': None, 'cached_input': None, 'per_image': None,
+            'input': None, 'output': None, 'cached_input': None, 'per_image': None, 'per_second': None,
             'source': 'catalog',
         })
     rows.sort(key=lambda r: r['model'])
@@ -363,5 +386,5 @@ def validate_overrides(overrides: dict) -> str | None:
             return f'Model key must be "provider:model_id": {model}'
         if not _is_valid_row(row):
             return (f'Invalid price for {model}: needs kind="text" with input+output, '
-                    'or kind="image" with per_image, all non-negative numbers')
+                    'kind="image" with per_image, or kind="video" with per_second, all non-negative numbers')
     return None

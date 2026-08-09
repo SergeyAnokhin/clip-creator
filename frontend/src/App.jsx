@@ -10,6 +10,7 @@ import { useMurekaStage } from './hooks/useMurekaStage.js';
 import { useScenesStage } from './hooks/useScenesStage.js';
 import { useImagesStage } from './hooks/useImagesStage.js';
 import { useTitleCardStage } from './hooks/useTitleCardStage.js';
+import { useVideoStage } from './hooks/useVideoStage.js';
 import { usePosterConstructor } from './hooks/usePosterConstructor.js';
 import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
@@ -73,11 +74,18 @@ function App() {
   const posterConstructor = usePosterConstructor({
     activeProject, setActiveProject, updateProject, showToast, L,
   });
-  // Depends on suno's refinement box, scenes' wish box and title card's wish box, so it must be created after them.
+  const video = useVideoStage({
+    activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+    videoModels: settings.videoModels,
+    onAiCall: usage.actions.refreshToday,
+    onVideoWishLibraryChange: settings.actions.setVideoWishLibrary,
+    onVideoWishUsed: settings.actions.bumpVideoWishUse,
+  });
+  // Depends on suno's refinement box, scenes' wish box, title card's wish box and video's wish box, so it must be created after them.
   const voice = useVoice({
     updateProject, showToast, L, lang: settings.lang,
     setRefinementText: suno.actions.setRefinementText, setSceneWishText: scenes.actions.setSceneWishText,
-    setTitleCardWishText: titleCard.actions.setTitleCardWishText,
+    setTitleCardWishText: titleCard.actions.setTitleCardWishText, setVideoWishText: video.actions.setVideoWishText,
   });
 
   // ---------- navigation ----------
@@ -91,6 +99,7 @@ function App() {
     scenes.resetForProject(project);
     images.resetForProject(project);
     titleCard.resetForProject(project);
+    video.resetForProject(project);
     setScreen('workflow');
   }
 
@@ -211,6 +220,20 @@ function App() {
     },
   };
 
+  const videoState = {
+    ...video.state,
+    videoModelFavorites: settings.videoModels.favorites,
+    modelPrices: usage.priceMap,
+    videoWishLibrary: settings.videoWishLibrary,
+    isRecordingVideoWish: voice.recordingKind === 'videoWish',
+    recordingSeconds: voice.recordingSeconds,
+    voiceSupported: voice.isSupported,
+    actions: {
+      ...video.actions, startVoice: voice.startVoice,
+      onDeleteVideoWish: settings.actions.removeVideoWishSnippet,
+    },
+  };
+
   return (
     <div className="app-shell">
       {screen === 'home' && (
@@ -237,7 +260,7 @@ function App() {
           L={L} langLabel={settings.langLabel} viewport={view.viewport}
           project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
           lyricsState={lyricsState} sunoState={sunoState} murekaState={murekaState} scenesState={scenesState} imagesState={imagesState}
-          titleCardState={titleCardState} updateProject={updateProject}
+          titleCardState={titleCardState} videoState={videoState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
@@ -250,6 +273,7 @@ function App() {
           L={L} lang={settings.lang} showToast={showToast} apiKeys={settings.apiKeys}
           textModels={settings.textModels} simpleModels={settings.simpleModels}
           imageModels={settings.imageModels} imageModelsSimple={settings.imageModelsSimple}
+          videoModels={settings.videoModels} videoWishLibrary={settings.videoWishLibrary}
           specialTags={settings.specialTags}
           sunoBasePrompt={settings.sunoBasePrompt} sunoPromptPresets={settings.sunoPromptPresets}
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}

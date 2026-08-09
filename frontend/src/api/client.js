@@ -54,12 +54,15 @@ export const api = {
   putSettings: (settings) => request('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
   listModels: (provider) => request(`/api/settings/models/${encodeURIComponent(provider)}`),
   listImageModels: (provider) => request(`/api/settings/image-models/${encodeURIComponent(provider)}`),
+  listVideoModels: (provider) => request(`/api/settings/video-models/${encodeURIComponent(provider)}`),
   getModelsCatalog: () => request('/api/settings/models-catalog'),
   getSunoPromptPresets: () => request('/api/settings/suno-prompt-presets'),
   saveWishToLibrary: (text) => request('/api/settings/wish-library', { method: 'POST', body: JSON.stringify({ text }) }),
   updateWishSnippet: (id, patch) => request(`/api/settings/wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   saveSceneWishToLibrary: (text) => request('/api/settings/scene-wish-library', { method: 'POST', body: JSON.stringify({ text }) }),
   updateSceneWishSnippet: (id, patch) => request(`/api/settings/scene-wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  saveVideoWishToLibrary: (text) => request('/api/settings/video-wish-library', { method: 'POST', body: JSON.stringify({ text }) }),
+  updateVideoWishSnippet: (id, patch) => request(`/api/settings/video-wish-library/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   generateSuno: (id, body) => request(`${projectPath(id)}/suno/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   addSunoWish: (id, text) => request(`${projectPath(id)}/suno/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
@@ -80,6 +83,11 @@ export const api = {
     form.append('url', url);
     return requestForm(`${projectPath(id)}/scenes/${sceneIndex}/images/upload`, { method: 'POST', body: form });
   },
+
+  addVideoWish: (id, text) => request(`${projectPath(id)}/scenes/videos/wishes`, { method: 'POST', body: JSON.stringify({ text }) }),
+  generateSceneVideos: (id, sceneIndex, body) => request(`${projectPath(id)}/scenes/${sceneIndex}/videos`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  getSceneVideoJob: (id, sceneIndex, jobId) => request(`${projectPath(id)}/scenes/${sceneIndex}/videos/jobs/${encodeURIComponent(jobId)}`),
+  deleteSceneVideo: (id, sceneIndex, videoId) => request(`${projectPath(id)}/scenes/${sceneIndex}/videos/${encodeURIComponent(videoId)}`, { method: 'DELETE' }),
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),

@@ -6,10 +6,11 @@ import MurekaStage from './MurekaStage.jsx';
 import ScenesStage from './ScenesStage.jsx';
 import ImagesStage from './ImagesStage.jsx';
 import TitleCardStage from './TitleCardStage.jsx';
+import VideoStage from './VideoStage.jsx';
 
 export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
-  lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, updateProject,
+  lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, videoState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
 }) {
@@ -51,6 +52,7 @@ export default function WorkflowScreen({
             {activeStage === 'scenes' && <ScenesStage L={L} project={project} isMobile={isMobile} {...scenesState} />}
             {activeStage === 'images' && <ImagesStage L={L} project={project} isMobile={isMobile} {...imagesState} />}
             {activeStage === 'title_card' && <TitleCardStage L={L} project={project} isMobile={isMobile} {...titleCardState} />}
+            {activeStage === 'video' && <VideoStage L={L} project={project} isMobile={isMobile} {...videoState} />}
           </div>
         </div>
       </div>

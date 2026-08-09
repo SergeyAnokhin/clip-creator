@@ -13,12 +13,14 @@ function PricingRow({ L, row, isOverride, pendingReset, onChange, onReset }) {
   const [input, setInput] = useState(row.input ?? '');
   const [output, setOutput] = useState(row.output ?? '');
   const [perImage, setPerImage] = useState(row.per_image ?? '');
+  const [perSecond, setPerSecond] = useState(row.per_second ?? '');
 
   useEffect(() => {
     setInput(row.input ?? '');
     setOutput(row.output ?? '');
     setPerImage(row.per_image ?? '');
-  }, [row.input, row.output, row.per_image]);
+    setPerSecond(row.per_second ?? '');
+  }, [row.input, row.output, row.per_image, row.per_second]);
 
   function commit() {
     if (row.kind === 'text') {
@@ -26,6 +28,10 @@ function PricingRow({ L, row, isOverride, pendingReset, onChange, onReset }) {
       const o = toNum(output);
       if (i === undefined || o === undefined) return;
       onChange(row.model, { kind: 'text', input: i, output: o });
+    } else if (row.kind === 'video') {
+      const p = toNum(perSecond);
+      if (p === undefined) return;
+      onChange(row.model, { kind: 'video', per_second: p });
     } else {
       const p = toNum(perImage);
       if (p === undefined) return;
@@ -58,6 +64,11 @@ function PricingRow({ L, row, isOverride, pendingReset, onChange, onReset }) {
             onChange={(e) => setOutput(e.target.value)} onBlur={commit} placeholder={L.settings_pricingOutput}
           />
         </>
+      ) : row.kind === 'video' ? (
+        <input
+          className="field" style={{ width: 100, flex: '0 0 auto' }} value={perSecond} disabled={pendingReset}
+          onChange={(e) => setPerSecond(e.target.value)} onBlur={commit} placeholder={L.settings_pricingPerSecond}
+        />
       ) : (
         <input
           className="field" style={{ width: 100, flex: '0 0 auto' }} value={perImage} disabled={pendingReset}
@@ -81,6 +92,7 @@ function AddPriceRow({ L, onAdd }) {
   const [input, setInput] = useState('');
   const [output, setOutput] = useState('');
   const [perImage, setPerImage] = useState('');
+  const [perSecond, setPerSecond] = useState('');
 
   function submit() {
     const composite = model.trim();
@@ -90,12 +102,16 @@ function AddPriceRow({ L, onAdd }) {
       const o = toNum(output);
       if (i === undefined || o === undefined) return;
       onAdd(composite, { kind: 'text', input: i, output: o });
+    } else if (kind === 'video') {
+      const p = toNum(perSecond);
+      if (p === undefined) return;
+      onAdd(composite, { kind: 'video', per_second: p });
     } else {
       const p = toNum(perImage);
       if (p === undefined) return;
       onAdd(composite, { kind: 'image', per_image: p });
     }
-    setModel(''); setInput(''); setOutput(''); setPerImage('');
+    setModel(''); setInput(''); setOutput(''); setPerImage(''); setPerSecond('');
   }
 
   return (
@@ -107,12 +123,15 @@ function AddPriceRow({ L, onAdd }) {
       <select className="field" style={{ flex: '0 0 auto', width: 'auto' }} value={kind} onChange={(e) => setKind(e.target.value)}>
         <option value="text">{L.settings_pricingKindText}</option>
         <option value="image">{L.settings_pricingKindImage}</option>
+        <option value="video">{L.settings_pricingKindVideo}</option>
       </select>
       {kind === 'text' ? (
         <>
           <input className="field" style={{ width: 88, flex: '0 0 auto' }} value={input} onChange={(e) => setInput(e.target.value)} placeholder={L.settings_pricingInput} />
           <input className="field" style={{ width: 88, flex: '0 0 auto' }} value={output} onChange={(e) => setOutput(e.target.value)} placeholder={L.settings_pricingOutput} />
         </>
+      ) : kind === 'video' ? (
+        <input className="field" style={{ width: 100, flex: '0 0 auto' }} value={perSecond} onChange={(e) => setPerSecond(e.target.value)} placeholder={L.settings_pricingPerSecond} />
       ) : (
         <input className="field" style={{ width: 100, flex: '0 0 auto' }} value={perImage} onChange={(e) => setPerImage(e.target.value)} placeholder={L.settings_pricingPerImage} />
       )}
@@ -166,6 +185,8 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
     for (const row of allRows) {
       models[row.model] = row.kind === 'text'
         ? { kind: 'text', input: row.input, output: row.output, ...(row.cached_input != null ? { cached_input: row.cached_input } : {}) }
+        : row.kind === 'video'
+        ? { kind: 'video', per_second: row.per_second }
         : { kind: 'image', per_image: row.per_image };
     }
     downloadJSON('versecraft-model-prices.json', {
@@ -204,6 +225,11 @@ export default function PricingPanel({ L, pricing, providers, onSave }) {
           const perImage = toNum(row.per_image);
           if (perImage === undefined) { skipped++; continue; }
           patches[model] = { kind: 'image', per_image: perImage };
+          applied++;
+        } else if (row.kind === 'video') {
+          const perSecond = toNum(row.per_second);
+          if (perSecond === undefined) { skipped++; continue; }
+          patches[model] = { kind: 'video', per_second: perSecond };
           applied++;
         } else {
           skipped++;

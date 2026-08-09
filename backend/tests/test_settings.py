@@ -181,10 +181,44 @@ def test_get_models_krea_is_not_a_text_provider(client):
     assert resp.status_code == 404
 
 
+def test_get_video_models_google_without_key_returns_error_not_500(client):
+    resp = client.get('/api/settings/video-models/google')
+    assert resp.status_code == 200
+    assert resp.json()['source'] == 'error'
+
+
+def test_get_video_models_openrouter_without_key_still_attempts_live_call(client):
+    """No key means an empty Authorization header, not a 4xx from our own
+    route - the provider itself decides whether that's acceptable (unlike
+    Google, which requires a key up front for every call)."""
+    resp = client.get('/api/settings/video-models/openrouter')
+    assert resp.status_code == 200
+    assert resp.json()['source'] in ('live', 'error')
+
+
+def test_get_video_models_krea_is_not_a_video_provider(client):
+    """Krea has no confirmed video-generation endpoint for this app (only
+    Google/OpenRouter do) - see providers/video.py's module docstring."""
+    resp = client.get('/api/settings/video-models/krea')
+    assert resp.status_code == 404
+
+
+def test_get_video_models_unknown_provider_returns_404(client):
+    resp = client.get('/api/settings/video-models/anthropic')
+    assert resp.status_code == 404
+
+
+def test_get_video_models_persists_into_catalog(client):
+    client.get('/api/settings/video-models/google')
+
+    catalog = client.get('/api/settings/models-catalog').json()
+    assert 'google' not in catalog['video']  # the error result above must not be remembered
+
+
 def test_models_catalog_is_empty_before_any_refresh(client):
     resp = client.get('/api/settings/models-catalog')
     assert resp.status_code == 200
-    assert resp.json() == {'text': {}, 'image': {}}
+    assert resp.json() == {'text': {}, 'image': {}, 'video': {}}
 
 
 def test_get_models_persists_into_catalog(client):
@@ -311,4 +345,47 @@ def test_update_wish_rejects_blank_text(client):
 
 def test_update_wish_unknown_id_returns_404(client):
     resp = client.patch('/api/settings/wish-library/does-not-exist', json={'title': 'x'})
+    assert resp.status_code == 404
+
+
+def test_add_video_wish_generates_title_and_persists(client):
+    resp = client.post('/api/settings/video-wish-library', json={'text': 'плавное движение камеры'})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['wish']['text'] == 'плавное движение камеры'
+    assert body['wish']['title']
+    assert body['video_wish_library'] == [body['wish']]
+
+    saved = client.get('/api/settings').json()['video_wish_library']
+    assert saved == [body['wish']]
+    # A separate library from suno_wish_library - must not leak into it.
+    assert client.get('/api/settings').json()['suno_wish_library'] == []
+
+
+def test_add_video_wish_rejects_blank_text(client):
+    resp = client.post('/api/settings/video-wish-library', json={'text': '  '})
+    assert resp.status_code == 422
+
+
+def test_add_video_wish_deduplicates_identical_text(client):
+    first = client.post('/api/settings/video-wish-library', json={'text': 'без резких склеек'}).json()
+    second = client.post('/api/settings/video-wish-library', json={'text': 'без резких склеек'}).json()
+
+    assert first['wish']['id'] == second['wish']['id']
+    assert len(second['video_wish_library']) == 1
+
+
+def test_update_video_wish_edits_title_and_text(client):
+    wish = client.post('/api/settings/video-wish-library', json={'text': 'плавное движение камеры'}).json()['wish']
+
+    resp = client.patch(f'/api/settings/video-wish-library/{wish["id"]}', json={'title': 'Камера', 'text': 'очень плавная камера'})
+    assert resp.status_code == 200
+    body = resp.json()['wish']
+    assert body['id'] == wish['id']
+    assert body['title'] == 'Камера'
+    assert body['text'] == 'очень плавная камера'
+
+
+def test_update_video_wish_unknown_id_returns_404(client):
+    resp = client.patch('/api/settings/video-wish-library/does-not-exist', json={'title': 'x'})
     assert resp.status_code == 404

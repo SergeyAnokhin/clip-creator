@@ -434,6 +434,238 @@ def test_delete_scene_image_out_of_range_scene_returns_404(client):
     assert client.delete(f'/api/projects/{pid}/scenes/99/images/x').status_code == 404
 
 
+def test_generate_scene_videos_starts_jobs_and_forwards_selected_image(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    selected_image = next(img for img in project['scenes'][0]['images'] if img['is_selected'])
+    captured = {}
+
+    def fake_start_jobs(*args, **kwargs):
+        captured['args'] = args
+        captured.update(kwargs)
+        return ['job_1', 'job_2']
+
+    monkeypatch.setattr(generation_router.video, 'start_jobs', fake_start_jobs)
+
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/0/videos',
+        json={'count': 2, 'model': 'openrouter:google/veo-3.1', 'aspect_ratio': '16:9'},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {'job_ids': ['job_1', 'job_2']}
+    # slug, scene_index, prompt, image_path, source_image_id, count, model, settings
+    _slug, _scene_index, prompt, image_path, source_image_id, count, model, _settings = captured['args']
+    assert image_path == selected_image['file_path']
+    assert source_image_id == selected_image['image_id']
+    assert count == 2
+    assert model == 'openrouter:google/veo-3.1'
+    assert 'Slow camera pan' in prompt  # scene 0's own motion_prompt from seed data
+    assert captured['aspect_ratio'] == '16:9'
+
+
+def test_generate_scene_videos_explicit_image_id_overrides_selected(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    non_selected = next(img for img in project['scenes'][0]['images'] if not img['is_selected'])
+    captured = {}
+    monkeypatch.setattr(generation_router.video, 'start_jobs', lambda *a, **kw: (captured.update(args=a) or ['job_1']))
+
+    client.post(f'/api/projects/{pid}/scenes/0/videos', json={'model': 'x:y', 'image_id': non_selected['image_id']})
+
+    assert captured['args'][3] == non_selected['file_path']
+    assert captured['args'][4] == non_selected['image_id']
+
+
+def test_generate_scene_videos_no_selected_image_returns_422(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    # Scene 2 in the seed data has no images at all.
+    resp = client.post(f'/api/projects/{pid}/scenes/2/videos', json={'model': 'x:y'})
+    assert resp.status_code == 422
+
+
+def test_generate_scene_videos_out_of_range_scene_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.post(f'/api/projects/{pid}/scenes/99/videos', json={'model': 'x:y'}).status_code == 404
+
+
+def test_generate_scene_videos_sends_active_video_wishes_folded_into_prompt(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    added = client.post(f'/api/projects/{pid}/scenes/videos/wishes', json={'text': 'no sudden cuts'}).json()
+    captured = {}
+    monkeypatch.setattr(generation_router.video, 'start_jobs', lambda *a, **kw: (captured.update(args=a) or ['job_1']))
+
+    client.post(
+        f'/api/projects/{pid}/scenes/0/videos',
+        json={'model': 'x:y', 'active_video_wish_ids': [added['wish']['id']]},
+    )
+
+    prompt = captured['args'][2]
+    assert 'no sudden cuts' in prompt
+    assert 'ВАЖНЫЕ ТРЕБОВАНИЯ' in prompt
+
+
+def test_get_scene_video_job_returns_status(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    video_record = {'video_id': 'vid_x', 'file_path': 'videos/x.mp4', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}
+    monkeypatch.setattr(generation_router.video, 'get_job', lambda job_id: {'status': 'completed', 'video': video_record, 'error': None})
+
+    resp = client.get(f'/api/projects/{pid}/scenes/0/videos/jobs/job_1')
+
+    assert resp.status_code == 200
+    assert resp.json() == {'status': 'completed', 'video': video_record, 'error': None}
+
+
+def test_get_scene_video_job_missing_returns_404(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(generation_router.video, 'get_job', lambda job_id: None)
+
+    resp = client.get(f'/api/projects/{pid}/scenes/0/videos/jobs/does-not-exist')
+
+    assert resp.status_code == 404
+
+
+def test_delete_scene_video_removes_file_and_entry(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    videos_dir = data_root / 'projects' / pid / 'videos'
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    (videos_dir / 'scene_1_abcd1234.mp4').write_bytes(b'MP4DATA')
+
+    project = client.get(f'/api/projects/{pid}').json()
+    video_record = {
+        'video_id': 'vid_abcd1234', 'file_path': 'videos/scene_1_abcd1234.mp4', 'rating': 0,
+        'is_selected': False, 'generated_at': 'now', 'model': 'openrouter:google/veo-3.1',
+    }
+    project['scenes'][0]['videos'] = [video_record]
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.delete(f'/api/projects/{pid}/scenes/0/videos/{video_record["video_id"]}')
+
+    assert resp.status_code == 200
+    assert resp.json()['videos'] == []
+    assert not (videos_dir / 'scene_1_abcd1234.mp4').is_file()
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['scenes'][0]['videos'] == []
+
+
+def test_delete_scene_video_missing_video_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.delete(f'/api/projects/{pid}/scenes/0/videos/does-not-exist').status_code == 404
+
+
+def test_delete_scene_video_out_of_range_scene_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.delete(f'/api/projects/{pid}/scenes/99/videos/x').status_code == 404
+
+
+def test_add_video_wish_creates_card_and_activates_it_for_project(client):
+    pid = client.get('/api/projects').json()[0]['id']
+
+    resp = client.post(f'/api/projects/{pid}/scenes/videos/wishes', json={'text': 'smooth camera movement'})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    wish = body['wish']
+    assert wish['text'] == 'smooth camera movement'
+    assert body['active_video_wish_ids'] == [wish['id']]
+    assert any(w['id'] == wish['id'] for w in body['video_wish_library'])
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['active_video_wish_ids'] == [wish['id']]
+    # Separate library from scene_wish_library - must not leak into it.
+    settings = client.get('/api/settings').json()
+    assert settings['scene_wish_library'] == []
+
+
+def test_add_video_wish_rejects_blank_text(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    assert client.post(f'/api/projects/{pid}/scenes/videos/wishes', json={'text': '  '}).status_code == 422
+
+
+def test_add_video_wish_missing_project_returns_404(client):
+    assert client.post(
+        '/api/projects/does-not-exist/scenes/videos/wishes', json={'text': 'hi'},
+    ).status_code == 404
+
+
+def test_generate_scene_videos_end_to_end_with_openrouter_writes_file_and_persists(client, monkeypatch):
+    """Exercises the real job pipeline (router -> video.start_jobs -> background
+    task -> disk write -> project persistence) with only the OpenRouter HTTP
+    calls mocked - see test_video_provider.py for per-provider request/response
+    shape coverage."""
+    pid = client.get('/api/projects').json()[0]['id']
+    project = client.get(f'/api/projects/{pid}').json()
+    selected_image = next(img for img in project['scenes'][0]['images'] if img['is_selected'])
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    image_path = data_root / 'projects' / pid / selected_image['file_path']
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b'FAKEIMAGEBYTES')
+
+    settings = client.get('/api/settings').json()
+    settings['api_keys']['openrouter'] = 'test-key'
+    client.put('/api/settings', json=settings)
+
+    class _FakeVideoResponse:
+        def __init__(self, status_code, payload=None, content=b''):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = ''
+            self.content = content
+
+        def json(self):
+            return self._payload
+
+    class _FakeVideoAsyncClient:
+        def __init__(self, responses):
+            self._responses = list(responses)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers=None, json=None, params=None):
+            return self._responses.pop(0)
+
+        async def get(self, url, headers=None, params=None):
+            return self._responses.pop(0)
+
+    fake_client = _FakeVideoAsyncClient([
+        _FakeVideoResponse(202, {'id': 'job1', 'status': 'pending'}),
+        _FakeVideoResponse(200, {'id': 'job1', 'status': 'completed', 'unsigned_urls': ['https://cdn.example/vid.mp4'], 'usage': {'cost': 0.5}}),
+        _FakeVideoResponse(200, content=b'MP4DATA'),
+    ])
+    monkeypatch.setattr(generation_router.video.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(generation_router.video.asyncio, 'sleep', AsyncMock())
+
+    resp = client.post(
+        f'/api/projects/{pid}/scenes/0/videos', json={'model': 'openrouter:google/veo-3.1'},
+    )
+    assert resp.status_code == 200
+    job_id = resp.json()['job_ids'][0]
+
+    job = None
+    for _ in range(200):
+        job = client.get(f'/api/projects/{pid}/scenes/0/videos/jobs/{job_id}').json()
+        if job['status'] != 'pending':
+            break
+        time.sleep(0.05)
+    assert job['status'] == 'completed'
+    video_record = job['video']
+    assert video_record['file_path'].startswith('videos/scene_1_') and video_record['file_path'].endswith('.mp4')
+    assert video_record['cost'] == 0.5
+    assert video_record['source_image_id'] == selected_image['image_id']
+
+    written = data_root / 'projects' / pid / video_record['file_path']
+    assert written.is_file()
+    assert written.read_bytes() == b'MP4DATA'
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['scenes'][0]['videos'][-1] == video_record
+
+
 def test_upload_scene_image_file_writes_file_and_appends(client):
     pid = client.get('/api/projects').json()[0]['id']
     before = len(client.get(f'/api/projects/{pid}').json()['scenes'][2]['images'])

@@ -9,6 +9,7 @@ from app import pricing
 TEXT_PRICE = {'kind': 'text', 'input': 0.30, 'output': 2.50}
 CACHED_TEXT_PRICE = {'kind': 'text', 'input': 0.27, 'output': 1.10, 'cached_input': 0.07}
 IMAGE_PRICE = {'kind': 'image', 'per_image': 0.025}
+VIDEO_PRICE = {'kind': 'video', 'per_second': 0.40}
 
 
 def test_text_cost_from_tokens():
@@ -54,6 +55,22 @@ def test_image_cost_multiplies_per_image_price():
     )
     assert source == 'catalog'
     assert amount == pytest.approx(4 * 0.025)
+
+
+def test_video_cost_multiplies_per_second_price():
+    amount, source = pricing.compute_cost(
+        'some:video-model', {'seconds': 6}, {'some:video-model': VIDEO_PRICE},
+    )
+    assert source == 'catalog'
+    assert amount == pytest.approx(6 * 0.40)
+
+
+def test_missing_video_seconds_yields_unknown():
+    amount, source = pricing.compute_cost(
+        'some:video-model', {}, {'some:video-model': VIDEO_PRICE},
+    )
+    assert amount is None
+    assert source == 'unknown'
 
 
 def test_unknown_model_yields_none_not_zero():
@@ -196,6 +213,17 @@ def test_catalog_marks_builtin_rows(monkeypatch):
     rows = {r['model']: r for r in pricing.catalog()}
     assert rows['some:image-model']['source'] == 'builtin'
     assert rows['some:image-model']['per_image'] == pytest.approx(0.025)
+
+
+def test_catalog_includes_per_second_field_for_video_rows(monkeypatch):
+    monkeypatch.setitem(pricing.BUILTIN_PRICING, 'some:video-model', VIDEO_PRICE)
+    rows = {r['model']: r for r in pricing.catalog()}
+    assert rows['some:video-model']['kind'] == 'video'
+    assert rows['some:video-model']['per_second'] == pytest.approx(0.40)
+
+
+def test_validate_overrides_accepts_video_row():
+    assert pricing.validate_overrides({'openrouter:google/veo-3.1': VIDEO_PRICE}) is None
 
 
 def test_catalog_splits_the_composite_id():

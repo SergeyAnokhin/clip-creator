@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from .. import console_log, storage, usage
-from ..providers import images, mureka, scenes, suno, title_card, wish_library
+from ..providers import images, mureka, scenes, suno, title_card, video, wish_library
 from .projects import migrate_legacy_project
 from .settings import DEFAULT_SETTINGS
 
@@ -273,6 +273,115 @@ async def upload_scene_image(
         storage.save_project(project_id, project)
 
     return {'image': image}
+
+
+# ---------- Video stage (image-to-video animation, see providers/video.py) ----------
+# Mirrors the scene-images job/poll shape above, but each generated video is
+# an animation of one already-generated scene image (its `is_selected` one,
+# unless `image_id` overrides it) driven by the scene's own motion_prompt
+# plus any active video wishes - see video.build_prompt.
+
+@router.post('/{project_id}/scenes/videos/wishes')
+async def add_video_wish(project_id: str, body: dict = Body(...)):
+    """Video/animation-prompt equivalent of /scenes/wishes - see
+    wish_library.add_or_get_wish's docstring for why this is a separate
+    library from scene_wish_library. Project-level (not per-scene), same as
+    active_scene_wish_ids."""
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+
+    text = (body.get('text') or '').strip()
+    if not text:
+        raise HTTPException(422, 'text is required')
+
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+    usage_ctx = usage.context('wish_title', project_id, settings)
+    result = await wish_library.add_or_get_wish(text, settings, usage_ctx=usage_ctx, library_key='video_wish_library')
+    wish = result['wish']
+
+    active_video_wish_ids = project.get('active_video_wish_ids', [])
+    if wish['id'] not in active_video_wish_ids:
+        active_video_wish_ids = [*active_video_wish_ids, wish['id']]
+    project['active_video_wish_ids'] = active_video_wish_ids
+    project['updated_at'] = _now()
+    storage.save_project(project_id, project)
+    return {'wish': wish, 'video_wish_library': result['wish_library'], 'active_video_wish_ids': active_video_wish_ids}
+
+
+@router.post('/{project_id}/scenes/{scene_index}/videos')
+async def generate_scene_videos(project_id: str, scene_index: int, body: dict = Body(default={})):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    scene_list = project.get('scenes', [])
+    if scene_index < 0 or scene_index >= len(scene_list):
+        raise HTTPException(404, 'Scene not found')
+    scene = scene_list[scene_index]
+
+    scene_images = scene.get('images', [])
+    image_id = body.get('image_id')
+    source_image = (
+        next((img for img in scene_images if img.get('image_id') == image_id), None) if image_id
+        else next((img for img in scene_images if img.get('is_selected')), None)
+    )
+    if source_image is None:
+        raise HTTPException(422, 'У сцены нет выбранного изображения для анимации')
+
+    motion_prompt = body.get('motion_prompt', scene.get('motion_prompt', ''))
+    count = body.get('count', 1)
+    model = body.get('model', '')
+    aspect_ratio = body.get('aspect_ratio')
+    resolution = body.get('resolution')
+    duration_seconds = body.get('duration_seconds', 5)
+    settings = {**DEFAULT_SETTINGS, **storage.load_settings()}
+
+    active_video_wish_ids = body.get('active_video_wish_ids', project.get('active_video_wish_ids', []))
+    video_wish_lookup = {w['id']: w['text'] for w in wish_library.normalize_wish_library(settings.get('video_wish_library', []))}
+    active_wishes = [video_wish_lookup[wid] for wid in active_video_wish_ids if wid in video_wish_lookup]
+    prompt = video.build_prompt(motion_prompt, active_wishes)
+
+    usage_ctx = usage.context('scene_video', project_id, settings, scene_index=scene_index, count=count)
+    job_ids = video.start_jobs(
+        project_id, scene_index, prompt, source_image['file_path'], source_image['image_id'], count, model, settings,
+        usage_ctx=usage_ctx, aspect_ratio=aspect_ratio, resolution=resolution, duration_seconds=duration_seconds,
+    )
+    return {'job_ids': job_ids}
+
+
+@router.get('/{project_id}/scenes/{scene_index}/videos/jobs/{job_id}')
+async def get_scene_video_job(project_id: str, scene_index: int, job_id: str):
+    job = video.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    return job
+
+
+@router.delete('/{project_id}/scenes/{scene_index}/videos/{video_id}')
+async def delete_scene_video(project_id: str, scene_index: int, video_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        scene_list = project.get('scenes', [])
+        if scene_index < 0 or scene_index >= len(scene_list):
+            raise HTTPException(404, 'Scene not found')
+
+        scene_videos = scene_list[scene_index].get('videos', [])
+        target = next((v for v in scene_videos if v.get('video_id') == video_id), None)
+        if target is None:
+            raise HTTPException(404, 'Video not found')
+
+        remaining = [v for v in scene_videos if v.get('video_id') != video_id]
+        scene_list[scene_index]['videos'] = remaining
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'videos': remaining}
 
 
 @router.post('/{project_id}/reference-images')

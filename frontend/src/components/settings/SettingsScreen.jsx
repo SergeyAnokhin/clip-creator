@@ -37,12 +37,21 @@ const MODEL_PROVIDERS = [
 // only offered for the image-model favorites panel, not text/simple ones.
 const IMAGE_MODEL_PROVIDERS = [...MODEL_PROVIDERS, { id: 'krea', name: 'Krea AI' }];
 
+// Only Google (Veo) and OpenRouter do image-to-video generation for this app
+// - see providers/video.py's module docstring.
+const VIDEO_MODEL_PROVIDERS = [
+  { id: 'google', name: 'Google (Gemini)' },
+  { id: 'google_free', name: 'Google (Gemini) Free' },
+  { id: 'openrouter', name: 'OpenRouter' },
+];
+
 const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes', 'logos'];
 
 const BG_REMOVER_BACKGROUND_TYPES = ['rgba', 'white', 'green', 'blur', 'overlay', 'map'];
 
 export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
+  videoModels, videoWishLibrary,
   sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
   sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
   backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams, logos,
@@ -65,11 +74,17 @@ export default function SettingsScreen({
   const [editingSceneWishId, setEditingSceneWishId] = useState(null);
   const [editSceneWishTitle, setEditSceneWishTitle] = useState('');
   const [editSceneWishText, setEditSceneWishText] = useState('');
+  const [newVideoWishDraft, setNewVideoWishDraft] = useState('');
+  const [editingVideoWishId, setEditingVideoWishId] = useState(null);
+  const [editVideoWishTitle, setEditVideoWishTitle] = useState('');
+  const [editVideoWishText, setEditVideoWishText] = useState('');
   const wishVoice = useFieldVoice({ showToast, L, lang });
   const [catalog, setCatalog] = useState({});
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [imageCatalog, setImageCatalog] = useState({});
   const [refreshingImageModels, setRefreshingImageModels] = useState(false);
+  const [videoCatalog, setVideoCatalog] = useState({});
+  const [refreshingVideoModels, setRefreshingVideoModels] = useState(false);
   const apiKeysFileRef = useRef(null);
   const generalFileRef = useRef(null);
   const priceMap = modelPriceMap(pricing?.models);
@@ -81,6 +96,7 @@ export default function SettingsScreen({
     api.getModelsCatalog().then((res) => {
       setCatalog(res.text || {});
       setImageCatalog(res.image || {});
+      setVideoCatalog(res.video || {});
     }).catch(() => {});
   }, []);
 
@@ -90,7 +106,7 @@ export default function SettingsScreen({
   function exportGeneralFile() {
     downloadJSON('versecraft-settings.json', {
       lang, text_models: textModels, simple_models: simpleModels, image_models: imageModels,
-      image_models_simple: imageModelsSimple,
+      image_models_simple: imageModelsSimple, video_models: videoModels, video_wish_library: videoWishLibrary,
       special_tags: specialTags, suno_base_prompt: sunoBasePrompt,
       suno_reference_examples: referenceExamples, suno_wish_library: wishLibrary,
       request_timeout_seconds: requestTimeoutSeconds,
@@ -243,6 +259,37 @@ export default function SettingsScreen({
     } finally {
       setRefreshingImageModels(false);
     }
+  }
+
+  async function refreshVideoModels() {
+    setRefreshingVideoModels(true);
+    try {
+      const entries = await Promise.all(
+        VIDEO_MODEL_PROVIDERS.map((p) => api.listVideoModels(p.id).catch(() => ({ provider: p.id, source: 'error', models: [], error: 'failed' }))),
+      );
+      const next = {};
+      entries.forEach((entry) => { next[entry.provider] = entry; });
+      setVideoCatalog((prev) => ({ ...prev, ...next }));
+      actions.refreshPricing?.();
+    } finally {
+      setRefreshingVideoModels(false);
+    }
+  }
+
+  function startEditVideoWish(wish) {
+    setEditingVideoWishId(wish.id);
+    setEditVideoWishTitle(wish.title);
+    setEditVideoWishText(wish.text);
+  }
+  function cancelEditVideoWish() {
+    setEditingVideoWishId(null);
+  }
+  function saveEditVideoWish() {
+    const title = editVideoWishTitle.trim();
+    const text = editVideoWishText.trim();
+    if (!title || !text) return;
+    actions.updateVideoWishSnippet(editingVideoWishId, { title, text });
+    setEditingVideoWishId(null);
   }
 
   return (
@@ -546,6 +593,20 @@ export default function SettingsScreen({
                   onAddFavorite={actions.addImageModelSimpleFavorite}
                   onRemoveFavorite={actions.removeImageModelSimpleFavorite}
                   onSetDefault={actions.setImageModelSimpleDefault}
+                />
+              </div>
+
+              <div className="settings-panel">
+                <div className="settings-panel-label">{L.settings_videoModels}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_videoModelsHint}</div>
+                <ModelFavorites
+                  L={L} providers={VIDEO_MODEL_PROVIDERS}
+                  favorites={videoModels.favorites} defaultValue={videoModels.default}
+                  catalog={videoCatalog} refreshing={refreshingVideoModels} onRefresh={refreshVideoModels}
+                  prices={priceMap}
+                  onAddFavorite={actions.addVideoModelFavorite}
+                  onRemoveFavorite={actions.removeVideoModelFavorite}
+                  onSetDefault={actions.setVideoModelDefault}
                 />
               </div>
             </>
@@ -913,6 +974,64 @@ export default function SettingsScreen({
                 <button
                   className="btn btn-accent-soft"
                   onClick={() => { actions.saveSceneWishToLibrary(newSceneWishDraft); setNewSceneWishDraft(''); }}
+                >
+                  {L.add}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-panel">
+              <div className="settings-panel-label">{L.video_wishesTitle}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {sortByUseCount(videoWishLibrary).map((wish) => (
+                  editingVideoWishId === wish.id ? (
+                    <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                        <input
+                          className="field"
+                          value={editVideoWishTitle}
+                          onChange={(e) => setEditVideoWishTitle(e.target.value)}
+                          placeholder={L.settings_wishLibraryTitleLabel}
+                          autoFocus
+                        />
+                      </div>
+                      <textarea
+                        className="suno-textarea"
+                        style={{ minHeight: 70 }}
+                        value={editVideoWishText}
+                        onChange={(e) => setEditVideoWishText(e.target.value)}
+                        placeholder={L.settings_wishLibraryTextLabel}
+                      />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={saveEditVideoWish}>{L.save}</button>
+                        <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditVideoWish}>{L.cancel}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="settings-row" key={wish.id} title={wish.text}>
+                      <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {wish.title}
+                      </span>
+                      <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.settings_wishLibraryEdit} onClick={() => startEditVideoWish(wish)}>
+                        <Pencil size={13} />
+                      </button>
+                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeVideoWishSnippet(wish.id)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <input
+                  className="field"
+                  value={newVideoWishDraft}
+                  onChange={(e) => setNewVideoWishDraft(e.target.value)}
+                  placeholder={L.video_wishPlaceholder}
+                />
+                <button
+                  className="btn btn-accent-soft"
+                  onClick={() => { actions.saveVideoWishToLibrary(newVideoWishDraft); setNewVideoWishDraft(''); }}
                 >
                   {L.add}
                 </button>

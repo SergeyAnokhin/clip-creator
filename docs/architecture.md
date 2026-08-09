@@ -39,13 +39,14 @@ error rather than silently, but the backend doesn't check for it at startup.
 
 ## The workflow
 
-A project moves through six stages, all inside one workflow screen:
+A project moves through seven stages, all inside one workflow screen:
 
 ```text
-Lyrics  →  Music  →  Music gen  →  Scenes        →  Images            →  Title Card
-blocks     style +   real audio     storyboard        images per scene,    poster text in the
-           lyrics    tracks via     (text only)       rated, top pick =    style of 4 picked
-                      Mureka                           main                 reference images
+Lyrics  →  Music  →  Music gen  →  Scenes        →  Images            →  Title Card        →  Video
+blocks     style +   real audio     storyboard        images per scene,    poster text in the   animate each
+           lyrics    tracks via     (text only)       rated, top pick =    style of 4 picked     scene's picked
+                      Mureka                           main                 reference images      image + motion
+                                                                                                    prompt
 ```
 
 1. **Lyrics** — a poem (pasted text or a parsed URL) is split into blocks on
@@ -100,6 +101,16 @@ blocks     style +   real audio     storyboard        images per scene,    poste
    **Poster constructor** (same stage, below the variants gallery) is the
    step that turns one of these overlays into an actual poster — see
    "Poster constructor" below.
+7. **Video** (`stage: 'video'`) — the last stage: turns each scene's already-
+   picked image (from Images) plus its `motion_prompt` (from Scenes, still
+   editable here) into one or more short animated clips via an
+   image-to-video model. Unlike every other stage (a scrollable list of every
+   scene), this one shows **one scene at a time** with prev/next + a jump
+   strip, since reviewing/tuning an animation is a slower, more deliberate
+   task than picking a picture. `scenes[n].videos[]` accumulates results the
+   same way `images[]` does (rateable, deletable, one `is_selected` pick) -
+   see `providers/video.py` below for the real seam and "Video generation"
+   for the full request/response shapes.
 
 Both stages also share a `hideMotionPrompt` toggle (a `settings.json`
 preference, not per-project) that hides every `motion_prompt` field when a
@@ -118,7 +129,7 @@ without re-running the LLM call that wrote its prompt).
 ## Frontend state
 
 State lives in [`src/hooks/`](../frontend/src/hooks/), one hook per domain
-(toast, viewport, settings, projects, the five stages, voice).
+(toast, viewport, settings, projects, the seven stages, voice).
 [`App.jsx`](../frontend/src/App.jsx) is just the composition root: it owns
 navigation, calls the hooks in dependency order, and assembles each stage's
 `{...state, actions}` prop bundle. No state library and no context — every
@@ -135,7 +146,9 @@ each keystroke isn't a request.
 [`text_models.py`](../backend/app/providers/text_models.py),
 [`image_models.py`](../backend/app/providers/image_models.py),
 [`scenes.py`](../backend/app/providers/scenes.py),
-[`images.py`](../backend/app/providers/images.py) and
+[`images.py`](../backend/app/providers/images.py),
+[`video_models.py`](../backend/app/providers/video_models.py),
+[`video.py`](../backend/app/providers/video.py) and
 [`mureka.py`](../backend/app/providers/mureka.py) are the seams routers call
 without knowing whether the result is canned or real. Keys come from
 `app_data/settings.json`.
@@ -445,6 +458,79 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     window in which an unrelated debounced `PATCH` could revert the job's
     just-written `scenes[n].images` is longer than it was for the old
     synchronous stub.
+- `video.start_jobs`/`get_job` is the Video stage's provider seam —
+  genuinely **image-to-video**: it sends one already-generated scene image
+  (the scene's `is_selected` one, or an explicit `image_id` override)
+  alongside the scene's `motion_prompt` (plus any active video wishes, see
+  `video.build_prompt`). Same background-job/poll shape as `images.py` (its
+  own `_jobs` dict), but a longer poll interval (6s) and timeout (600s) —
+  video generation runs for minutes, not seconds. Only two providers are
+  confirmed to do image-to-video for this app (endpoints confirmed against
+  each provider's own docs, 2026-08):
+  - **Google Veo** (reachable via either the `google` or `google_free`
+    provider id, same as elsewhere): `POST .../v1beta/models/{model_id}
+    :predictLongRunning` with the source frame as `instances[0].image
+    .inlineData{mimeType, data}` (base64) + `prompt`, and
+    `parameters{aspectRatio, resolution, durationSeconds}`
+    (ai.google.dev/gemini-api/docs/veo). Unlike Imagen's `:predict` (a single
+    synchronous call), this returns a long-running operation resource name
+    (`{name: "models/.../operations/..."}`) that must be polled — `GET
+    .../v1beta/{operation_name}` (same host, `key` query param) until `done:
+    true`; the finished video's URI is at `response.generateVideoResponse
+    .generatedSamples[0].video.uri`, itself a Google-hosted resource that
+    needs the same `key` query param to download (not a plain public URL).
+    Veo 3.1 only accepts `durationSeconds` of `"4"`, `"6"` or `"8"` (as
+    strings) — `video._nearest_google_duration` rounds the requested
+    duration to the closest of those. No per-call cost in the response — cost
+    is computed from the catalog's `per_second` rate (see
+    [usage-tracking.md](usage-tracking.md)).
+  - **OpenRouter's Unified Video API**: `POST
+    https://openrouter.ai/api/v1/videos` (confirmed against openrouter.ai
+    /docs/guides/overview/multimodal/video-generation, 2026-08) with
+    `frame_images: [{type: 'image_url', image_url: {url}, frame_type:
+    'first_frame'}]` (a `data:` URI works directly, no upload step) for
+    image-to-video, plus `duration`/`resolution`/`aspect_ratio`. Returns `202
+    {id, polling_url, status}` immediately; poll `GET
+    /api/v1/videos/{id}` until `status` is `completed`/`failed`, video at
+    `unsigned_urls[0]` (a pre-signed download link, no auth needed).
+    `usage.cost` in the poll response is OpenRouter's own exact price for the
+    call — threaded through as `provider_cost`, same bypass `images.py`'s
+    `_generate_openrouter` uses for images.
+  - `POST /api/projects/{id}/scenes/{n}/videos` (`{count?, model,
+    motion_prompt?, image_id?, aspect_ratio?, resolution?,
+    duration_seconds?, active_video_wish_ids?}`) resolves which image to
+    animate (`422` if the scene has no `is_selected` image and none is
+    given), builds the prompt, and starts one job per requested variant
+    (`count` defaults to 1 in the UI — video is expensive/slow enough that a
+    variant-count picker wasn't asked for). `GET
+    .../videos/jobs/{job_id}` polls one job (`{status, video, error, debug}`
+    — `debug` a redacted `{request, response}` snapshot, same convention as
+    every other provider seam's debug panel). `DELETE
+    .../videos/{video_id}` removes one result (drops it from
+    `scene.videos`, deletes its file).
+  - A completed job writes to `videos/scene_{n}_{shorthex}.mp4` and appends a
+    `Video` record (`rating`/`is_selected`/`model`/`cost` mirror `Image`'s
+    shape, plus `motion_prompt`/`aspect_ratio`/`resolution`
+    /`duration_seconds`/`generation_ms`/`source_image_id` — see
+    `data-model.md`) — append-only like `images[]`.
+  - `video_models.py` mirrors `image_models.py`'s catalog shape for the
+    Settings "refresh models" button (`GET
+    /api/settings/video-models/{provider}`): Google's listing is filtered to
+    `predictLongRunning`-capable models (the real signal Veo answers
+    through, unlike Imagen's `predict` or Nano Banana's `generateContent`);
+    OpenRouter uses its own dedicated `GET /api/v1/videos/models` discovery
+    endpoint (unlike its image API, which piggybacks on the general
+    `/models` listing) — confirmed against openrouter.ai's video-generation
+    docs, 2026-08. No curated fallback for either — only these two providers
+    are wired, and a failed live call just surfaces `source: 'error'`.
+  - `settings.video_models` is a single favorites list (no cheap/quality
+    tier split like `image_models`/`image_models_simple` — not asked for);
+    `settings.video_wish_library` is a separate wish library from
+    `scene_wish_library` (same `add_or_get_wish`/`use_count` mechanics),
+    resolved and folded into the scene's `motion_prompt` as an emphasized
+    numbered block (`video.build_prompt`, same "ВАЖНЫЕ ТРЕБОВАНИЯ
+    ПОЛЬЗОВАТЕЛЯ" convention `scenes.py` uses for its own wishes) right
+    before a generation call — see `data-model.md`.
 - `title_card.start_jobs`/`get_job` is the Title Card stage's provider seam —
   same background-job/poll shape as `images.py` above (its own `_jobs` dict,
   never shared with it), but genuinely **image-to-image**: it sends the

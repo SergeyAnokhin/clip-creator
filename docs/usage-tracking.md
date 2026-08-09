@@ -1,10 +1,11 @@
 # AI usage & cost tracking
 
 Every paid AI call the backend makes (Suno text generation, wish-title
-completion, scene storyboard generation, scene image generation, title card
+completion, scene storyboard generation, scene image generation, scene video
+(animation) generation, title card
 generation, title card background removal, prompt
 translation) is recorded to a local ledger with
-tokens/images/characters, a computed cost, and short previews of the prompt/response.
+tokens/images/video-seconds/characters, a computed cost, and short previews of the prompt/response.
 The frontend reads that ledger for a "Расходы"/"Usage" screen, a
 today's-spend pill in every header, and price hints in the model pickers.
 The same calls also print a colored, emoji-tagged line to the backend's dev
@@ -44,12 +45,12 @@ bounds how much has to be read for a "today" or date-ranged query.
 | --- | --- | --- |
 | `id` | str | `u_` + 12 hex chars |
 | `ts` | str | UTC ISO-8601, `…Z` |
-| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `title_card` \| `title_card_bg_remove` \| `translate` |
+| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `scene_video` \| `title_card` \| `title_card_bg_remove` \| `translate` |
 | `project_id` | str \| null | The project slug (= "стих"); `null` for `wish_title` calls made from the Settings → Wishes tab (library-only, no project); set for `wish_title` calls made from a project's Suno stage ("Применить"). Always `null` for `translate` — the "translate" button isn't tied to any one project's stored state |
 | `provider`, `model_id`, `model` | str | `model` is the `"{provider}:{model_id}"` composite, denormalized for grouping |
 | `status` | str | `ok` \| `error` |
 | `duration_ms` | int | Wall-clock around the provider call |
-| `units` | dict | `{kind, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, total_tokens, images, compute_seconds, characters}` — fields the provider didn't report are `null`/absent, not `0`; `characters` is `translate`-only (input length) |
+| `units` | dict | `{kind, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, total_tokens, images, seconds, compute_seconds, characters}` — fields the provider didn't report are `null`/absent, not `0`; `characters` is `translate`-only (input length); `seconds` is `scene_video`-only (the requested `duration_seconds`, used to price Google Veo calls off the catalog's per-second rate) |
 | `cost` | dict | `{amount, currency, source, pricing_version, saved_amount?}` — see below |
 | `prompt_preview`, `response_preview` | str | First 300 chars (see "Preview convention") |
 | `prompt_chars`, `response_chars` | int | True length of what was actually sent/received |
@@ -60,8 +61,9 @@ bounds how much has to be read for a "today" or date-ranged query.
 or the units needed to compute it are missing; `cost.source` is one of:
 
 - `provider` — the API itself reported an exact cost (currently only
-  OpenRouter, for both text via `usage: {include: true}` on the request and
-  image generation via its Unified Image API's `usage.cost`). Never
+  OpenRouter, for text via `usage: {include: true}` on the request, image
+  generation via its Unified Image API's `usage.cost`, and video generation
+  via its Unified Video API's poll-response `usage.cost`). Never
   recomputed.
 - `catalog` — computed from `pricing.BUILTIN_PRICING`/overrides. **Recomputed
   on every read** against the *current* catalog (see `usage._resolved_cost`),
@@ -138,7 +140,8 @@ Pure data + arithmetic, no network/disk access, no dependency on `usage.py`
 `BUILTIN_PRICING` is keyed by the same `"{provider}:{model_id}"` composite as
 everywhere else, text rows as `{kind: 'text', input, output, cached_input?}`
 (USD per 1M tokens), image rows as `{kind: 'image', per_image}` (USD per
-generated image).
+generated image), video rows as `{kind: 'video', per_second}` (USD per
+output second — Google Veo's own billing unit; see `providers/video.py`).
 
 **`BUILTIN_PRICING` only holds prices that were actually looked up, cited by
 source.** It used to come pre-filled with prices "seeded from memory" rather
@@ -229,6 +232,8 @@ ones someone has already priced.
 | Replicate background remover (`title_card.py`'s `remove_background`/`_generate_background_remover`) | none | `units: {images: 1}` only, catalog-priced off `pricing.BUILTIN_PRICING`'s `replicate:851-labs/background-remover` row (`$0.00044`/run, replicate.com's own page) — the Title Card stage's "remove background" button, task `title_card_bg_remove` |
 | Google Translate (`providers/translate.py`) | none | `units: {characters: len(text)}` only — `pricing.py` has no per-character row shape, so cost always reads `unknown` unless a manual override is entered for `google_translate:v2` |
 | FAL outpaint (`images.py`'s `crop_image`/`_call_outpaint_fal`, the Images stage's crop/outpaint editor) | none (billed per output megapixel, a shape `pricing.py`'s catalog can't express — only `per_image` exists) | Cost computed directly from the downloaded result's pixel size and set on `usage_out['cost']`, same provider-reported-cost bypass as OpenRouter above — **no `pricing.BUILTIN_PRICING` row**, so don't add one expecting it to be used; a plain in-bounds crop (no outpaint call) is a separate, unrelated `local:crop` model priced at a hardcoded `0.0`, same idea as the local background-remover method |
+| Google Veo (`providers/video.py`'s `_generate_google_veo`) | none | `units: {seconds: duration_seconds}`, catalog-priced off `pricing.BUILTIN_PRICING`'s `google:veo-3.1-*` rows (`per_second`, ai.google.dev/gemini-api/docs/pricing) — task `scene_video` |
+| OpenRouter video (`providers/video.py`'s `_generate_openrouter_video`) | poll response's `usage.cost` | Exact USD, `source: 'provider'` — same treatment as OpenRouter text/images |
 
 `text_models.list_models` / `image_models.list_models` (the Settings
 "refresh models" catalog calls) are **not logged** — they're free/no-cost
@@ -275,7 +280,7 @@ panel only has whatever `POST .../suno/generate` returns.
 
 | File | Role |
 | --- | --- |
-| [`lib/pricing.js`](../frontend/src/lib/pricing.js) | Pure: `formatCost`, `formatTokens`, `estimateCost`, `priceLabel`, `modelPriceMap` — vitest-covered in `pricing.test.js` |
+| [`lib/pricing.js`](../frontend/src/lib/pricing.js) | Pure: `formatCost`, `formatTokens`, `estimateCost`, `estimateVideoCost`, `priceLabel`, `modelPriceMap` — vitest-covered in `pricing.test.js`. `priceLabel` handles all three kinds (`text`/`image`/`video`); `estimateVideoCost(price, seconds)` mirrors `estimateCost` for the `video` kind (`per_second`) |
 | [`hooks/useUsage.js`](../frontend/src/hooks/useUsage.js) | `today`/`pricing` load once on mount (cheap); `periodTotals` loads lazily via `loadPeriodTotals` (called when the pill first expands); `records`/`summary` load only when the Usage screen calls `loadRecords`/`loadSummary`, so a user who never opens it never pays for that request |
 | [`components/UsagePill.jsx`](../frontend/src/components/UsagePill.jsx) | Shared header cost pill, used in `home/Header.jsx`, `workflow/WorkflowHeader.jsx`, and `settings/SettingsScreen.jsx`'s own header. Collapsed: today's spend only. Click: expands an in-place popover with today/week/month/all-time and an "Все расходы →" link — that link is the only way to reach the full Usage screen from here. Also shows a "Сэкономлено сегодня" line when `periodTotals.today.saved_cost > 0` (a `google_free` call happened today) |
 | [`components/usage/UsageScreen.jsx`](../frontend/src/components/usage/UsageScreen.jsx) + `UsageFilters`/`UsageSummary`/`UsageTable` | The "Расходы"/"Usage" screen — filters, group-by summary, an expandable record table showing prompt/response previews |

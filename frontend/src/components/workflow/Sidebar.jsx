@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, Clapperboard, Image as ImageIcon, Loader, ListMusic, Minus, Music2, Music4, Type } from 'lucide-react';
+import { CheckCircle2, Circle, Clapperboard, Film, Image as ImageIcon, Loader, ListMusic, Minus, Music2, Music4, Type } from 'lucide-react';
 
 const STATUS_ICON = { pending: Circle, processing: Loader, completed: CheckCircle2 };
 const STATUS_COLOR = { pending: 'rgba(255,255,255,0.25)', processing: '#fbbf24', completed: '#4ade80' };
@@ -11,6 +11,7 @@ function stageDefs(L) {
     { key: 'scenes', name: L.stage_scenes, icon: Clapperboard, sub: [L.sub_script, L.sub_wishes] },
     { key: 'images', name: L.stage_images, icon: ImageIcon, sub: [L.sub_images, L.sub_rating] },
     { key: 'title_card', name: L.stage_titleCard, icon: Type, sub: [L.sub_titleCardText, L.sub_titleCardStyle] },
+    { key: 'video', name: L.stage_video, icon: Film, sub: [L.sub_videoGen, L.sub_videoRating] },
   ];
 }
 
@@ -20,6 +21,12 @@ function stageStatus(key, project) {
   if (key === 'mureka') return (project.mureka?.tracks?.length ?? 0) > 0 ? 'completed' : 'pending';
   if (key === 'scenes') return project.scenes.length > 0 ? 'completed' : 'pending';
   if (key === 'title_card') return (project.title_card?.variants?.length ?? 0) > 0 ? 'completed' : 'pending';
+  if (key === 'video') {
+    const total = project.scenes.length;
+    const ready = project.scenes.filter((s) => s.videos && s.videos.length > 0).length;
+    if (total === 0) return 'pending';
+    return ready === total ? 'completed' : ready > 0 ? 'processing' : 'pending';
+  }
   const total = project.scenes.length;
   const ready = project.scenes.filter((s) => s.images && s.images.length > 0).length;
   if (total === 0) return 'pending';

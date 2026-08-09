@@ -44,6 +44,14 @@ export function estimateCost(price, { inputTokens = 0, outputTokens = 0, images 
   return null;
 }
 
+/** `price` is one row from GET /api/usage/pricing's `models[]` for a video
+ * model (`kind: 'video'`, `per_second`). Ex-ante only, mirrors estimateCost
+ * above - the actual cost of a video call is only known once it completes. */
+export function estimateVideoCost(price, seconds) {
+  if (!price || price.kind !== 'video' || price.per_second == null) return null;
+  return seconds * price.per_second;
+}
+
 /** Short label for a model picker option / favorites row, e.g.
  * "$0.30/$2.50" or "$0.025 за кадр" - text prices are always per 1M tokens,
  * which is obvious enough not to spell out; the image unit isn't, so it
@@ -58,6 +66,10 @@ export function priceLabel(price, L) {
   if (price.kind === 'image') {
     if (price.per_image == null) return L.price_unknown;
     return `$${trimZeros(price.per_image)} ${L.price_perImage}`;
+  }
+  if (price.kind === 'video') {
+    if (price.per_second == null) return L.price_unknown;
+    return `$${trimZeros(price.per_second)} ${L.price_perSecond}`;
   }
   return L.price_unknown;
 }

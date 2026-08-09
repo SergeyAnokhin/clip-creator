@@ -13,6 +13,7 @@ app_data/
     <slug>/                  # slug = "Author - Title", filesystem-sanitized = project id
       config.json            # the whole project
       images/scene_{n}_{shorthex}.{png|jpg|webp}
+      videos/scene_{n}_{shorthex}.mp4
       references/ref_{uuid}.{ext}
       titlecard/{shorthex}.{png|jpg|webp}
       titlecard/posters/{shorthex}.png   # Poster constructor output (flattened)
@@ -48,6 +49,7 @@ app_data/
 | `source_url` | str | Original URL, if the project came from one |
 | `title_card` | TitleCard \| absent | Title Card stage state — absent on projects that predate this stage; the frontend and every backend read site default it to `{reference_image_paths: [], variants: [], posters: []}` (`text_block` is seeded lazily on first stage visit, see below) |
 | `active_title_card_wish_ids` | str[] | Ids of `settings.title_card_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (poster wishes vs. scene/imagery ones) |
+| `active_video_wish_ids` | str[] | Ids of `settings.video_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (animation/video wishes, e.g. "плавное движение камеры") |
 | `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: []}` |
 
 **Project rename** (`app_data/projects/_redirects.json`): when a `PATCH` changes
@@ -73,7 +75,8 @@ avoids.
 a compact single-line card. `importance` (1-5) is **dead** — still written for
 backward compatibility, never read or edited.
 
-**Scene**: `{lyric_segment, static_prompt, motion_prompt, images[]}`.
+**Scene**: `{lyric_segment, static_prompt, motion_prompt, images[], videos[]}`
+— `videos` is absent/`[]` until the Video stage first generates one.
 
 **Image**: `{image_id, file_path, rating, is_selected, generated_at, model,
 aspect_ratio, cost, source_image_id?}` — `file_path` is relative to the
@@ -87,6 +90,29 @@ result (`images.crop_image` — see the API table below): it points at the
 original image's `image_id`, and the original is left untouched — cropping
 always **appends** a new image, mirroring `TitleCardVariant.source_variant_id`
 below.
+
+**Video** (Video/animation stage, `providers/video.py`): `{video_id,
+file_path, rating, is_selected, generated_at, model, motion_prompt,
+aspect_ratio, resolution, duration_seconds, generation_ms, cost,
+source_image_id}` — `file_path` is `videos/scene_1_a1b2c3d4.mp4` (always
+`.mp4`, both providers). `model` is the `{provider}:{model_id}` composite
+(`provider ∈ google\|google_free\|openrouter` — only these two do
+image-to-video generation for this app, see `architecture.md`).
+`motion_prompt` is a snapshot of the exact prompt sent (the scene's own
+`motion_prompt` plus any active video wishes folded in, see
+`video.build_prompt`) — kept alongside the live, still-editable
+`scene.motion_prompt` so a past video's prompt stays inspectable even after
+the field is edited again. `source_image_id` points at the `Image` (from the
+same scene's `images[]`) that was animated — the scene's `is_selected` image
+at generation time, or an explicit override. `generation_ms` is wall-clock
+time the call took (independent of the usage ledger's `duration_ms`, though
+they're the same number - stored on the record itself so it's visible
+without opening the debug panel or Usage screen). `cost` follows the same
+priority as `Image.cost`: a provider-reported price (OpenRouter's
+`usage.cost`) wins over the catalog (`pricing.BUILTIN_PRICING`'s
+`per_second` rate × `duration_seconds`, Google Veo). `videos[]` is
+append-only, like `images[]`; deleting one removes it from this array and
+unlinks its file (`DELETE .../scenes/{n}/videos/{video_id}`).
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` — `text_block`
 is one free-text field the user edits directly (not separate title/author
@@ -354,6 +380,7 @@ without polluting any spend total. See [usage-tracking.md](usage-tracking.md).
 
 `{lang, api_keys{replicate,google,google_free,fal,openrouter,deepseek,krea,google_translate,mureka}, text_models{favorites[],default},
 simple_models{favorites[],default}, image_models{favorites[],default}, image_models_simple{favorites[],default},
+video_models{favorites[],default}, video_wish_library[],
 special_tags[], suno_base_prompt, suno_reference_examples[], suno_wish_library[],
 scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], pricing_overrides{},
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
@@ -417,6 +444,24 @@ partial merge server-side, so the frontend can persist e.g. just
   and the per-generation `ModelPicker` in `ImagesStage.jsx` (a tier toggle
   picks which list feeds it), whose composite is what `providers/images.py`
   actually dispatches to a real provider call (see `architecture.md`).
+  `video_models` is a single favorites list (no cheap/quality tier split,
+  unlike the image pair — not asked for) accepting `provider ∈
+  google\|google_free\|openrouter` only (`_VIDEO_MODEL_PROVIDERS` in
+  `routers/settings.py` — the only two providers confirmed to do
+  image-to-video generation for this app, see `architecture.md`), populated
+  via [`providers/video_models.py`](../backend/app/providers/video_models.py)
+  and the Video stage's own `ModelPicker`.
+- `video_wish_library` — global, reusable animation/video-prompt wish
+  "cards", same `{id, title, text, created_at, use_count?}` shape and
+  `clean_wish_and_title` flow as `scene_wish_library` above, but its own
+  separate list (`wish_library.add_or_get_wish`'s
+  `library_key='video_wish_library'`) — animation wishes ("плавное движение
+  камеры", "без резких склеек") are a different domain from scene/imagery
+  wishes. Each project toggles a subset on via its own
+  `active_video_wish_ids` (see above); resolved wish texts are folded into
+  the scene's `motion_prompt` as an emphasized numbered block
+  (`video.build_prompt`, same "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" convention as
+  `scenes.py`'s wishes block) right before a generation call.
 - `suno_base_prompt` — the general "how to adapt for this music service"
   instructions, sent on every real (non-stub) `suno/generate` call.
   `GET /api/settings/suno-prompt-presets` (not part of `settings.json` — a
@@ -548,9 +593,10 @@ partial merge server-side, so the frontend can persist e.g. just
 
 ## Model catalog (`model_catalog.json`)
 
-`{text: {provider: {source, models, error?}}, image: {provider: {...}}}` —
-the last-known-good response of every `GET /api/settings/models/{provider}`
-and `GET /api/settings/image-models/{provider}` call, keyed by provider,
+`{text: {provider: {source, models, error?}}, image: {provider: {...}}, video: {provider: {...}}}` —
+the last-known-good response of every `GET /api/settings/models/{provider}`,
+`GET /api/settings/image-models/{provider}` and `GET
+/api/settings/video-models/{provider}` call, keyed by provider,
 managed by `storage.load_model_catalog`/`save_model_catalog`. Written by
 `routers/settings.py::_remember_catalog_entry` on every successful (non-
 `error`) model fetch, so a transient API failure never overwrites a
@@ -575,6 +621,9 @@ reference-image upload (multipart).
 | `GET /api/settings` / `PUT /api/settings` | Settings dict (merged over defaults) |
 | `GET /api/settings/models/{provider}` | `provider` = `google\|google_free\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/`google_free`/OpenRouter/DeepSeek query the provider's real API with the stored key (`google_free` hits the same Gemini endpoint as `google`, just with its own key); Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
 | `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)). Also upserted into the persisted model catalog |
+| `GET /api/settings/video-models/{provider}` | Same shape, `provider ∈ google\|google_free\|openrouter` only — Google filtered to `predictLongRunning`-capable (Veo) models, OpenRouter via its dedicated `GET /api/v1/videos/models` discovery endpoint ([`providers/video_models.py`](../backend/app/providers/video_models.py)). Also upserted into the persisted model catalog (under its own `'video'` key, see below) |
+| `POST /api/settings/video-wish-library` | `{text, model?}` → `{video_wish_library, wish}`. Same shape/behaviour as `/settings/wish-library`, against `video_wish_library` instead |
+| `PATCH /api/settings/video-wish-library/{id}` | `{title?, text?}` → `{video_wish_library, wish}`. Manual edit, no LLM call — same as `/settings/wish-library/{id}` |
 | `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
 | `GET /api/settings/mureka-billing` | → `{account_id, balance, total_recharge, total_spending, concurrent_request_limit, trace_id}` — passthrough of Mureka's `GET /v1/account/billing` (confirmed live, 2026-08), backs the balance pill on the Mureka stage. The currency/unit of `balance` isn't documented anywhere on Mureka's side, so it's shown as-is, no invented conversion; `502` if the call fails (e.g. no API key) |
 | `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
@@ -587,6 +636,10 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/scenes/wishes` | `{text}` → `{wish, scene_wish_library, active_scene_wish_ids}`. Scene-imagery equivalent of `suno/wishes` — cleans+titles then activates for this project |
 | `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background generation job per requested variant (`model` = `"{provider}:{model_id}"` from `settings.image_models`/`image_models_simple`, provider ∈ `krea\|replicate\|fal\|google\|openrouter`) and returns immediately; poll each job below. A finished job appends its image to `scenes[n].images` on its own, independent of polling. Also called from the Scenes stage itself (`useScenesStage.js`'s `generateSceneImage`, always `count: 1` against the cheap-tier `sceneImageModel`) for a quick single-image preview without leaving that stage — same endpoint, same `scenes[n].images` array, just a different caller |
 | `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useImagesStage.js`); job state is in-memory only (see `architecture.md`) |
+| `POST /api/projects/{id}/scenes/videos/wishes` | `{text}` → `{wish, video_wish_library, active_video_wish_ids}`. Video/animation equivalent of `scenes/wishes` — cleans+titles via `wish_library.add_or_get_wish` (`library_key='video_wish_library'`) then immediately activates it for this project. Project-level (not per-scene), like `active_scene_wish_ids` |
+| `POST /api/projects/{id}/scenes/{n}/videos` | `{count?, model, motion_prompt?, image_id?, aspect_ratio?, resolution?, duration_seconds?, active_video_wish_ids?}` → `{job_ids}` — animates one scene image (`image_id`, or the scene's own `is_selected` image if omitted — `422` if neither exists) using `motion_prompt` (defaults to the scene's own field) plus resolved active video wishes (`video.build_prompt`); `model` must be `provider ∈ google\|google_free\|openrouter`. Same immediate-return/background-job shape as scene images (`providers/video.py`'s `start_jobs`) |
+| `GET /api/projects/{id}/scenes/{n}/videos/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', video: Video\|null, error: str\|null, debug: {request, response}\|null}` — polled every 3s by the frontend (`useVideoStage.js`, video generation runs for minutes); in-memory-only job state (`providers/video.py`'s own `_jobs` dict) |
+| `DELETE /api/projects/{id}/scenes/{n}/videos/{video_id}` | → `{videos}` — removes one from `scene.videos` and deletes its file |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
 | `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |

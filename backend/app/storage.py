@@ -159,13 +159,13 @@ def load_model_catalog() -> dict:
     """Last-known-good model list per provider, kept across restarts so the
     Settings "Models"/"Prices" tabs have something to show before anyone
     presses "Refresh models". Shape: {'text': {provider: {source, models,
-    error}}, 'image': {provider: {...}}} - same entry shape `list_models`
-    already returns."""
+    error}}, 'image': {provider: {...}}, 'video': {provider: {...}}} - same
+    entry shape `list_models` already returns."""
     f = model_catalog_file()
     if not f.is_file():
-        return {'text': {}, 'image': {}}
+        return {'text': {}, 'image': {}, 'video': {}}
     data = json.loads(f.read_text(encoding='utf-8'))
-    return {'text': data.get('text') or {}, 'image': data.get('image') or {}}
+    return {'text': data.get('text') or {}, 'image': data.get('image') or {}, 'video': data.get('video') or {}}
 
 
 def save_model_catalog(data: dict) -> None:

@@ -1,4 +1,4 @@
-const TASKS = ['suno_generate', 'wish_title', 'scene_storyboard', 'scene_image', 'translate'];
+const TASKS = ['suno_generate', 'wish_title', 'scene_storyboard', 'scene_image', 'scene_video', 'translate'];
 const PROVIDERS = ['google', 'google_free', 'openrouter', 'deepseek', 'replicate', 'fal', 'krea', 'google_translate'];
 const STATUSES = ['ok', 'error'];
 

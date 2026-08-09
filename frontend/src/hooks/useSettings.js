@@ -10,6 +10,7 @@ const DEFAULT_TEXT_MODELS = { favorites: [], default: 'google:gemini-2.5-flash' 
 const DEFAULT_SIMPLE_MODELS = { favorites: [], default: '' };
 const DEFAULT_IMAGE_MODELS = { favorites: [], default: '' };
 const DEFAULT_IMAGE_MODELS_SIMPLE = { favorites: [], default: '' };
+const DEFAULT_VIDEO_MODELS = { favorites: [], default: '' };
 const DEFAULT_BG_REMOVER_PARAMS = { background_type: 'rgba', format: 'png', threshold: 0, reverse: false };
 const DEFAULT_BG_REMOVER_METHOD = 'replicate';
 const DEFAULT_BG_REMOVER_LOCAL_PARAMS = { bg: 'black', threshold: 40 };
@@ -26,6 +27,8 @@ export function useSettings({ showToast, onAiCall }) {
   const [simpleModels, setSimpleModels] = useState(DEFAULT_SIMPLE_MODELS);
   const [imageModels, setImageModels] = useState(DEFAULT_IMAGE_MODELS);
   const [imageModelsSimple, setImageModelsSimple] = useState(DEFAULT_IMAGE_MODELS_SIMPLE);
+  const [videoModels, setVideoModels] = useState(DEFAULT_VIDEO_MODELS);
+  const [videoWishLibrary, setVideoWishLibrary] = useState([]);
   const [specialTags, setSpecialTags] = useState(DEFAULT_SPECIAL_TAGS);
   const [sunoBasePrompt, setSunoBasePrompt] = useState('');
   const [referenceExamples, setReferenceExamples] = useState([]);
@@ -58,6 +61,8 @@ export function useSettings({ showToast, onAiCall }) {
       setSimpleModels(s.simple_models || DEFAULT_SIMPLE_MODELS);
       setImageModels(s.image_models || DEFAULT_IMAGE_MODELS);
       setImageModelsSimple(s.image_models_simple || DEFAULT_IMAGE_MODELS_SIMPLE);
+      setVideoModels(s.video_models || DEFAULT_VIDEO_MODELS);
+      setVideoWishLibrary(s.video_wish_library || []);
       setSpecialTags(s.special_tags || DEFAULT_SPECIAL_TAGS);
       setSunoBasePrompt(s.suno_base_prompt || '');
       setReferenceExamples(s.suno_reference_examples || []);
@@ -198,6 +203,26 @@ export function useSettings({ showToast, onAiCall }) {
   }
   function setImageModelSimpleDefault(composite) {
     setImageModelsSimple((prev) => ({ ...prev, default: composite }));
+  }
+
+  // Video stage (providers/video.py) - a single favorites list, no cheap/
+  // quality tier split like image_models/image_models_simple above (not
+  // asked for - video generation is inherently expensive/slow).
+  function addVideoModelFavorite(entry) {
+    setVideoModels((prev) => {
+      const key = `${entry.provider}:${entry.id}`;
+      if (prev.favorites.some((f) => `${f.provider}:${f.id}` === key)) return prev;
+      return { ...prev, favorites: [...prev.favorites, entry] };
+    });
+  }
+  function removeVideoModelFavorite(provider, id) {
+    setVideoModels((prev) => ({
+      ...prev,
+      favorites: prev.favorites.filter((f) => !(f.provider === provider && f.id === id)),
+    }));
+  }
+  function setVideoModelDefault(composite) {
+    setVideoModels((prev) => ({ ...prev, default: composite }));
   }
 
   // Separate from setSunoBasePrompt (used by the Settings screen field, which
@@ -424,6 +449,30 @@ export function useSettings({ showToast, onAiCall }) {
       .catch(() => showToast(L.toast_saveFailed));
   }
 
+  function removeVideoWishSnippet(id) {
+    const next = videoWishLibrary.filter((w) => w.id !== id);
+    setVideoWishLibrary(next);
+    api.putSettings({ video_wish_library: next }).catch(() => {});
+  }
+  function saveVideoWishToLibrary(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+    api.saveVideoWishToLibrary(trimmed)
+      .then((res) => { setVideoWishLibrary(res.video_wish_library); showToast(L.toast_saved); })
+      .catch(() => {})
+      .finally(() => onAiCall?.());
+  }
+  function updateVideoWishSnippet(id, patch) {
+    api.updateVideoWishSnippet(id, patch)
+      .then((res) => { setVideoWishLibrary(res.video_wish_library); showToast(L.toast_saved); })
+      .catch(() => showToast(L.toast_saveFailed));
+  }
+  function bumpVideoWishUse(id) {
+    const next = videoWishLibrary.map((w) => (w.id === id ? { ...w, use_count: (w.use_count || 0) + 1 } : w));
+    setVideoWishLibrary(next);
+    api.putSettings({ video_wish_library: next }).catch(() => {});
+  }
+
   function removeTitleCardWishSnippet(id) {
     const next = titleCardWishLibrary.filter((w) => w.id !== id);
     setTitleCardWishLibrary(next);
@@ -472,6 +521,8 @@ export function useSettings({ showToast, onAiCall }) {
         simple_models: src.simple_models ?? simpleModels,
         image_models: src.image_models ?? imageModels,
         image_models_simple: src.image_models_simple ?? imageModelsSimple,
+        video_models: src.video_models ?? videoModels,
+        video_wish_library: src.video_wish_library ?? videoWishLibrary,
         special_tags: src.special_tags ?? specialTags,
         suno_base_prompt: src.suno_base_prompt ?? sunoBasePrompt,
         suno_reference_examples: src.suno_reference_examples ?? referenceExamples,
@@ -497,6 +548,8 @@ export function useSettings({ showToast, onAiCall }) {
       setSimpleModels(next.simple_models);
       setImageModels(next.image_models);
       setImageModelsSimple(next.image_models_simple);
+      setVideoModels(next.video_models);
+      setVideoWishLibrary(next.video_wish_library);
       setSpecialTags(next.special_tags);
       setSunoBasePrompt(next.suno_base_prompt);
       setReferenceExamples(next.suno_reference_examples);
@@ -528,7 +581,8 @@ export function useSettings({ showToast, onAiCall }) {
     try {
       await api.putSettings({
         lang, api_keys: apiKeys, text_models: textModels, simple_models: simpleModels,
-        image_models: imageModels, image_models_simple: imageModelsSimple, special_tags: specialTags,
+        image_models: imageModels, image_models_simple: imageModelsSimple, video_models: videoModels,
+        video_wish_library: videoWishLibrary, special_tags: specialTags,
         suno_base_prompt: sunoBasePrompt, suno_reference_examples: referenceExamples, suno_wish_library: wishLibrary,
         request_timeout_seconds: requestTimeoutSeconds,
         scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
@@ -547,7 +601,7 @@ export function useSettings({ showToast, onAiCall }) {
 
   return {
     lang, L, langLabel: lang === 'ru' ? 'EN' : 'RU',
-    apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
+    apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, videoModels, videoWishLibrary, specialTags,
     sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets, requestTimeoutSeconds,
     sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
     titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
@@ -568,6 +622,8 @@ export function useSettings({ showToast, onAiCall }) {
       addSimpleModelFavorite, removeSimpleModelFavorite, setSimpleModelDefault,
       addImageModelFavorite, removeImageModelFavorite, setImageModelDefault,
       addImageModelSimpleFavorite, removeImageModelSimpleFavorite, setImageModelSimpleDefault,
+      addVideoModelFavorite, removeVideoModelFavorite, setVideoModelDefault,
+      saveVideoWishToLibrary, removeVideoWishSnippet, updateVideoWishSnippet, setVideoWishLibrary, bumpVideoWishUse,
       updateSceneBasePromptNarrative, updateSceneBasePromptAbstract,
       saveSceneWishToLibrary, removeSceneWishSnippet, updateSceneWishSnippet, setSceneWishLibrary,
       updateTitleCardBasePrompt, saveTitleCardBasePromptPreset, loadTitleCardBasePromptPreset, deleteTitleCardBasePromptPreset,

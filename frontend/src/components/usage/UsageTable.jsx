@@ -24,6 +24,8 @@ function UsageTableRow({ L, rec }) {
         <span className="usage-row-units">
           {units.kind === 'image'
             ? `${units.images ?? 0} ${L.usage_col_images}`
+            : units.kind === 'video'
+            ? `${units.seconds ?? 0}${L.suno_unitSeconds}`
             : `${formatTokens(units.input_tokens)} / ${formatTokens(units.output_tokens)}`}
         </span>
         <span className={`usage-row-cost${costUnknown ? ' usage-cost-unknown' : ''}`}>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { estimateCost, estimateTokensFromChars, formatCost, formatTokens, modelPriceMap, priceLabel } from './pricing.js';
+import { estimateCost, estimateTokensFromChars, estimateVideoCost, formatCost, formatTokens, modelPriceMap, priceLabel } from './pricing.js';
 
-const L = { price_perImage: 'изобр.', price_unknown: 'цена ?' };
+const L = { price_perImage: 'изобр.', price_perSecond: 'сек.', price_unknown: 'цена ?' };
 
 describe('formatCost', () => {
   it('renders the unknown label for null/undefined', () => {
@@ -68,9 +68,26 @@ describe('priceLabel', () => {
     expect(priceLabel({ kind: 'image', per_image: 0.025 }, L)).toBe('$0.025 изобр.');
   });
 
+  it('formats a video price', () => {
+    expect(priceLabel({ kind: 'video', per_second: 0.4 }, L)).toBe('$0.4 сек.');
+  });
+
   it('falls back to the unknown label when price is missing', () => {
     expect(priceLabel(null, L)).toBe('цена ?');
     expect(priceLabel({ kind: 'text', input: 0.3 }, L)).toBe('цена ?');
+    expect(priceLabel({ kind: 'video' }, L)).toBe('цена ?');
+  });
+});
+
+describe('estimateVideoCost', () => {
+  it('multiplies seconds by the per-second price', () => {
+    expect(estimateVideoCost({ kind: 'video', per_second: 0.4 }, 6)).toBeCloseTo(2.4);
+  });
+
+  it('returns null for a missing or non-video price', () => {
+    expect(estimateVideoCost(null, 6)).toBeNull();
+    expect(estimateVideoCost({ kind: 'image', per_image: 0.02 }, 6)).toBeNull();
+    expect(estimateVideoCost({ kind: 'video' }, 6)).toBeNull();
   });
 });
 

@@ -25,6 +25,10 @@ def _known_models() -> dict[str, str]:
         for m in entry.get('models', []):
             if m.get('id'):
                 known[f"{provider}:{m['id']}"] = 'image'
+    for provider, entry in model_catalog.get('video', {}).items():
+        for m in entry.get('models', []):
+            if m.get('id'):
+                known[f"{provider}:{m['id']}"] = 'video'
     return known
 
 
