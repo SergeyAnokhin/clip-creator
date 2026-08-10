@@ -26,7 +26,10 @@ API - the only two providers confirmed to do image-to-video for this app
   no upload step) for image-to-video, plus `duration`/`resolution`/
   `aspect_ratio`. Returns `202 {id, polling_url, status}` immediately; poll
   `GET /api/v1/videos/{id}` until `status` is `completed`/`failed`, video at
-  `unsigned_urls[0]` (a pre-signed download link, no auth needed). `usage.cost`
+  `unsigned_urls[0]` - despite the name this still 401s without the same
+  `Authorization: Bearer` header used for submit/poll (confirmed 2026-08-10
+  after a real generation's download failed with 401), so it's downloaded
+  with those headers too. `usage.cost`
   in the poll response is OpenRouter's own exact price for the call - threaded
   through as `provider_cost`, same bypass `images.py`'s `_generate_openrouter`
   uses for images.
@@ -99,9 +102,9 @@ async def _download_google(url: str, api_key: str) -> bytes:
     return resp.content
 
 
-async def _download_plain(url: str) -> bytes:
+async def _download_plain(url: str, headers: dict | None = None) -> bytes:
     async with httpx.AsyncClient(timeout=120) as http_client:
-        resp = await http_client.get(url)
+        resp = await http_client.get(url, headers=headers)
     if resp.status_code != 200:
         raise RuntimeError(f'Не удалось скачать видео ({resp.status_code})')
     return resp.content
@@ -236,7 +239,7 @@ async def _generate_openrouter_video(
         cost = (data.get('usage') or {}).get('cost')
         if cost is not None:
             usage_out['cost'] = cost
-    content = await _download_plain(urls[0])
+    content = await _download_plain(urls[0], headers=headers)
     return content, 'mp4'
 
 

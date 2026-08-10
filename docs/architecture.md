@@ -492,7 +492,9 @@ informational "money saved" figure — see [usage-tracking.md](usage-tracking.md
     image-to-video, plus `duration`/`resolution`/`aspect_ratio`. Returns `202
     {id, polling_url, status}` immediately; poll `GET
     /api/v1/videos/{id}` until `status` is `completed`/`failed`, video at
-    `unsigned_urls[0]` (a pre-signed download link, no auth needed).
+    `unsigned_urls[0]` — despite the name it still 401s without the same
+    `Authorization: Bearer` header used for submit/poll, so it's downloaded
+    with those headers too.
     `usage.cost` in the poll response is OpenRouter's own exact price for the
     call — threaded through as `provider_cost`, same bypass `images.py`'s
     `_generate_openrouter` uses for images.

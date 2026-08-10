@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { resolveAnimateImage } from '../../lib/scenes.js';
+import { getVideoModelLimits } from '../../lib/videoModelLimits.js';
 import CopyButton from './CopyButton.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import TranslateButton from './TranslateButton.jsx';
@@ -22,6 +23,26 @@ function formatDuration(totalSeconds, L) {
   const m = Math.floor(s / 60);
   const rem = String(s % 60).padStart(2, '0');
   return `${m}${L.suno_unitMinutes} ${rem}${L.suno_unitSeconds}`;
+}
+
+/** Cheat-sheet line for the currently picked model - what duration/
+ * resolution/aspect-ratio values it actually supports, since the app's own
+ * controls (RESOLUTIONS/ASPECT_RATIOS/duration 1-8 above) are one fixed set
+ * shared across every model and don't reflect each provider's real limits
+ * (see `lib/videoModelLimits.js`). Purely informational - doesn't restrict
+ * or validate what the user picks. */
+function ModelLimitsHint({ L, videoModel }) {
+  const limits = getVideoModelLimits(videoModel);
+  if (!limits) {
+    return <div style={{ fontSize: 12, color: 'var(--text-faint)', marginBottom: 12 }}>ℹ️ {L.video_limitsUnknown}</div>;
+  }
+  const note = limits.noteKey ? L[limits.noteKey] : '';
+  return (
+    <div style={{ fontSize: 12, color: 'var(--text-faint)', marginBottom: 12 }}>
+      ℹ️ {L.video_limitsDuration}: {limits.duration} {L.video_limitsSeconds} · {L.video_limitsResolution}: {limits.resolutions.join(', ')} · {L.video_limitsAspectRatio}: {limits.aspectRatios.join(', ')}
+      {note && <> — {note}</>}
+    </div>
+  );
 }
 
 function DebugPanel({ L, lastDebug }) {
@@ -408,6 +429,8 @@ export default function VideoStage({
           }}
         />
       </div>
+
+      <ModelLimitsHint L={L} videoModel={videoModel} />
 
       {videoLoading && (
         <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>

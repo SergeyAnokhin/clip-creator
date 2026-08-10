@@ -201,6 +201,10 @@ def test_generate_openrouter_video_success(monkeypatch):
     poll_call = fake_client.calls[1]
     assert poll_call['url'] == 'https://openrouter.ai/api/v1/videos/job1'
 
+    download_call = fake_client.calls[3]
+    assert download_call['url'] == 'https://cdn.example/vid.mp4'
+    assert download_call['headers']['Authorization'] == 'Bearer test-key'
+
 
 def test_generate_openrouter_video_missing_key_raises():
     with pytest.raises(RuntimeError, match='OpenRouter'):
