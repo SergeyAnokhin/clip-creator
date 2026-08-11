@@ -1,8 +1,12 @@
+import io
 import json
+import re
+import zipfile
 from datetime import datetime, timezone
+from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Response, UploadFile
 
 from .. import console_log, storage, usage
 from ..providers import images, mureka, scenes, suno, title_card, video, wish_library
@@ -21,9 +25,46 @@ _ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.m4a'}
 # decodeAudioData for the waveform) can realistically decode.
 _ALLOWED_REFERENCE_SOURCE_EXTENSIONS = {'.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.webm'}
 
+# Leading `NNN_` / `NNN-` prefix a video-import filename must carry to be
+# matched back to a scene - the same convention `export_video_stage` writes
+# (1-based scene number, zero-padded to 3 digits), see both docstrings below.
+_SCENE_NUMBER_PREFIX_RE = re.compile(r'^0*(\d+)[_-]')
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _resolve_export_image(scene: dict) -> dict | None:
+    """Mirrors `lib/scenes.js`'s `resolveAnimateImage` server-side: the
+    per-scene animate override wins, then the Images stage's `is_selected`
+    pick, then just the first image - same resolution order the Video stage
+    itself uses to decide which picture it's animating."""
+    images_list = scene.get('images') or []
+    if not images_list:
+        return None
+    override_id = scene.get('animate_image_id')
+    if override_id:
+        match = next((img for img in images_list if img.get('image_id') == override_id), None)
+        if match:
+            return match
+    return next((img for img in images_list if img.get('is_selected')), None) or images_list[0]
+
+
+def _slugify_prompt(text: str, max_len: int = 50) -> str:
+    """`motion_prompt` -> a filesystem-safe filename fragment: whitespace runs
+    become a single dash (so a multi-word prompt still reads like one), any
+    other filename-unsafe character is dropped, and the result is capped to
+    `max_len` chars - matches the `NNN_slug` convention the user's own
+    externally-generated clips already use, so a round-tripped export/import
+    lines back up without renaming anything by hand."""
+    text = (text or '').strip()
+    if not text:
+        return 'scene'
+    slug = re.sub(r'\s+', '-', text)
+    slug = re.sub(r'[^\w\-]', '', slug)
+    slug = slug.strip('-')[:max_len].rstrip('-')
+    return slug or 'scene'
 
 
 @router.post('/{project_id}/suno/generate')
@@ -413,6 +454,117 @@ async def upload_scene_video(project_id: str, scene_index: int, file: UploadFile
         storage.save_project(project_id, project)
 
     return {'video': new_video}
+
+
+@router.get('/{project_id}/video-export')
+async def export_video_stage(project_id: str, scenes: str | None = None):
+    """Bundles the Video stage's per-scene animate source picture (see
+    `_resolve_export_image`) plus a `prompts.txt` of every included scene's
+    `motion_prompt` into one zip, for handing off to an outside animation
+    tool - the user's own workflow generates clips elsewhere from exactly
+    this pair (picture + prompt) and later brings the finished videos back in
+    through `import_video_batch` below. `scenes` is a comma-separated list of
+    0-based scene indices, or omitted/`'all'` for every scene. Each entry is
+    named `{scene_number:03d}_{prompt_slug}.{ext}` (1-based scene number, so
+    a partial export still round-trips through the same scene numbers) -
+    scenes with no resolvable image (or whose image file is missing on disk)
+    are silently skipped from both the zip and `prompts.txt`, since there's
+    nothing useful to export for them."""
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    scene_list = project.get('scenes', [])
+
+    if scenes and scenes.strip().lower() != 'all':
+        try:
+            indices = sorted({int(x) for x in scenes.split(',') if x.strip() != ''})
+        except ValueError:
+            raise HTTPException(422, 'Invalid scenes parameter')
+    else:
+        indices = list(range(len(scene_list)))
+
+    project_dir = storage.project_dir(project_id)
+    buffer = io.BytesIO()
+    prompt_lines = []
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for i in indices:
+            if i < 0 or i >= len(scene_list):
+                continue
+            scene = scene_list[i]
+            image = _resolve_export_image(scene)
+            if image is None:
+                continue
+            src_path = project_dir / image['file_path']
+            if not src_path.is_file():
+                continue
+            ext = src_path.suffix.lstrip('.') or 'png'
+            filename = f'{i + 1:03d}_{_slugify_prompt(scene.get("motion_prompt", ""))}.{ext}'
+            zf.write(src_path, filename)
+            prompt_lines.append(scene.get('motion_prompt') or '')
+        zf.writestr('prompts.txt', '\n\n'.join(prompt_lines))
+
+    buffer.seek(0)
+    title = project.get('title') or project_id
+    # `filename=` must be latin-1-encodable (a raw HTTP header value) - an
+    # ASCII-only fallback for browsers that ignore `filename*=`, which
+    # carries the real (possibly Cyrillic) name percent-encoded instead.
+    ascii_title = re.sub(r'[^A-Za-z0-9\-_]+', '_', title).strip('_') or 'export'
+    zip_filename_ascii = f'{ascii_title}-video-export.zip'
+    zip_filename_utf8 = f'{title}-video-export.zip'
+    headers = {
+        'Content-Disposition': f"attachment; filename=\"{zip_filename_ascii}\"; filename*=UTF-8''{quote(zip_filename_utf8)}",
+    }
+    return Response(content=buffer.getvalue(), media_type='application/zip', headers=headers)
+
+
+@router.post('/{project_id}/video-import-batch')
+async def import_video_batch(project_id: str, files: list[UploadFile] = File(...)):
+    """Reverse of `export_video_stage` above: the user hands back a folder of
+    finished clips named by the same `{scene_number:03d}_...` convention the
+    export wrote, and each file is matched back to its scene purely from that
+    leading number - no relation to upload order or original filenames
+    otherwise. Anything that doesn't parse a scene number, resolves out of
+    range, or isn't a recognized video extension is skipped (not a hard
+    failure) and reported back in `skipped`, so one bad file in a folder of
+    fifty doesn't abort the rest."""
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        scene_list = project.get('scenes', [])
+
+        assigned = []
+        skipped = []
+        for file in files:
+            name = file.filename or ''
+            # A folder-picker upload (`webkitdirectory`) can hand back a
+            # relative path (`subfolder/008_clip.mp4`) rather than a bare
+            # filename depending on the browser - match on the last path
+            # segment either way, but keep reporting the original `name` so
+            # `assigned`/`skipped` reflect exactly what the browser sent.
+            basename = name.replace('\\', '/').rsplit('/', 1)[-1]
+            suffix = ('.' + basename.rsplit('.', 1)[-1].lower()) if '.' in basename else ''
+            if suffix not in _ALLOWED_VIDEO_EXTENSIONS:
+                skipped.append({'filename': name, 'reason': 'unsupported_type'})
+                continue
+            match = _SCENE_NUMBER_PREFIX_RE.match(basename)
+            if not match:
+                skipped.append({'filename': name, 'reason': 'no_scene_number'})
+                continue
+            scene_index = int(match.group(1)) - 1
+            if scene_index < 0 or scene_index >= len(scene_list):
+                skipped.append({'filename': name, 'reason': 'scene_out_of_range'})
+                continue
+
+            content = await file.read()
+            new_video = video.save_uploaded_video(project_id, scene_index, content, suffix.removeprefix('.'))
+            scene_list[scene_index]['videos'] = [*scene_list[scene_index].get('videos', []), new_video]
+            assigned.append({'filename': name, 'scene_index': scene_index, 'video': new_video})
+
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    return {'assigned': assigned, 'skipped': skipped}
 
 
 @router.post('/{project_id}/reference-images')

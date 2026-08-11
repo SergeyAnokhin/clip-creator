@@ -93,6 +93,12 @@ export const api = {
     form.append('file', file);
     return requestForm(`${projectPath(id)}/scenes/${sceneIndex}/videos/upload`, { method: 'POST', body: form });
   },
+  videoExportUrl: (id, sceneIndices) => `${BASE_URL}${projectPath(id)}/video-export${qs({ scenes: sceneIndices?.length ? sceneIndices.join(',') : 'all' })}`,
+  importVideoBatch: (id, files) => {
+    const form = new FormData();
+    files.forEach((file) => form.append('files', file));
+    return requestForm(`${projectPath(id)}/video-import-batch`, { method: 'POST', body: form });
+  },
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),

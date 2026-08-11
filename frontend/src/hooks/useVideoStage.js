@@ -220,6 +220,44 @@ export function useVideoStage({
       showToast('Не удалось загрузить видео');
     }
   }
+  /** Reverse of the Video stage's export button: a folder of finished clips
+   * named by that same `{scene:03d}_...` convention, matched back to their
+   * scenes purely by that leading number (`import_video_batch` in
+   * `routers/generation.py`) - lets the whole batch land in one call instead
+   * of the single-file `uploadSceneVideoFile` above, repeated by hand per
+   * scene. */
+  async function importVideoBatch(files) {
+    if (!activeProject || !files?.length) return;
+    try {
+      const result = await api.importVideoBatch(activeProject.id, files);
+      if (result.assigned.length) {
+        setActiveProject((p) => ({
+          ...p,
+          scenes: p.scenes.map((s, i) => {
+            const toAdd = result.assigned.filter((a) => a.scene_index === i).map((a) => a.video);
+            return toAdd.length ? { ...s, videos: [...(s.videos || []), ...toAdd] } : s;
+          }),
+        }));
+      }
+      if (result.skipped.length) {
+        const counts = {};
+        result.skipped.forEach((s) => { counts[s.reason] = (counts[s.reason] || 0) + 1; });
+        const reasons = Object.entries(counts)
+          .map(([reason, count]) => `${L[`video_importReason_${reason}`] || reason}: ${count}`)
+          .join(', ');
+        showToast(L.video_importSummaryWithSkipped
+          .replace('{assigned}', result.assigned.length)
+          .replace('{skipped}', result.skipped.length)
+          .replace('{reasons}', reasons));
+        console.warn('[Video import] skipped files:', result.skipped);
+      } else {
+        showToast(L.video_importSummary.replace('{assigned}', result.assigned.length));
+      }
+    } catch {
+      showToast('Не удалось импортировать видео');
+    }
+  }
+
   async function deleteVideo(sceneIdx, vidIdx) {
     if (!activeProject) return;
     const video = activeProject.scenes[sceneIdx]?.videos?.[vidIdx];
@@ -248,7 +286,7 @@ export function useVideoStage({
       onRate: rateVideo, onSelectMain: selectMainVideo, onDelete: deleteVideo,
       onSelectAnimateImage: selectAnimateImage,
       onUploadImageFile: uploadSceneImageFile, onUploadImageUrl: uploadSceneImageUrl,
-      onUploadVideoFile: uploadSceneVideoFile,
+      onUploadVideoFile: uploadSceneVideoFile, onImportVideoBatch: importVideoBatch,
     },
   };
 }

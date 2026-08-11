@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Download, Film, Loader2,
+  ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Download, Film, FolderDown, FolderUp, Loader2,
   Mic, MicOff, Sparkles, Upload, UploadCloud, X,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
@@ -9,8 +9,11 @@ import { getVideoModelLimits } from '../../lib/videoModelLimits.js';
 import CopyButton from './CopyButton.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import TranslateButton from './TranslateButton.jsx';
-import VideoCarousel from './VideoCarousel.jsx';
+import VideoExportModal from './VideoExportModal.jsx';
+import VideoGallery from './VideoGallery.jsx';
 import { sortByUseCount } from '../../lib/wishes.js';
+
+const _ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'webm', 'mkv']);
 
 const RESOLUTIONS = ['720p', '1080p'];
 const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16'];
@@ -99,10 +102,11 @@ function DebugPanel({ L, lastDebug }) {
  * pick - see `lib/scenes.js`'s `resolveAnimateImage`) plus its
  * `motion_prompt` (edited here, shared field with Scenes/Images) to an
  * image-to-video model. `videos[]` accumulates per scene like `images[]`
- * does - VideoCarousel.jsx pages through them, plus a plain file upload for
- * a clip animated in an outside tool and brought back in by hand. */
+ * does - VideoGallery.jsx shows every candidate at once (hover to preview),
+ * plus a plain file upload for a clip animated in an outside tool and
+ * brought back in by hand. */
 export default function VideoStage({
-  L, project, isMobile,
+  L, project,
   currentSceneIndex, videoModel, resolution, aspectRatio, durationSeconds,
   videoWishText, wishLoading, videoLoading, lastDebug, videoError, elapsedSeconds,
   videoModelFavorites, modelPrices, videoWishLibrary,
@@ -114,22 +118,12 @@ export default function VideoStage({
   const activeWishIds = project.active_video_wish_ids || [];
   const videos = scene?.videos || [];
 
-  const [videoIndex, setVideoIndex] = useState(Math.max(0, videos.length - 1));
-  const prevLengthRef = useRef(videos.length);
-  useEffect(() => {
-    setVideoIndex(Math.max(0, (scene?.videos?.length || 0) - 1));
-    prevLengthRef.current = scene?.videos?.length || 0;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSceneIndex]);
-  useEffect(() => {
-    if (videos.length > prevLengthRef.current) setVideoIndex(videos.length - 1);
-    prevLengthRef.current = videos.length;
-  }, [videos.length]);
-
   const [imageUploadOpen, setImageUploadOpen] = useState(false);
   const [imageUploadUrl, setImageUploadUrl] = useState('');
   const imageFileInputRef = useRef(null);
   const videoFileInputRef = useRef(null);
+  const videoImportInputRef = useRef(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   function submitImageUrl() {
     const url = imageUploadUrl.trim();
@@ -137,6 +131,15 @@ export default function VideoStage({
     actions.onUploadImageUrl(currentSceneIndex, url);
     setImageUploadUrl('');
     setImageUploadOpen(false);
+  }
+
+  function handleVideoImportPick(e) {
+    const picked = [...(e.target.files || [])].filter((f) => {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      return _ALLOWED_VIDEO_EXTENSIONS.has(ext);
+    });
+    e.target.value = '';
+    if (picked.length) actions.onImportVideoBatch(picked);
   }
 
   if (!scenes.length) {
@@ -155,7 +158,6 @@ export default function VideoStage({
 
   const sceneImages = scene.images || [];
   const animateImage = resolveAnimateImage(scene);
-  const boundedVideoIndex = Math.min(videoIndex, Math.max(0, videos.length - 1));
 
   return (
     <>
@@ -180,6 +182,30 @@ export default function VideoStage({
           >
             <ChevronRight size={15} />
           </button>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            <button
+              className="icon-btn" style={{ width: 30, height: 30 }}
+              title={L.video_exportButton}
+              onClick={() => setExportModalOpen(true)}
+            >
+              <FolderDown size={15} />
+            </button>
+            <button
+              className="icon-btn" style={{ width: 30, height: 30 }}
+              title={L.video_importButton}
+              onClick={() => videoImportInputRef.current?.click()}
+            >
+              <FolderUp size={15} />
+            </button>
+            <input
+              ref={videoImportInputRef}
+              type="file"
+              multiple
+              webkitdirectory="true"
+              style={{ display: 'none' }}
+              onChange={handleVideoImportPick}
+            />
+          </div>
         </div>
         <div className="scene-thumb-strip">
           {scenes.map((s, i) => {
@@ -446,15 +472,16 @@ export default function VideoStage({
       {videos.length === 0 ? (
         <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>{L.video_noneYet}</div>
       ) : (
-        <div className="glass-card scene-image-panel" style={{ maxWidth: isMobile ? '100%' : 520 }}>
-          <VideoCarousel
-            L={L} projectId={project.id} videos={videos} currentIndex={boundedVideoIndex}
-            onIndexChange={setVideoIndex}
-            onDelete={() => actions.onDelete(currentSceneIndex, boundedVideoIndex)}
-            onSelectMain={() => actions.onSelectMain(currentSceneIndex, boundedVideoIndex)}
-            onRate={(rating) => actions.onRate(currentSceneIndex, boundedVideoIndex, rating)}
-          />
-        </div>
+        <VideoGallery
+          L={L} projectId={project.id} videos={videos}
+          onDelete={(vidIdx) => actions.onDelete(currentSceneIndex, vidIdx)}
+          onSelectMain={(vidIdx) => actions.onSelectMain(currentSceneIndex, vidIdx)}
+          onRate={(vidIdx, rating) => actions.onRate(currentSceneIndex, vidIdx, rating)}
+        />
+      )}
+
+      {exportModalOpen && (
+        <VideoExportModal L={L} project={project} onClose={() => setExportModalOpen(false)} />
       )}
     </>
   );

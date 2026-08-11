@@ -1,6 +1,7 @@
 import io
 import os
 import time
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -599,6 +600,141 @@ def test_upload_scene_video_out_of_range_scene_returns_404(client):
     resp = client.post(
         f'/api/projects/{pid}/scenes/99/videos/upload',
         files={'file': ('mine.mp4', b'data', 'video/mp4')},
+    )
+    assert resp.status_code == 404
+
+
+def test_export_video_stage_zips_animate_images_and_prompts(client):
+    # Scenes 2 and 3 (0-based) are the demo project's first two with no
+    # pre-seeded images, so the newly-uploaded ones are unambiguously what
+    # gets resolved/exported for them (scenes 0/1 already have a seeded
+    # `is_selected` image whose placeholder file doesn't actually exist on
+    # disk, which would otherwise make `_resolve_export_image` correctly but
+    # confusingly skip them).
+    pid = client.get('/api/projects').json()[0]['id']
+    client.post(
+        f'/api/projects/{pid}/scenes/2/images/upload',
+        files={'file': ('mine.png', b'fake-png-bytes', 'image/png')},
+    )
+    client.post(
+        f'/api/projects/{pid}/scenes/3/images/upload',
+        files={'file': ('mine.png', b'fake-png-bytes-2', 'image/png')},
+    )
+    project = client.get(f'/api/projects/{pid}').json()
+    motion_2 = project['scenes'][2]['motion_prompt']
+    motion_3 = project['scenes'][3]['motion_prompt']
+
+    resp = client.get(f'/api/projects/{pid}/video-export')
+
+    assert resp.status_code == 200
+    assert resp.headers['content-type'] == 'application/zip'
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    names = zf.namelist()
+    assert 'prompts.txt' in names
+    scene3_name = next(n for n in names if n.startswith('003_'))
+    scene4_name = next(n for n in names if n.startswith('004_'))
+    assert scene3_name.endswith('.png')
+    assert zf.read(scene3_name) == b'fake-png-bytes'
+    assert zf.read(scene4_name) == b'fake-png-bytes-2'
+    assert zf.read('prompts.txt').decode('utf-8') == f'{motion_2}\n\n{motion_3}'
+    # Scenes without a resolvable image (0, 1, and the last one) are skipped
+    # entirely, not padded with a gap marker.
+    assert not any(n.startswith('005_') for n in names)
+
+
+def test_export_video_stage_filters_by_scenes_param(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    client.post(
+        f'/api/projects/{pid}/scenes/2/images/upload',
+        files={'file': ('mine.png', b'fake-png-bytes', 'image/png')},
+    )
+    client.post(
+        f'/api/projects/{pid}/scenes/3/images/upload',
+        files={'file': ('mine.png', b'fake-png-bytes-2', 'image/png')},
+    )
+
+    resp = client.get(f'/api/projects/{pid}/video-export?scenes=2')
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    names = zf.namelist()
+    assert any(n.startswith('003_') for n in names)
+    assert not any(n.startswith('004_') for n in names)
+
+
+def test_export_video_stage_missing_project_returns_404(client):
+    assert client.get('/api/projects/does-not-exist/video-export').status_code == 404
+
+
+def test_import_video_batch_matches_by_scene_number_prefix(client):
+    pid = client.get('/api/projects').json()[0]['id']
+
+    resp = client.post(
+        f'/api/projects/{pid}/video-import-batch',
+        files=[
+            ('files', ('001_some-clip.mp4', b'clip-one', 'video/mp4')),
+            ('files', ('003_another-clip.mp4', b'clip-three', 'video/mp4')),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['skipped'] == []
+    assert [a['scene_index'] for a in body['assigned']] == [0, 2]
+
+    saved = client.get(f'/api/projects/{pid}').json()
+    assert saved['scenes'][0]['videos'][-1]['file_path'].endswith('.mp4')
+    assert saved['scenes'][2]['videos'][-1]['file_path'].endswith('.mp4')
+
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    written = data_root / 'projects' / pid / saved['scenes'][0]['videos'][-1]['file_path']
+    assert written.read_bytes() == b'clip-one'
+
+
+def test_import_video_batch_matches_by_scene_number_prefix_with_path(client):
+    """A folder-picker upload can hand back a relative path instead of a bare
+    filename depending on the browser - matching must look at the last path
+    segment, not fail the whole file as `no_scene_number`."""
+    pid = client.get('/api/projects').json()[0]['id']
+
+    resp = client.post(
+        f'/api/projects/{pid}/video-import-batch',
+        files=[
+            ('files', ('My Folder/001_some-clip.mp4', b'clip-one', 'video/mp4')),
+            ('files', ('My Folder\\003_another-clip.mp4', b'clip-three', 'video/mp4')),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['skipped'] == []
+    assert [a['scene_index'] for a in body['assigned']] == [0, 2]
+
+
+def test_import_video_batch_skips_unmatched_and_out_of_range(client):
+    pid = client.get('/api/projects').json()[0]['id']
+
+    resp = client.post(
+        f'/api/projects/{pid}/video-import-batch',
+        files=[
+            ('files', ('no-number.mp4', b'x', 'video/mp4')),
+            ('files', ('999_way-out-there.mp4', b'x', 'video/mp4')),
+            ('files', ('001_notes.txt', b'x', 'text/plain')),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['assigned'] == []
+    reasons = {s['filename']: s['reason'] for s in body['skipped']}
+    assert reasons['no-number.mp4'] == 'no_scene_number'
+    assert reasons['999_way-out-there.mp4'] == 'scene_out_of_range'
+    assert reasons['001_notes.txt'] == 'unsupported_type'
+
+
+def test_import_video_batch_missing_project_returns_404(client):
+    resp = client.post(
+        '/api/projects/does-not-exist/video-import-batch',
+        files=[('files', ('001_clip.mp4', b'x', 'video/mp4'))],
     )
     assert resp.status_code == 404
 
