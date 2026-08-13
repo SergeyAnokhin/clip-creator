@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, Clapperboard, Film, Image as ImageIcon, Loader, ListMusic, Minus, Music2, Music4, Type } from 'lucide-react';
+import { CheckCircle2, Circle, Clapperboard, Download, Film, Image as ImageIcon, Loader, ListMusic, Minus, Music2, Music4, Scissors, Type } from 'lucide-react';
 
 const STATUS_ICON = { pending: Circle, processing: Loader, completed: CheckCircle2 };
 const STATUS_COLOR = { pending: 'rgba(255,255,255,0.25)', processing: '#fbbf24', completed: '#4ade80' };
@@ -12,6 +12,8 @@ function stageDefs(L) {
     { key: 'images', name: L.stage_images, icon: ImageIcon, sub: [L.sub_images, L.sub_rating] },
     { key: 'title_card', name: L.stage_titleCard, icon: Type, sub: [L.sub_titleCardText, L.sub_titleCardStyle] },
     { key: 'video', name: L.stage_video, icon: Film, sub: [L.sub_videoGen, L.sub_videoRating] },
+    { key: 'export', name: L.stage_export, icon: Download, sub: [L.sub_exportPick, L.sub_exportDownload] },
+    { key: 'editor', name: L.stage_editor, icon: Scissors, sub: [L.sub_editorTimeline, L.sub_editorRender] },
   ];
 }
 
@@ -26,6 +28,16 @@ function stageStatus(key, project) {
     const ready = project.scenes.filter((s) => s.videos && s.videos.length > 0).length;
     if (total === 0) return 'pending';
     return ready === total ? 'completed' : ready > 0 ? 'processing' : 'pending';
+  }
+  if (key === 'export') {
+    const hasVideo = project.scenes.some((s) => s.videos && s.videos.length > 0);
+    const hasAudio = (project.mureka?.tracks || []).some((t) => t.is_selected);
+    if (hasVideo && hasAudio) return 'completed';
+    return hasVideo || hasAudio ? 'processing' : 'pending';
+  }
+  if (key === 'editor') {
+    if ((project.video_edit?.renders?.length ?? 0) > 0) return 'completed';
+    return (project.video_edit?.clips?.length ?? 0) > 0 ? 'processing' : 'pending';
   }
   const total = project.scenes.length;
   const ready = project.scenes.filter((s) => s.images && s.images.length > 0).length;

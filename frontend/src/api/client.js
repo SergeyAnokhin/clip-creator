@@ -99,6 +99,11 @@ export const api = {
     files.forEach((file) => form.append('files', file));
     return requestForm(`${projectPath(id)}/video-import-batch`, { method: 'POST', body: form });
   },
+  finalExportUrl: (id) => `${BASE_URL}${projectPath(id)}/final-export`,
+
+  startEditorRender: (id) => request(`${projectPath(id)}/editor/render`, { method: 'POST' }),
+  getEditorRenderJob: (id, jobId) => request(`${projectPath(id)}/editor/jobs/${encodeURIComponent(jobId)}`),
+  deleteEditorRender: (id, renderId) => request(`${projectPath(id)}/editor/renders/${encodeURIComponent(renderId)}`, { method: 'DELETE' }),
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),

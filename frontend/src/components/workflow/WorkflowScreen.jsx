@@ -7,10 +7,12 @@ import ScenesStage from './ScenesStage.jsx';
 import ImagesStage from './ImagesStage.jsx';
 import TitleCardStage from './TitleCardStage.jsx';
 import VideoStage from './VideoStage.jsx';
+import ExportStage from './ExportStage.jsx';
+import EditorStage from './EditorStage.jsx';
 
 export default function WorkflowScreen({
   L, langLabel, viewport, project, activeStage, sidebarOpen,
-  lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, videoState, updateProject,
+  lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, videoState, exportState, editorState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
 }) {
@@ -53,6 +55,8 @@ export default function WorkflowScreen({
             {activeStage === 'images' && <ImagesStage L={L} project={project} isMobile={isMobile} {...imagesState} />}
             {activeStage === 'title_card' && <TitleCardStage L={L} project={project} isMobile={isMobile} {...titleCardState} />}
             {activeStage === 'video' && <VideoStage L={L} project={project} isMobile={isMobile} {...videoState} />}
+            {activeStage === 'export' && <ExportStage L={L} project={project} isMobile={isMobile} {...exportState} />}
+            {activeStage === 'editor' && <EditorStage L={L} project={project} isMobile={isMobile} {...editorState} />}
           </div>
         </div>
       </div>

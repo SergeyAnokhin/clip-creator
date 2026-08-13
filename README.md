@@ -28,10 +28,10 @@ backend/.venv/Scripts/pip install -r backend/requirements.txt
 
 Also install [`ffmpeg`](https://ffmpeg.org/) and make sure it's on your
 `PATH` — the Mureka reference-audio trimmer shells out to it to cut a
-selected window before uploading (see
-[docs/architecture.md](docs/architecture.md)). Nothing else in this repo
-depends on it; the app still runs without it, but that one feature fails
-with a clear error instead.
+selected window before uploading, and the Editor stage shells out to it to
+render the final video (see [docs/architecture.md](docs/architecture.md)).
+The app still runs without it, but those two features fail with a clear
+error instead.
 
 Then, from the repo root:
 

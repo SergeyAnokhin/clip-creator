@@ -11,6 +11,8 @@ import { useScenesStage } from './hooks/useScenesStage.js';
 import { useImagesStage } from './hooks/useImagesStage.js';
 import { useTitleCardStage } from './hooks/useTitleCardStage.js';
 import { useVideoStage } from './hooks/useVideoStage.js';
+import { useExportStage } from './hooks/useExportStage.js';
+import { useEditorStage } from './hooks/useEditorStage.js';
 import { usePosterConstructor } from './hooks/usePosterConstructor.js';
 import { useVoice } from './hooks/useVoice.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
@@ -81,6 +83,10 @@ function App() {
     onVideoWishLibraryChange: settings.actions.setVideoWishLibrary,
     onVideoWishUsed: settings.actions.bumpVideoWishUse,
   });
+  const exportStage = useExportStage({ activeProject, updateProject });
+  const editorStage = useEditorStage({
+    activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+  });
   // Depends on suno's refinement box, scenes' wish box, title card's wish box and video's wish box, so it must be created after them.
   const voice = useVoice({
     updateProject, showToast, L, lang: settings.lang,
@@ -100,6 +106,7 @@ function App() {
     images.resetForProject(project);
     titleCard.resetForProject(project);
     video.resetForProject(project);
+    editorStage.resetForProject(project);
     setScreen('workflow');
   }
 
@@ -234,6 +241,16 @@ function App() {
     },
   };
 
+  const exportState = {
+    ...exportStage.state,
+    actions: { ...exportStage.actions },
+  };
+
+  const editorState = {
+    ...editorStage.state,
+    actions: { ...editorStage.actions },
+  };
+
   return (
     <div className="app-shell">
       {screen === 'home' && (
@@ -260,7 +277,7 @@ function App() {
           L={L} langLabel={settings.langLabel} viewport={view.viewport}
           project={activeProject} activeStage={activeStage} sidebarOpen={view.sidebarOpen}
           lyricsState={lyricsState} sunoState={sunoState} murekaState={murekaState} scenesState={scenesState} imagesState={imagesState}
-          titleCardState={titleCardState} videoState={videoState} updateProject={updateProject}
+          titleCardState={titleCardState} videoState={videoState} exportState={exportState} editorState={editorState} updateProject={updateProject}
           onGoHome={goHome} onToggleSidebar={view.toggleSidebar} onCloseSidebarMobile={view.closeSidebarMobile}
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}

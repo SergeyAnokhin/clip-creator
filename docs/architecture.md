@@ -31,21 +31,26 @@ multiple local dev sessions can each run on their own port. `main.py`'s CORS
 middleware allows any `http://localhost:<port>` origin (regex, not a fixed
 value) so it doesn't need editing when the frontend's port changes.
 
-`ffmpeg` must be on `PATH` (a **system** binary, not a pip package — nothing
-else in this repo shells out to an external tool) for the Mureka reference-
-audio trimmer (`providers/mureka.py::trim_audio`, invoked via
-`asyncio.create_subprocess_exec`) — without it, trimming fails with a clear
-error rather than silently, but the backend doesn't check for it at startup.
+`ffmpeg` must be on `PATH` (a **system** binary, not a pip package) for two
+things: the Mureka reference-audio trimmer
+(`providers/mureka.py::trim_audio`) and the Editor stage's final render
+(`providers/editor.py::render_to_file`). Both invoke it the same way — a
+plain blocking `subprocess.run` inside `asyncio.to_thread`, **not**
+`asyncio.create_subprocess_exec` (that needs a Proactor event loop that
+isn't guaranteed under `uvicorn --reload` on Windows, this repo's dev
+environment, and has failed there before) — without `ffmpeg` on `PATH`,
+either feature fails with a clear error rather than silently, but the
+backend doesn't check for it at startup.
 
 ## The workflow
 
-A project moves through seven stages, all inside one workflow screen:
+A project moves through nine stages, all inside one workflow screen:
 
 ```text
-Lyrics  →  Music  →  Music gen  →  Scenes        →  Images            →  Title Card        →  Video
-blocks     style +   real audio     storyboard        images per scene,    poster text in the   animate each
-           lyrics    tracks via     (text only)       rated, top pick =    style of 4 picked     scene's picked
-                      Mureka                           main                 reference images      image + motion
+Lyrics  →  Music  →  Music gen  →  Scenes        →  Images            →  Title Card        →  Video           →  Export       →  Editor
+blocks     style +   real audio     storyboard        images per scene,    poster text in the   animate each       zip up the      assemble picked
+           lyrics    tracks via     (text only)       rated, top pick =    style of 4 picked     scene's picked      finished        clips + audio
+                      Mureka                           main                 reference images      image + motion      deliverables    into one video
                                                                                                     prompt
 ```
 
@@ -101,16 +106,37 @@ blocks     style +   real audio     storyboard        images per scene,    poste
    **Poster constructor** (same stage, below the variants gallery) is the
    step that turns one of these overlays into an actual poster — see
    "Poster constructor" below.
-7. **Video** (`stage: 'video'`) — the last stage: turns each scene's already-
-   picked image (from Images) plus its `motion_prompt` (from Scenes, still
-   editable here) into one or more short animated clips via an
-   image-to-video model. Unlike every other stage (a scrollable list of every
-   scene), this one shows **one scene at a time** with prev/next + a jump
-   strip, since reviewing/tuning an animation is a slower, more deliberate
-   task than picking a picture. `scenes[n].videos[]` accumulates results the
-   same way `images[]` does (rateable, deletable, one `is_selected` pick) -
-   see `providers/video.py` below for the real seam and "Video generation"
-   for the full request/response shapes.
+7. **Video** (`stage: 'video'`) — turns each scene's already-picked image
+   (from Images) plus its `motion_prompt` (from Scenes, still editable here)
+   into one or more short animated clips via an image-to-video model. Unlike
+   every other stage (a scrollable list of every scene), this one shows
+   **one scene at a time** with prev/next + a jump strip, since
+   reviewing/tuning an animation is a slower, more deliberate task than
+   picking a picture. `scenes[n].videos[]` accumulates results the same way
+   `images[]` does (rateable, deletable, one `is_selected` pick) - see
+   `providers/video.py` below for the real seam and "Video generation" for
+   the full request/response shapes.
+8. **Export** (`stage: 'export'`) — no generation, just bundling: zips every
+   generated video candidate across every scene, the Music-generation
+   stage's `is_selected` audio track, and every Title Card variant marked
+   `marked_for_export` (falls back to the single `is_selected` one if none
+   are marked) into one deliverable archive (`GET .../final-export`, see
+   `data-model.md`). A separate export (`GET .../video-export`) hands off
+   just source pictures+prompts for animating scenes in an outside tool,
+   with the matching import (`POST .../video-import-batch`) bringing
+   finished clips back in — see `routers/generation.py` in
+   [code-map.md](code-map.md).
+9. **Editor** (`stage: 'editor'`) — the last stage: turns each scene's picked
+   video clip (defaults to its `is_selected` one) and the project's picked
+   Mureka track into one rendered file via a local `ffmpeg` call
+   (`providers/editor.py`, no external API). Reorder, trim, and per-clip
+   speed only in v1 - deliberately no filters/transitions/overlays, since
+   the clip data model (`project.video_edit`) is meant to grow those later
+   without a rewrite, not to ship them now. The in-browser preview never
+   touches ffmpeg - a `<video>`+`<audio>` pair synced off a
+   `requestAnimationFrame`-clocked playhead approximates the cut; the actual
+   render always goes through `ffmpeg` server-side and is the only thing
+   that's pixel-accurate.
 
 Both stages also share a `hideMotionPrompt` toggle (a `settings.json`
 preference, not per-project) that hides every `motion_prompt` field when a
@@ -129,7 +155,7 @@ without re-running the LLM call that wrote its prompt).
 ## Frontend state
 
 State lives in [`src/hooks/`](../frontend/src/hooks/), one hook per domain
-(toast, viewport, settings, projects, the seven stages, voice).
+(toast, viewport, settings, projects, the nine stages, voice).
 [`App.jsx`](../frontend/src/App.jsx) is just the composition root: it owns
 navigation, calls the hooks in dependency order, and assembles each stage's
 `{...state, actions}` prop bundle. No state library and no context — every

@@ -21,6 +21,7 @@ app_data/
       music/{stem_id}.zip                # stem-separation output (see MurekaTrack.stems below)
       music/references/ref_{uuid}.{ext}  # trimmed reference audio actually sent to Mureka
       music/reference-sources/{id}.{ext} # raw uploaded file, pre-trim staging area (ReferenceAudioTrimmer.jsx)
+      editor/rnd_{shorthex}.mp4          # Editor stage final renders (providers/editor.py, local ffmpeg only)
   logos/logo_{shorthex}.{png|webp}       # global, cross-project - see settings.logos
   usage/
     YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
@@ -51,6 +52,7 @@ app_data/
 | `active_title_card_wish_ids` | str[] | Ids of `settings.title_card_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (poster wishes vs. scene/imagery ones) |
 | `active_video_wish_ids` | str[] | Ids of `settings.video_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (animation/video wishes, e.g. "плавное движение камеры") |
 | `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: []}` |
+| `video_edit` | VideoEdit \| absent/null | Editor stage state (final render) — absent/`null` until the stage is first opened, or if it's ever explicitly cleared; the frontend treats either the same and re-seeds a fresh default (see below) |
 
 **Project rename** (`app_data/projects/_redirects.json`): when a `PATCH` changes
 `title`/`author`, `routers/projects.py::patch_project` moves the project's
@@ -119,7 +121,49 @@ priority as `Image.cost`: a provider-reported price (OpenRouter's
 `usage.cost`) wins over the catalog (`pricing.BUILTIN_PRICING`'s
 `per_second` rate × `duration_seconds`, Google Veo). `videos[]` is
 append-only, like `images[]`; deleting one removes it from this array and
-unlinks its file (`DELETE .../scenes/{n}/videos/{video_id}`).
+unlinks its file (`DELETE .../scenes/{n}/videos/{video_id}`). A manually
+uploaded or imported clip (`model: 'upload'`, `video.save_uploaded_video`/
+`import_video_batch`) never has the file probed, so `duration_seconds` (and
+`resolution`/`aspect_ratio`/`generation_ms`) is `null` on it — the Editor
+stage below is the one place this actually matters, since its trim math
+needs a real length; see `VideoEdit`'s note on unbounded clips.
+
+**VideoEdit** (Editor stage, the last step, `providers/editor.py`): `{mureka_track_id, clips[], renders[]}`.
+Lazily seeded the first time the stage opens (one clip per scene that already
+has an `is_selected` video, in scene order; `mureka_track_id` defaults to
+whichever `MurekaTrack.is_selected` — both overridable afterward) — same
+one-time-seed convention as `TitleCard.text_block` below, except this seed is
+persisted immediately (not left client-only) so a reload right after first
+opening the stage doesn't lose it. `clips`/`mureka_track_id` are edited only
+through the generic `PATCH /api/projects/{id}` (no dedicated save route —
+same convention as a `MurekaTrack`'s `rating`/`is_selected` or
+`karaoke_sync` below); only the actual render is a real job/poll call (see
+the API table). An **`EditorClip`** is `{clip_id, scene_index, video_id,
+trim_start_ms, trim_end_ms, speed}` — `video_id` must resolve inside
+`scenes[scene_index].videos[]`; `trim_end_ms: null` means "to the end of the
+source clip" (falls back to that video's own `duration_seconds`) — **except**
+when the source clip's `duration_seconds` is itself unknown (an
+uploaded/imported clip, see `Video` above), in which case the render leaves
+the clip's end genuinely unbounded (ffmpeg runs it to its own EOF) rather
+than collapsing it to zero length; the frontend timeline/preview, which has
+no way to probe the real file client-side, lays such a clip out using a
+fixed 5s stand-in (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) purely
+for display until the user sets a real trim end after watching it play.
+`speed` is a playback-rate multiplier (ffmpeg `setpts`); video clips are
+always muted in the render — the picked Mureka track is the only audio
+source. `renders[]` is server-managed and append-only:
+`{render_id, file_path, created_at, duration_ms, clip_count,
+mureka_track_id}`, `file_path` under `editor/` (see the file-tree above).
+v1 deliberately has no filters/transitions/overlays — reorder, trim, speed,
+and one audio track only; `EditorClip` has room to grow new optional fields
+later without a schema rewrite. Output canvas is a fixed 1920×1080 (or
+1080×1920 if every clip's own `aspect_ratio` is `9:16`) — every clip is
+scaled+letterboxed into it, never cropped; if the picked clips run shorter
+than the audio track, the **last** clip is frozen (ffmpeg `tpad`) to fill the
+remainder, and if they run longer, the render is hard-capped at the audio
+track's own length (`-t`), silently truncating the tail — the Editor stage UI
+shows a non-blocking duration-mismatch warning for both cases, computed
+client-side (`lib/timeline.js`'s `getTotalDurationMs`).
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` — `text_block`
 is one free-text field the user edits directly (not separate title/author
@@ -132,15 +176,23 @@ clear-to-`''` sticks). It's appended to the assembled prompt verbatim
 `reference_images`, persisted so the picks survive a reload.
 **TitleCardVariant**: `{variant_id, file_path, rating, is_selected,
 generated_at, model, aspect_ratio, cost, text_block, base_prompt,
-reference_image_paths, source_variant_id?}` — same `rating`/`is_selected`/
-`model`/`aspect_ratio`/`cost` shape as `Image` (`file_path` under
-`titlecard/` instead of `images/`), plus a snapshot of the text/prompt/
-references that produced it. `variants` is append-only; deleting one removes
-it from this array and unlinks its file. `source_variant_id` is only present
-on a "remove background" result (`title_card.remove_background` — see the API
-table below): it points at the original variant's `variant_id`, and the
-original is left untouched — background removal always **appends** a new
-variant rather than replacing one.
+reference_image_paths, source_variant_id?, marked_for_export?}` — same
+`rating`/`is_selected`/`model`/`aspect_ratio`/`cost` shape as `Image`
+(`file_path` under `titlecard/` instead of `images/`), plus a snapshot of
+the text/prompt/references that produced it. `variants` is append-only;
+deleting one removes it from this array and unlinks its file.
+`source_variant_id` is only present on a "remove background" result
+(`title_card.remove_background` — see the API table below): it points at the
+original variant's `variant_id`, and the original is left untouched —
+background removal always **appends** a new variant rather than replacing
+one. `marked_for_export` (bool, absent/`false` on older variants — no
+migration, an absent key just reads as unmarked) is set by the Export
+stage's own per-variant toggle (`ExportStage.jsx`/`useExportStage.js`'s
+`toggleTitleCardExport`, plain `updateProject` recompute like `rating`):
+unlike `is_selected` (single-pick "main" title card, used elsewhere e.g. the
+Poster constructor), several variants can be marked at once — the final
+export zip (`GET .../final-export` below) includes every marked variant, or
+falls back to the single `is_selected` one if none are marked.
 
 **Poster**: `{poster_id, file_path, background_path, title_card_variant_id,
 logo_id, canvas_size{width,height}, layers{title_card[{id,x,y,scaleX,scaleY,rotation,crop,effects}],
@@ -650,6 +702,10 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/scenes/{n}/videos/upload` | multipart `file` (`.mp4\|.mov\|.webm\|.mkv`) → `{video}` — appends a user's own clip (animated in an outside tool from the scene's picture+`motion_prompt`, then brought back in by hand) to `scene.videos` alongside generated ones; `model: 'upload'`, `cost: 0`, everything else generation-only (`motion_prompt`, `aspect_ratio`, `resolution`, `duration_seconds`, `generation_ms`, `source_image_id`) left `null`. File-only, no pasted-URL variant (unlike the scene-image upload); `415` on an unrecognized extension |
 | `GET /api/projects/{id}/video-export` | `?scenes=0,2,5` (comma-separated 0-based indices, omitted/`all` for every scene) → a zip file (`application/zip`, `Content-Disposition: attachment`). Bulk hand-off for animating scenes in an outside tool: for each included scene, resolves its animate-source picture the same way the Video stage itself does (`animate_image_id` override → `is_selected` → first image → skip if none, or if the file is missing on disk), writes it as `{scene_number:03d}_{motion_prompt_slug}.{ext}` (1-based scene number, so a partial export's numbers still match the real scene positions), and adds one `prompts.txt` with every included scene's `motion_prompt`, blank-line separated, in scene order. A scene with no resolvable image is silently skipped from both the zip and `prompts.txt` — nothing to export for it. `404` if the project doesn't exist |
 | `POST /api/projects/{id}/video-import-batch` | multipart `files` (one or more, `.mp4\|.mov\|.webm\|.mkv`) → `{assigned: [{filename, scene_index, video}], skipped: [{filename, reason}]}` — reverse of `video-export` above: each file is matched back to a scene purely by the leading `{scene_number:03d}_...` prefix on its **last path segment** (same convention `video-export` writes; a folder-picker upload can hand back `subfolder/008_clip.mp4` instead of a bare filename depending on the browser, so matching strips any `/`-or-`\`-delimited directory part first — `filename` in the response is still the original, unstripped name the browser sent), 1-based number minus one giving the 0-based `scene_index`; matched files are appended to that scene's `videos[]` via the same `video.save_uploaded_video` the single-file upload route above uses (`model: 'upload'`, `cost: 0`). `reason` is one of `unsupported_type`\|`no_scene_number`\|`scene_out_of_range` — a bad file in the batch is skipped, not a hard failure for the rest. `404` if the project doesn't exist |
+| `GET /api/projects/{id}/final-export` | → a zip file (`application/zip`, `Content-Disposition: attachment`) — the Export stage's (last stage, `stage: 'export'`) deliverable bundle, distinct from `video-export` above (that one hands off *source* pictures+prompts for animating elsewhere; this one packages the *finished* results). `videos/`: **every** `Video` across every scene (not just each scene's `is_selected` pick), named `{5-rating}★_scene{n:03d}_{motion_prompt_slug}_{shortid}.mp4` — the inverted-rating prefix (`0` for 5★ down to `5` for unrated) sorts the best clips first alphabetically; `{shortid}` (the video file's own generated hex suffix) disambiguates several candidates sharing the same scene/prompt. `audio/`: the project's `is_selected` `MurekaTrack`'s `.mp3`, if any (skipped otherwise — no fallback). `title/`: every `TitleCardVariant` with `marked_for_export: true`, numbered `{i:02d}_{filename}`; if none are marked, falls back to the single `is_selected` variant so older projects (predating this flag) still get their main title card. A scene/track/variant whose file is missing on disk is silently skipped, same tolerance as `video-export`. `404` if the project doesn't exist |
+| `POST /api/projects/{id}/editor/render` | no body (reads `project.video_edit`, edited beforehand via the generic `PATCH`) → `{job_id}` — `422` if `video_edit.clips` is empty or `mureka_track_id` is unset, `404` if the project doesn't exist. Same immediate-return/background-job shape as scene images/video, but the work is a local `ffmpeg` call (`providers/editor.py`'s `start_render_job`/`render_to_file`), not an external API |
+| `GET /api/projects/{id}/editor/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', render: Render\|null, error: str\|null}` — polled every 3s by the frontend (`useEditorStage.js`); in-memory-only job state (`providers/editor.py`'s own `_jobs` dict). On success, the `render` entry has already been appended to `project.video_edit.renders` server-side |
+| `DELETE /api/projects/{id}/editor/renders/{render_id}` | → `{renders}` — removes one from `video_edit.renders` and deletes its file; `404` if the project or the render doesn't exist |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
 | `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |

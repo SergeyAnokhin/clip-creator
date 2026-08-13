@@ -665,6 +665,173 @@ def test_export_video_stage_missing_project_returns_404(client):
     assert client.get('/api/projects/does-not-exist/video-export').status_code == 404
 
 
+def test_final_export_bundles_videos_audio_and_marked_title_cards(client):
+    pid = client.get('/api/projects').json()[0]['id']
+
+    # Two video candidates for scene 0, different ratings - both must be
+    # included (unlike video-export, which only ever resolves one image per
+    # scene), named so the 5-star one sorts before the 3-star one.
+    client.post(
+        f'/api/projects/{pid}/scenes/0/videos/upload',
+        files={'file': ('a.mp4', b'video-a-bytes', 'video/mp4')},
+    )
+    client.post(
+        f'/api/projects/{pid}/scenes/0/videos/upload',
+        files={'file': ('b.mp4', b'video-b-bytes', 'video/mp4')},
+    )
+    project = client.get(f'/api/projects/{pid}').json()
+    project['scenes'][0]['videos'][0]['rating'] = 3
+    project['scenes'][0]['videos'][1]['rating'] = 5
+
+    # A selected Mureka track with a real file on disk.
+    project_dir = generation_router.storage.project_dir(pid)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True, exist_ok=True)
+    (music_dir / 'track1.mp3').write_bytes(b'audio-bytes')
+    project['mureka'] = {
+        'style_input': '', 'lyrics_input': '', 'reference_audio': [], 'reference_sources': [],
+        'tracks': [{'track_id': 'trk_1', 'file_path': 'music/track1.mp3', 'is_selected': True, 'rating': 0}],
+    }
+
+    # Two title-card variants, only one marked for export.
+    titlecard_dir = project_dir / 'titlecard'
+    titlecard_dir.mkdir(parents=True, exist_ok=True)
+    (titlecard_dir / 'tc1.png').write_bytes(b'title-bytes')
+    (titlecard_dir / 'tc2.png').write_bytes(b'title-bytes-2')
+    project['title_card'] = {
+        'reference_image_paths': [], 'variants': [
+            {'variant_id': 'tc_1', 'file_path': 'titlecard/tc1.png', 'rating': 0, 'is_selected': False, 'marked_for_export': True},
+            {'variant_id': 'tc_2', 'file_path': 'titlecard/tc2.png', 'rating': 0, 'is_selected': False, 'marked_for_export': False},
+        ],
+    }
+
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.get(f'/api/projects/{pid}/final-export')
+
+    assert resp.status_code == 200
+    assert resp.headers['content-type'] == 'application/zip'
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    names = zf.namelist()
+
+    video_names = sorted(n for n in names if n.startswith('videos/'))
+    assert len(video_names) == 2
+    assert video_names[0].startswith('videos/0★_scene001_')
+    assert video_names[1].startswith('videos/2★_scene001_')
+
+    assert 'audio/track1.mp3' in names
+    assert zf.read('audio/track1.mp3') == b'audio-bytes'
+
+    assert names.count('title/01_tc1.png') == 1
+    assert zf.read('title/01_tc1.png') == b'title-bytes'
+    assert not any(n.endswith('tc2.png') for n in names)
+
+
+def test_final_export_falls_back_to_selected_title_card_when_none_marked(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    project_dir = generation_router.storage.project_dir(pid)
+    titlecard_dir = project_dir / 'titlecard'
+    titlecard_dir.mkdir(parents=True, exist_ok=True)
+    (titlecard_dir / 'tc1.png').write_bytes(b'title-bytes')
+
+    project = client.get(f'/api/projects/{pid}').json()
+    project['title_card'] = {
+        'reference_image_paths': [],
+        'variants': [{'variant_id': 'tc_1', 'file_path': 'titlecard/tc1.png', 'rating': 0, 'is_selected': True}],
+    }
+    client.patch(f'/api/projects/{pid}', json=project)
+
+    resp = client.get(f'/api/projects/{pid}/final-export')
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert 'title/01_tc1.png' in zf.namelist()
+
+
+def test_final_export_missing_project_returns_404(client):
+    assert client.get('/api/projects/does-not-exist/final-export').status_code == 404
+
+
+# ---------- Editor stage (providers/editor.py) ----------
+
+def test_start_editor_render_rejects_empty_clips(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.post(f'/api/projects/{pid}/editor/render')
+    assert resp.status_code == 422
+    assert 'Таймлайн пуст' in resp.json()['detail']
+
+
+def test_start_editor_render_rejects_missing_track(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    client.patch(f'/api/projects/{pid}', json={'video_edit': {'clips': [{'scene_index': 0, 'video_id': 'v'}]}})
+
+    resp = client.post(f'/api/projects/{pid}/editor/render')
+
+    assert resp.status_code == 422
+    assert 'аудиотрек' in resp.json()['detail']
+
+
+def test_start_editor_render_starts_job(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    client.patch(f'/api/projects/{pid}', json={'video_edit': {
+        'mureka_track_id': 'trk_1', 'clips': [{'scene_index': 0, 'video_id': 'v'}],
+    }})
+    monkeypatch.setattr(generation_router.editor, 'start_render_job', lambda slug: 'job_123')
+
+    resp = client.post(f'/api/projects/{pid}/editor/render')
+
+    assert resp.status_code == 200
+    assert resp.json() == {'job_id': 'job_123'}
+
+
+def test_start_editor_render_missing_project_returns_404(client):
+    assert client.post('/api/projects/does-not-exist/editor/render').status_code == 404
+
+
+def test_get_editor_render_job_returns_status(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    render_record = {'render_id': 'rnd_1', 'file_path': 'editor/rnd_1.mp4', 'duration_ms': 1000, 'clip_count': 1}
+    monkeypatch.setattr(generation_router.editor, 'get_job', lambda job_id: {'status': 'completed', 'render': render_record, 'error': None})
+
+    resp = client.get(f'/api/projects/{pid}/editor/jobs/job_1')
+
+    assert resp.status_code == 200
+    assert resp.json() == {'status': 'completed', 'render': render_record, 'error': None}
+
+
+def test_get_editor_render_job_missing_returns_404(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    monkeypatch.setattr(generation_router.editor, 'get_job', lambda job_id: None)
+
+    resp = client.get(f'/api/projects/{pid}/editor/jobs/does-not-exist')
+
+    assert resp.status_code == 404
+
+
+def test_delete_editor_render_removes_entry_and_file(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    data_root = Path(os.environ['APP_DATA_DIR'])
+    editor_dir = data_root / 'projects' / pid / 'editor'
+    editor_dir.mkdir(parents=True, exist_ok=True)
+    (editor_dir / 'rnd_1.mp4').write_bytes(b'MP4DATA')
+    client.patch(f'/api/projects/{pid}', json={'video_edit': {
+        'mureka_track_id': 'trk_1', 'clips': [],
+        'renders': [{'render_id': 'rnd_1', 'file_path': 'editor/rnd_1.mp4', 'duration_ms': 1000, 'clip_count': 1}],
+    }})
+
+    resp = client.delete(f'/api/projects/{pid}/editor/renders/rnd_1')
+
+    assert resp.status_code == 200
+    assert resp.json()['renders'] == []
+    assert not (editor_dir / 'rnd_1.mp4').is_file()
+    assert client.get(f'/api/projects/{pid}').json()['video_edit']['renders'] == []
+
+
+def test_delete_editor_render_missing_returns_404(client):
+    pid = client.get('/api/projects').json()[0]['id']
+    resp = client.delete(f'/api/projects/{pid}/editor/renders/does-not-exist')
+    assert resp.status_code == 404
+
+
 def test_import_video_batch_matches_by_scene_number_prefix(client):
     pid = client.get('/api/projects').json()[0]['id']
 

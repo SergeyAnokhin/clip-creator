@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, File, Form, HTTPException, Response, UploadFile
 
 from .. import console_log, storage, usage
-from ..providers import images, mureka, scenes, suno, title_card, video, wish_library
+from ..providers import editor, images, mureka, scenes, suno, title_card, video, wish_library
 from .projects import migrate_legacy_project
 from .settings import DEFAULT_SETTINGS
 
@@ -565,6 +565,123 @@ async def import_video_batch(project_id: str, files: list[UploadFile] = File(...
         storage.save_project(project_id, project)
 
     return {'assigned': assigned, 'skipped': skipped}
+
+
+@router.get('/{project_id}/final-export')
+async def export_final_package(project_id: str):
+    """Bundles the finished deliverables for handing the whole project off:
+    every generated video candidate across every scene (not just each
+    scene's `is_selected` pick - the user reviews and picks the winner
+    outside this app, so the filename carries the rating instead of the app
+    pre-choosing for them), the selected Mureka track's audio, and every
+    Title Card variant explicitly marked `marked_for_export` (a variant-level
+    flag independent of `is_selected`, since that one stays single-pick for
+    the "main" title card elsewhere - falls back to the single `is_selected`
+    variant when nothing is marked, so an older project isn't left with an
+    empty title folder). Each video is named
+    `{5-rating}★_scene{n:03d}_{motion_prompt_slug}_{shortid}.mp4` - the
+    inverted-rating prefix (0 for 5★, 5 for unrated) sorts the best clips
+    first alphabetically, a plain `{rating}★` prefix would sort worst-first;
+    `{shortid}` (from the video's own file_path) disambiguates several
+    candidates for the same scene sharing the same prompt slug. `404` if the
+    project doesn't exist."""
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+
+    project_dir = storage.project_dir(project_id)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for i, scene in enumerate(project.get('scenes', [])):
+            for vid in scene.get('videos', []) or []:
+                src_path = project_dir / vid['file_path']
+                if not src_path.is_file():
+                    continue
+                rating = min(max(int(vid.get('rating') or 0), 0), 5)
+                slug = _slugify_prompt(vid.get('motion_prompt') or scene.get('motion_prompt', ''))
+                short_id = src_path.stem.rsplit('_', 1)[-1]
+                filename = f'videos/{5 - rating}★_scene{i + 1:03d}_{slug}_{short_id}.mp4'
+                zf.write(src_path, filename)
+
+        tracks = (project.get('mureka') or {}).get('tracks', []) or []
+        selected_track = next((t for t in tracks if t.get('is_selected')), None)
+        if selected_track:
+            src_path = project_dir / selected_track['file_path']
+            if src_path.is_file():
+                zf.write(src_path, f'audio/{src_path.name}')
+
+        variants = (project.get('title_card') or {}).get('variants', []) or []
+        marked = [v for v in variants if v.get('marked_for_export')] or [v for v in variants if v.get('is_selected')]
+        for i, variant in enumerate(marked):
+            src_path = project_dir / variant['file_path']
+            if src_path.is_file():
+                zf.write(src_path, f'title/{i + 1:02d}_{src_path.name}')
+
+    buffer.seek(0)
+    title = project.get('title') or project_id
+    # `filename=` must be latin-1-encodable (a raw HTTP header value) - an
+    # ASCII-only fallback for browsers that ignore `filename*=`, which
+    # carries the real (possibly Cyrillic) name percent-encoded instead.
+    ascii_title = re.sub(r'[^A-Za-z0-9\-_]+', '_', title).strip('_') or 'export'
+    zip_filename_ascii = f'{ascii_title}-final-export.zip'
+    zip_filename_utf8 = f'{title}-final-export.zip'
+    headers = {
+        'Content-Disposition': f"attachment; filename=\"{zip_filename_ascii}\"; filename*=UTF-8''{quote(zip_filename_utf8)}",
+    }
+    return Response(content=buffer.getvalue(), media_type='application/zip', headers=headers)
+
+
+# ---------- Editor stage (final render, providers/editor.py) ----------
+# `project.video_edit` (`{mureka_track_id, clips[], renders[]}`) - the clip
+# order/trim/speed/track selection itself is edited only through the generic
+# `PATCH /{project_id}` (same convention as every other rating/`is_selected`
+# edit elsewhere in this app), so this section only starts/polls/cleans up
+# the actual ffmpeg render, same job/poll shape as image/video generation.
+
+@router.post('/{project_id}/editor/render')
+async def start_editor_render(project_id: str):
+    project = storage.load_project(project_id)
+    if project is None:
+        raise HTTPException(404, 'Project not found')
+    video_edit = project.get('video_edit') or {}
+    if not video_edit.get('clips'):
+        raise HTTPException(422, 'Таймлайн пуст — добавьте хотя бы один клип')
+    if not video_edit.get('mureka_track_id'):
+        raise HTTPException(422, 'Не выбран аудиотрек для монтажа')
+    job_id = editor.start_render_job(project_id)
+    return {'job_id': job_id}
+
+
+@router.get('/{project_id}/editor/jobs/{job_id}')
+async def get_editor_render_job(project_id: str, job_id: str):
+    job = editor.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    return job
+
+
+@router.delete('/{project_id}/editor/renders/{render_id}')
+async def delete_editor_render(project_id: str, render_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        video_edit = project.get('video_edit') or {}
+        renders = video_edit.get('renders', [])
+        target = next((r for r in renders if r.get('render_id') == render_id), None)
+        if target is None:
+            raise HTTPException(404, 'Render not found')
+        remaining = [r for r in renders if r.get('render_id') != render_id]
+        video_edit['renders'] = remaining
+        project['video_edit'] = video_edit
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'renders': remaining}
 
 
 @router.post('/{project_id}/reference-images')
