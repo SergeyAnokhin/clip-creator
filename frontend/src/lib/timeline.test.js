@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  UNKNOWN_DURATION_FALLBACK_MS, clampTrim, computeClipDurationMs, computeTimelineClips, findActiveClip,
-  getTotalDurationMs, resolveTrimEndMs,
+  MIN_CLIP_MS, UNKNOWN_DURATION_FALLBACK_MS, applyEdgeTrim, clampTrim, computeClipDurationMs,
+  computeTimelineClips, dropIndexForStart, findActiveClip, getTotalDurationMs, moveClip,
+  resolveTrimEndMs, splitClipsAt,
 } from './timeline.js';
 
 describe('resolveTrimEndMs', () => {
@@ -130,5 +131,108 @@ describe('clampTrim', () => {
 
   it('keeps at least 1ms between start and end when they cross', () => {
     expect(clampTrim(3000, 2000, 5000)).toEqual({ trimStartMs: 3000, trimEndMs: 3001 });
+  });
+});
+
+describe('moveClip', () => {
+  const clips = [{ clip_id: 'a' }, { clip_id: 'b' }, { clip_id: 'c' }];
+
+  it('moves a clip forward', () => {
+    expect(moveClip(clips, 0, 2).map((c) => c.clip_id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('moves a clip backward', () => {
+    expect(moveClip(clips, 2, 0).map((c) => c.clip_id)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('is a no-op for the same or an out-of-range index', () => {
+    expect(moveClip(clips, 1, 1)).toBe(clips);
+    expect(moveClip(clips, 1, 5)).toBe(clips);
+  });
+});
+
+describe('dropIndexForStart', () => {
+  // output layout: a 0..2000, b 2000..4000, c 4000..6000
+  const timelineClips = computeTimelineClips([
+    { clip_id: 'a', video_id: 'v', trim_start_ms: 0, trim_end_ms: 2000, speed: 1 },
+    { clip_id: 'b', video_id: 'v', trim_start_ms: 0, trim_end_ms: 2000, speed: 1 },
+    { clip_id: 'c', video_id: 'v', trim_start_ms: 0, trim_end_ms: 2000, speed: 1 },
+  ], { v: 2000 });
+
+  it('keeps the index for a drag that stays in place', () => {
+    expect(dropIndexForStart(timelineClips, 0, 0)).toBe(0);
+  });
+
+  it('swaps with the next clip once the dragged centre passes it', () => {
+    expect(dropIndexForStart(timelineClips, 0, 2500)).toBe(1);
+  });
+
+  it('lands last when dragged past every other clip', () => {
+    expect(dropIndexForStart(timelineClips, 0, 9000)).toBe(2);
+  });
+
+  it('lands first when dragged before every other clip', () => {
+    expect(dropIndexForStart(timelineClips, 2, -1000)).toBe(0);
+  });
+});
+
+describe('applyEdgeTrim', () => {
+  const clip = { trim_start_ms: 1000, trim_end_ms: 4000, speed: 1 };
+
+  it('moves only the dragged start edge', () => {
+    expect(applyEdgeTrim(clip, 5000, 'start', 500)).toEqual({ trimStartMs: 1500, trimEndMs: 4000 });
+  });
+
+  it('moves only the dragged end edge', () => {
+    expect(applyEdgeTrim(clip, 5000, 'end', -1000)).toEqual({ trimStartMs: 1000, trimEndMs: 3000 });
+  });
+
+  it('converts the output-space delta by the clip speed', () => {
+    expect(applyEdgeTrim({ ...clip, speed: 2 }, 5000, 'end', 500)).toEqual({ trimStartMs: 1000, trimEndMs: 5000 });
+  });
+
+  it('clamps the start edge to 0 and the end edge to the source duration', () => {
+    expect(applyEdgeTrim(clip, 5000, 'start', -9000).trimStartMs).toBe(0);
+    expect(applyEdgeTrim(clip, 5000, 'end', 9000).trimEndMs).toBe(5000);
+  });
+
+  it('keeps at least MIN_CLIP_MS between the edges', () => {
+    expect(applyEdgeTrim(clip, 5000, 'start', 9000).trimStartMs).toBe(4000 - MIN_CLIP_MS);
+    expect(applyEdgeTrim(clip, 5000, 'end', -9000).trimEndMs).toBe(1000 + MIN_CLIP_MS);
+  });
+
+  it('leaves the end edge unbounded above when the source duration is unknown', () => {
+    const imported = { trim_start_ms: 0, trim_end_ms: 5000, speed: 1 };
+    expect(applyEdgeTrim(imported, 0, 'end', 3000).trimEndMs).toBe(8000);
+  });
+});
+
+describe('splitClipsAt', () => {
+  const clips = [
+    { clip_id: 'a', video_id: 'va', trim_start_ms: 0, trim_end_ms: 4000, speed: 1 },
+    { clip_id: 'b', video_id: 'vb', trim_start_ms: 0, trim_end_ms: 4000, speed: 2 },
+  ];
+  // output layout: a 0..4000, b 4000..6000
+  const durations = { va: 4000, vb: 4000 };
+  const makeId = () => 'new';
+
+  it('cuts the clip under the playhead into two back-to-back halves', () => {
+    const result = splitClipsAt(clips, durations, 1500, makeId);
+    expect(result.map((c) => c.clip_id)).toEqual(['a', 'new', 'b']);
+    expect(result[0]).toMatchObject({ trim_start_ms: 0, trim_end_ms: 1500 });
+    expect(result[1]).toMatchObject({ video_id: 'va', trim_start_ms: 1500, trim_end_ms: 4000 });
+    expect(getTotalDurationMs(result, durations)).toBe(getTotalDurationMs(clips, durations));
+  });
+
+  it('converts the cut point to source time by the clip speed', () => {
+    const result = splitClipsAt(clips, durations, 5000, makeId);
+    expect(result[1]).toMatchObject({ trim_start_ms: 0, trim_end_ms: 2000 });
+    expect(result[2]).toMatchObject({ trim_start_ms: 2000, trim_end_ms: 4000 });
+  });
+
+  it('is a no-op on a cut, past the end, or too close to an edge', () => {
+    expect(splitClipsAt(clips, durations, 4000, makeId)).toBe(clips);
+    expect(splitClipsAt(clips, durations, 99999, makeId)).toBe(clips);
+    expect(splitClipsAt(clips, durations, 50, makeId)).toBe(clips);
   });
 });

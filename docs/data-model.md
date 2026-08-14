@@ -17,6 +17,7 @@ app_data/
       references/ref_{uuid}.{ext}
       titlecard/{shorthex}.{png|jpg|webp}
       titlecard/posters/{shorthex}.png   # Poster constructor output (flattened)
+      magic/{group_id}/L{n}.png          # Magic-layer group: one RGBA layer per file
       music/{track_id}.mp3               # Mureka tracks, downloaded immediately (see below)
       music/{stem_id}.zip                # stem-separation output (see MurekaTrack.stems)
       music/references/ref_{uuid}.{ext}  # trimmed reference audio actually sent to Mureka
@@ -53,6 +54,7 @@ app_data/
 | `active_video_wish_ids` | str[] | Ids of `settings.video_wish_library` entries toggled on for this project — same idea as `active_scene_wish_ids`, separate library (animation/video wishes, e.g. "плавное движение камеры") |
 | `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: []}` |
 | `video_edit` | VideoEdit \| absent/null | Editor stage state (final render) — absent/`null` until the stage is first opened, or if it's ever explicitly cleared; the frontend treats either the same and re-seeds a fresh default (see below) |
+| `magic_layer_groups` | MagicLayerGroup[] \| absent | Decomposed-image layer sets (see below) — absent until the first ✨ decomposition; every read site defaults it to `[]` |
 
 **Project rename** (`app_data/projects/_redirects.json`): a `PATCH` that changes
 `title`/`author` moves the folder to the new slug (uniquified like
@@ -119,7 +121,10 @@ immediately, so a reload right after first opening the stage doesn't lose it.
 
 An **`EditorClip`** is `{clip_id, scene_index, video_id, trim_start_ms,
 trim_end_ms, speed}` — `video_id` must resolve inside
-`scenes[scene_index].videos[]`; `speed` is an ffmpeg `setpts` multiplier; video
+`scenes[scene_index].videos[]` but need **not** be unique across `clips[]`: the
+timeline's razor (`lib/timeline.js`'s `splitClipsAt`) turns one clip into two
+entries over the same source video with adjacent trim windows, and the render
+resolves every clip independently. `speed` is an ffmpeg `setpts` multiplier; video
 clips are always muted, the picked track being the only audio.
 `trim_end_ms: null` means "to the end of the source", falling back to that
 video's `duration_seconds` — **except when that duration is itself unknown** (an
@@ -199,6 +204,31 @@ all** (`normalizeTextLayers` treats a missing/non-array value as `[]`).
 one of `lib/posterLayers.js`'s `FONT_OPTIONS`; `fontSize`/`color` and, for
 `badge`, `bgColor` are plain style fields; `align` is `'left'|'center'|'right'`
 (defaults `'left'` on older layers); `effects` reuses the shape above.
+
+`layers.magic` is the same image-layer shape plus a per-layer
+`src{group_id, index, file_path, is_background}` — unlike every other image
+layer, a magic layer carries its own source rather than sharing one of the
+constructor's three fixed slots, since one group contributes N different images
+(`normalizeMagicLayers` drops entries whose `src.file_path` didn't survive, and
+reads a missing `magic` key as `[]`, so pre-feature posters open unchanged).
+Alongside it, `layers.hide_background` / `layers.hide_title_card` (booleans,
+absent = `false`) record that the flat original a group was made from must stop
+rendering — see architecture.md.
+
+**MagicLayerGroup**: `{group_id, source_path, source_kind, canvas{width,height},
+method, model, num_layers, requested_layers, layers[{index, file_path,
+bbox{x,y,width,height}, is_background}], cost, generated_at}` — one
+decomposition of one image (`providers/magic_layers.py`). `source_path` is the
+project-relative path of the image it came from (a scene image or a title-card
+variant, per `source_kind`: `scene_image|title_card_variant|reference`);
+`method` is `fal|replicate`. `layers` is ordered bottom-to-top, each a
+full-canvas RGBA PNG under `magic/{group_id}/`, exactly one flagged
+`is_background` (the inpainted plate — detected by opaque area, not by index,
+since the model doesn't guarantee ordering). `num_layers` is what actually came
+back after empty layers were dropped; `requested_layers` is what was asked for.
+`bbox` is the layer's opaque bounds in canvas pixels, kept so the UI can label a
+layer without decoding the PNG. Groups are project-level and reusable — a poster
+references one through `layers.magic[].src`, it does not copy it.
 
 **Mureka**: `{style_input, lyrics_input, reference_audio[], reference_sources[],
 tracks[]}`. `style_input`/`lyrics_input` are seeded lazily (only if still
@@ -347,6 +377,8 @@ scene_base_prompt_narrative, scene_base_prompt_abstract, scene_wish_library[], p
 request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_base_prompt_presets[],
 title_card_wish_library[], background_remover_method, background_remover_local_params{bg,threshold},
 background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse},
+magic_layers_method, magic_layers_num_layers, magic_layers_fal_params{model,num_inference_steps,acceleration},
+magic_layers_replicate_params{model},
 outpaint_quality_mode, logos[], poster_templates[], music_tags[],
 suno_base_prompt_user_presets[], mureka_base_prompt_user_presets[]}`
 
@@ -408,6 +440,13 @@ resending everything.
   feeds the free pixel cutout; `background_remover_fal_params.model` picks
   between FAL's bria and rembg; `background_remover_params` feeds Replicate's
   model input directly (defaults match its own schema).
+- **`magic_layers_*`** — the ✨ decomposition's defaults (see
+  `architecture.md`): `magic_layers_method` (`'fal'|'replicate'`, default
+  `'fal'`) and `magic_layers_num_layers` (default 4, clamped 2-10) are only
+  fallbacks — the button passes both per click. `magic_layers_fal_params`
+  (`model`, `num_inference_steps` 1-50, `acceleration`
+  `none|regular|high`) and `magic_layers_replicate_params` (`model`) feed each
+  host's request body.
 - **`outpaint_quality_mode`** (`'fast'|'quality'`, default `'fast'`) — the
   default for the crop/outpaint editor's toggle, overridable per save.
 - **`request_timeout_seconds`** (default 60) — caps a single outbound text-model
@@ -504,6 +543,9 @@ reference-image upload (multipart).
 | `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | `{method?}` (`'local'\|'fal'\|'replicate'`, defaults to `settings.background_remover_method`) → `{variant, variants, debug: {request, response}\|null}` — runs the variant through the chosen background-removal method (`title_card.remove_background`; see `architecture.md` for what each of the 3 does) and **appends** the result as a new variant (`source_variant_id` pointing back at the original, which is left untouched); `404` if `variant_id` doesn't exist, `502` on a provider failure |
 | `POST /api/projects/{id}/title-card/poster` | multipart: `file` (flattened PNG) + `background_path`, `title_card_variant_id`, `logo_id?`, `layers` (JSON), `canvas_size` (JSON), `poster_id?` → `{poster, posters}`. Creates a new `Poster`, or re-renders one in place (same `file_path`) when `poster_id` matches an existing entry. `422` if `background_path`/`title_card_variant_id` don't resolve |
 | `DELETE /api/projects/{id}/title-card/poster/{poster_id}` | → `{posters}` — removes one from `project.title_card.posters` and deletes its file |
+| `POST /api/projects/{id}/magic-layers` | `{source_path, num_layers?, method?, source_kind?}` → `{job_id}` — decomposes one project image into inpainted RGBA layers (`providers/magic_layers.py`). `source_path` must resolve inside the project folder and exist (`422` otherwise, same guard as `title-card/generate`'s references); `num_layers` is clamped to 2-10 and `method` to `fal`\|`replicate`, both falling back to `settings.magic_layers_*`. Immediate-return/background-job shape like the title card, since a decomposition runs 15-30s |
+| `GET /api/projects/{id}/magic-layers/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', group: MagicLayerGroup\|null, error: str\|null, debug: {request, response}\|null}` — polled every 1.5s (`useMagicLayers.js`), in-memory-only job state (`magic_layers._jobs`). On success the group and its PNGs are already persisted. `debug` has the image bytes replaced with a `<image data, N bytes>` placeholder and the result URLs redacted |
+| `DELETE /api/projects/{id}/magic-layers/{group_id}` | → `{magic_layer_groups}` — removes the group and deletes its layer files (and the now-empty `magic/{group_id}/` folder). Posters that referenced it keep their `layers.magic` entries, which then render nothing — deliberately not cascaded |
 | `POST /api/projects/{id}/mureka/generate` | `{style, lyrics, model, n, gender?, reference_id?}` → `{job_id}` — one job per click (unlike scene images, Mureka's own `n` (1-3) returns several songs from a single task); `422` if `lyrics` is blank |
 | `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', tracks: MurekaTrack[]\|null, error: str\|null, stage: str\|null, debug}` — polled every 3s (longer than image jobs — Mureka generation runs 30-90s), in-memory-only job state (`providers/mureka.py`'s own `_jobs` dict). `stage` mirrors Mureka's own intermediate task status (`preparing\|queued\|running\|streaming`) while `status` is still `'pending'` — shown next to the elapsed-seconds counter instead of just a spinner. Shared by `/mureka/generate` and `/mureka/tracks/{id}/extend` below (same job shape) |
 | `DELETE /api/projects/{id}/mureka/tracks/{track_id}` | → `{tracks}` — removes one from `project.mureka.tracks` and deletes its `.mp3` file |

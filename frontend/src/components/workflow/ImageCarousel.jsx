@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Crop, Star, Trash2, Upload } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
+import MagicLayersButton from './MagicLayersButton.jsx';
 
 /** Single-image "hero" preview for a scene's `images` array - fills its
  * container edge-to-edge (`.scene-image-panel`, a padding-less sibling block
@@ -22,11 +23,14 @@ import { mediaUrl } from '../../api/client.js';
  * dropping a local file or a dragged image URL onto the frame adds a custom
  * image the same way the Upload button does. `onCrop` is likewise
  * Images-stage-only (opens `ImageCropEditor.jsx` on the current image) -
- * deliberately not offered on Title Card variants or reference images. */
+ * deliberately not offered on Title Card variants or reference images. Same
+ * for `onDecomposeMagicLayers` (the ✨ button, see providers/magic_layers.py):
+ * the group it produces is consumed later, in the poster constructor. */
 export default function ImageCarousel({
   L, projectId, images, currentIndex, onIndexChange, onExpand,
   onDelete, showSelectMain, onSelectMain, showStars, onRate,
   onDropFile, onDropUrl, onCrop,
+  onDecomposeMagicLayers, magicLayerGroups = [], magicBusySources,
 }) {
   const [broken, setBroken] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -34,6 +38,11 @@ export default function ImageCarousel({
   const image = total ? images[Math.min(currentIndex, total - 1)] : null;
   const showImage = Boolean(image?.file_path) && !broken;
   const canDrop = Boolean(onDropFile || onDropUrl);
+  const magicLayerCount = image?.file_path
+    ? magicLayerGroups
+      .filter((g) => g.source_path === image.file_path)
+      .reduce((max, g) => Math.max(max, g.layers?.length || 0), 0)
+    : 0;
 
   function go(delta) {
     if (total < 2) return;
@@ -117,6 +126,20 @@ export default function ImageCarousel({
           >
             <Crop size={12} />
           </button>
+        )}
+        {showImage && onDecomposeMagicLayers && (
+          <MagicLayersButton
+            L={L}
+            className="image-carousel-crop-btn"
+            style={{ position: 'absolute', bottom: 6, left: 34 }}
+            busy={magicBusySources?.has(image.file_path)}
+            onPick={(method, numLayers) => onDecomposeMagicLayers(image.file_path, {
+              method, numLayers, sourceKind: 'scene_image',
+            })}
+          />
+        )}
+        {showImage && magicLayerCount > 0 && (
+          <span className="magic-layer-badge" title={L.magic_ready}>{`✨ ${magicLayerCount}`}</span>
         )}
         {showImage && showStars && (
           <div className="image-carousel-stars" onClick={(e) => e.stopPropagation()}>

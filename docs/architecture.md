@@ -80,10 +80,18 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    source pictures + prompts for animating elsewhere, and
    `POST .../video-import-batch` brings the finished clips back in.
 9. **Editor** (`stage: 'editor'`) — picked clips + picked track → one file via
-   local `ffmpeg` (no external API). Reorder, trim, per-clip speed only; no
-   filters/transitions, though `project.video_edit` is shaped to grow them. The
-   in-browser preview never touches ffmpeg (a `<video>`+`<audio>` pair synced off
-   a `requestAnimationFrame` playhead approximates the cut); only the server-side
+   local `ffmpeg` (no external API). Laid out like a normal NLE: program monitor
+   on top, a timeline underneath with a time ruler, clip blocks drawn to scale,
+   the track's waveform on its own row and a playhead across both. Editing is
+   direct manipulation — drag a block to reorder, drag its edges to trim, drag
+   the ruler to scrub, the razor button (or `S`) to split the clip under the
+   playhead, ctrl+wheel / the toolbar to zoom — with a properties strip for
+   exact values. Still reorder/trim/split/speed only; no filters or transitions,
+   though `project.video_edit` is shaped to grow them. **The timeline has no
+   gaps**: clips are always concatenated back to back, so a horizontal drag
+   means "reorder", not "move to this exact time". The in-browser preview never
+   touches ffmpeg (a `<video>`+`<audio>` pair synced off a
+   `requestAnimationFrame` playhead approximates the cut); only the server-side
    render is pixel-accurate.
 
 Scenes and Images are two stages because they are two independent AI calls with
@@ -400,6 +408,75 @@ and `lib/posterLayers.js` (pure factories and math). Full data shape in
 - **Logos** are a **global**, cross-project library (`settings.logos`, files
   under `app_data/logos/`, served through the same `/media` mount as project
   files), managed from Settings → Logos, PNG/WebP only.
+
+## Magic layers
+
+The inverse of the poster constructor: instead of composing layers into one flat
+PNG, one flat image is decomposed back into N independent RGBA layers, each
+already carrying painted content behind whatever used to cover it — so moving a
+layer never leaves a hole. Backend seam is
+[`providers/magic_layers.py`](../backend/app/providers/magic_layers.py) +
+[`routers/magic_layers.py`](../backend/app/routers/magic_layers.py); frontend is
+`hooks/useMagicLayers.js`, the shared `MagicLayersButton.jsx` (the ✨ button and
+its method popup) and the poster constructor's `magic` layer kind. Data shape in
+[data-model.md](data-model.md).
+
+```
+scene image / title-card variant
+        │  ✨  (method + layer count picked per click)
+        ▼
+POST /magic-layers ──► job ──► Qwen-Image-Layered (fal | replicate)
+        │                            │  N RGBA layers, smaller than the source
+        │                            ▼
+        │                      _postprocess: upscale → re-take foreground RGB
+        │                      from the full-res original through the upscaled
+        │                      alpha → detect background → drop empty layers
+        ▼
+project.magic_layer_groups[] + magic/{group_id}/L{n}.png
+        │
+        ▼  "Применить" in the poster constructor
+N draggable magic layers (bottom-to-top), the flat original hidden underneath
+```
+
+- **One model, two hosts.** `fal-ai/qwen-image-layered` ($0.05/call) and
+  `qwen/qwen-image-layered` on Replicate (~$0.03) run the same Apache-2.0 model
+  (arxiv 2512.15603). The method is passed **per click** (like background
+  removal), with `settings.magic_layers_method` only as the fallback.
+- **Async job + poll**, not a synchronous route: a decomposition takes 15-30s.
+  Same in-memory `_jobs` dict / `start_job` / `get_job` shape as `title_card.py`;
+  the group is written to disk and persisted before the job flips to `completed`.
+- **The model guarantees neither ordering nor resolution**, and `_postprocess`
+  (a pure, separately tested function) compensates for both: the background is
+  detected as the layer with the largest opaque area rather than trusting index
+  0, and every layer is upscaled to the source's exact size — RGB with LANCZOS,
+  **alpha with BILINEAR**, because LANCZOS ringing on an alpha channel reads as
+  holes inside an object and a halo outside it. Foreground layers then take their
+  RGB from the full-resolution original through that alpha, so objects stay
+  pixel-sharp; only the inpainted background plate is limited by the model's
+  ~640/1024px working resolution, and it is only ever visible where an object
+  moved away.
+- **Groups are project-level**, not attached to the image they came from
+  (`project.magic_layer_groups[]`, files under `magic/{group_id}/`), so one
+  decomposition is reusable by every poster. All three entry points — the Images
+  stage carousel, the Title Card gallery, and the constructor's own panel —
+  address a group by its `source_path`.
+- **In the constructor**, magic layers are their own layer kind rendered as one
+  ordered block right after the background (bg → **magic** → glass → title card →
+  logo → text), reordered within the block by ↑/↓. Everything else — drag,
+  transform, crop, effects — is the existing `OverlayImage`; only image loading
+  is new (`MagicLayerNode` exists so each layer can call `useHtmlImage` for its
+  own file, which a loop can't do).
+- **Applying a group hides the flat original** it was made from
+  (`hide_background` / `hide_title_card`, both part of the poster document and of
+  undo/redo) — otherwise the untouched picture shows through the moment a layer
+  is moved, which is the exact hole this feature removes. The background image
+  stays *loaded* either way: `canvas_size` and the export `pixelRatio` come from
+  its natural size. Switching background or title-card variant drops the magic
+  layers, since they are slices of the previous source.
+- **Not managed:** `num_layers` asks for a count, not for specific objects.
+  Heavily overlapping objects can fuse into one layer and shadows tend to stay on
+  the background. Prompt-driven extraction of one named object would need a
+  different pipeline (SAM 3 + an eraser model) and is deliberately not built.
 
 ## AI usage & cost tracking
 

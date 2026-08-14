@@ -49,7 +49,7 @@ Price row shapes:
     video: {'kind': 'video', 'per_second': USD per generated video-second}
 """
 
-PRICING_VERSION = '2026-08-09'
+PRICING_VERSION = '2026-08-14'
 CURRENCY = 'USD'
 
 TOKENS_PER_UNIT = 1_000_000
@@ -169,6 +169,10 @@ BUILTIN_PRICING: dict[str, dict] = {
     # per $1." Used by the Title Card stage's "remove background" button
     # (providers/title_card.py's remove_background).
     'replicate:851-labs/background-remover': {'kind': 'image', 'per_image': 0.00044},
+    # replicate.com\qwen\qwen-image-layered (2026-08): ~$0.03 per
+    # decomposition, flat regardless of how many layers come back. Used by
+    # the "magic layers" button (providers/magic_layers.py).
+    'replicate:qwen/qwen-image-layered': {'kind': 'image', 'per_image': 0.03},
 
     # ---- FAL: fal.ai's model-comparison pricing page (pasted by the user) +
     # each model's own page for the exact `fal-ai/...` id (the comparison
@@ -189,6 +193,11 @@ BUILTIN_PRICING: dict[str, dict] = {
     # of compute rather than a flat per-run price and doesn't fit this app's
     # per_image row shape, so it's left unpriced (selectable, shows "price ?").
     'fal:fal-ai/bria/background/remove': {'kind': 'image', 'per_image': 0.018},
+    # fal.ai\models\fal-ai\qwen-image-layered's own page (2026-08): "Your
+    # request will cost $0.05 per image" - flat per decomposition, not per
+    # layer and not per megapixel. Used by the "magic layers" button
+    # (providers/magic_layers.py).
+    'fal:fal-ai/qwen-image-layered': {'kind': 'image', 'per_image': 0.05},
 
     # ---- Krea: krea.ai's model list (pasted by the user, "from $X" floor
     # price used where tiered). Krea has no discovery API - every model is

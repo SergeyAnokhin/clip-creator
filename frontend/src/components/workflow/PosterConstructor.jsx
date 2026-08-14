@@ -7,12 +7,12 @@ import { Group, Image as KonvaImage, Layer, Line, Stage } from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import {
-  ZOOM_STEP, clampZoom, defaultTextFontSize, genId, makeDefaultGlass, makeLayer, makeTextLayer,
-  normalizeLayers, normalizeTextLayers, parseTextBlock, roundRectPath,
+  ZOOM_STEP, clampZoom, defaultTextFontSize, genId, makeDefaultGlass, makeLayer, makeMagicLayer, makeTextLayer,
+  moveLayerInList, normalizeLayers, normalizeMagicLayers, normalizeTextLayers, parseTextBlock, roundRectPath,
 } from '../../lib/posterLayers.js';
-import { OverlayGlass, OverlayImage, OverlayText } from './PosterCanvasLayers.jsx';
+import { MagicLayerNode, OverlayGlass, OverlayImage, OverlayText } from './PosterCanvasLayers.jsx';
 import {
-  EffectsPanel, GlassPanel, LayerToolbar, PickerRow, PickerThumb, TextLayerPanel,
+  EffectsPanel, GlassPanel, LayerToolbar, MagicLayersPanel, PickerRow, PickerThumb, TextLayerPanel,
 } from './PosterPanels.jsx';
 
 const MAX_DISPLAY_W = 760;
@@ -45,6 +45,7 @@ const MAX_HISTORY = 50;
 export default function PosterConstructor({
   L, projectId, candidates, variants, logos, initialPoster, saving, onSave, onClose, textBlock,
   posterTemplates = [], onSaveTemplate, onDeleteTemplate,
+  magicLayerGroups = [], magicBusySources, onDecomposeMagicLayers, onDeleteMagicLayerGroup,
 }) {
   const [backgroundPath, setBackgroundPath] = useState(initialPoster?.background_path || candidates[0] || null);
   const [titleCardVariantId, setTitleCardVariantId] = useState(initialPoster?.title_card_variant_id || variants[0]?.variant_id || null);
@@ -53,7 +54,15 @@ export default function PosterConstructor({
   const [logoLayers, setLogoLayers] = useState(() => normalizeLayers(initialPoster?.layers?.logo));
   const [glassLayer, setGlassLayer] = useState(initialPoster?.layers?.glass || null);
   const [textLayers, setTextLayers] = useState(() => normalizeTextLayers(initialPoster?.layers?.text));
-  const [selected, setSelected] = useState(null); // {kind:'title'|'logo'|'text', id} | {kind:'glass'} | null
+  const [magicLayers, setMagicLayers] = useState(() => normalizeMagicLayers(initialPoster?.layers?.magic));
+  // A decomposition already contains the whole source image, so the flat
+  // original underneath it has to stop rendering - otherwise it shows through
+  // as soon as a magic layer is moved away, which is exactly the hole this
+  // feature exists to avoid. The background image stays *loaded* either way:
+  // canvasSize and the export pixelRatio are derived from its natural size.
+  const [hideBackground, setHideBackground] = useState(!!initialPoster?.layers?.hide_background);
+  const [hideTitleCard, setHideTitleCard] = useState(!!initialPoster?.layers?.hide_title_card);
+  const [selected, setSelected] = useState(null); // {kind:'title'|'logo'|'text'|'magic', id} | {kind:'glass'} | null
   const [cropEditing, setCropEditing] = useState(null); // {kind, id} | null
   const [fullscreen, setFullscreen] = useState(false);
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -138,7 +147,10 @@ export default function PosterConstructor({
    * drag (which re-fires this on every tick) from flooding the history
    * with one entry per pixel/keystroke - see the plan's rationale. */
   function currentDoc() {
-    return { backgroundPath, titleCardVariantId, logoId, titleLayers, logoLayers, glassLayer, textLayers };
+    return {
+      backgroundPath, titleCardVariantId, logoId, titleLayers, logoLayers, glassLayer, textLayers,
+      magicLayers, hideBackground, hideTitleCard,
+    };
   }
   function applyDoc(doc) {
     setBackgroundPath(doc.backgroundPath);
@@ -148,6 +160,9 @@ export default function PosterConstructor({
     setLogoLayers(doc.logoLayers);
     setGlassLayer(doc.glassLayer);
     setTextLayers(doc.textLayers);
+    setMagicLayers(doc.magicLayers);
+    setHideBackground(doc.hideBackground);
+    setHideTitleCard(doc.hideTitleCard);
   }
   function commit(mutate) {
     const now = Date.now();
@@ -199,11 +214,25 @@ export default function PosterConstructor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [past, future]);
 
-  function pickBackground(path) { commit(() => setBackgroundPath(path)); }
+  // Magic layers are slices of one specific source image, so switching that
+  // source drops them (and the "hide the flat original" flags they set) -
+  // keeping them would leave pieces of the previous picture floating over the
+  // new one.
+  function pickBackground(path) {
+    commit(() => {
+      setBackgroundPath(path);
+      setMagicLayers([]);
+      setHideBackground(false);
+      setSelected(null);
+      setCropEditing(null);
+    });
+  }
   function pickTitleCard(variantId) {
     commit(() => {
       setTitleCardVariantId(variantId);
       setTitleLayers([]);
+      setMagicLayers([]);
+      setHideTitleCard(false);
       setSelected(null);
       setCropEditing(null);
     });
@@ -265,7 +294,49 @@ export default function PosterConstructor({
   function layerListFor(kind) {
     if (kind === 'title') return [titleLayers, setTitleLayers];
     if (kind === 'logo') return [logoLayers, setLogoLayers];
+    if (kind === 'magic') return [magicLayers, setMagicLayers];
     return [textLayers, setTextLayers];
+  }
+
+  /** Turns one decomposed group into N movable layers. A group made from the
+   * current background lands at identity (same canvas, so the pieces sit
+   * exactly where they were in the original); one made from anything else
+   * (e.g. a title-card variant) is scaled and centered like a freshly picked
+   * title-card overlay. Applying also hides whichever flat image the group
+   * came from - see `hideBackground`'s comment. */
+  function applyMagicGroup(group) {
+    if (!group || !bg.width) return;
+    const fromBackground = group.source_path === backgroundPath;
+    const canvasW = group.canvas?.width || bg.width;
+    const scaleFactor = fromBackground ? 1 : (bg.width * 0.6) / canvasW;
+    const canvasH = group.canvas?.height || bg.height;
+    commit(() => {
+      setMagicLayers(group.layers.map((l) => makeMagicLayer({
+        groupId: group.group_id, index: l.index, filePath: l.file_path, isBackground: l.is_background,
+      })).map((layer) => ({
+        ...layer,
+        scaleX: scaleFactor, scaleY: scaleFactor,
+        x: fromBackground ? 0 : (bg.width - canvasW * scaleFactor) / 2,
+        y: fromBackground ? 0 : (bg.height - canvasH * scaleFactor) / 2,
+      })));
+      if (fromBackground) setHideBackground(true); else setHideTitleCard(true);
+      setSelected(null);
+      setCropEditing(null);
+    });
+  }
+
+  function clearMagicLayers() {
+    commit(() => {
+      setMagicLayers([]);
+      setHideBackground(false);
+      setHideTitleCard(false);
+      setSelected(null);
+      setCropEditing(null);
+    });
+  }
+
+  function moveMagicLayer(id, delta) {
+    commit(() => setMagicLayers((list) => moveLayerInList(list, list.findIndex((l) => l.id === id), delta)));
   }
 
   function updateLayer(kind, id, patch) {
@@ -431,7 +502,10 @@ export default function PosterConstructor({
     onSave({
       blob, backgroundPath, titleCardVariantId, logoId,
       canvasSize: { width: bg.width, height: bg.height },
-      layers: { title_card: titleLayers, logo: logoId ? logoLayers : null, glass: glassLayer, text: textLayers },
+      layers: {
+        title_card: titleLayers, logo: logoId ? logoLayers : null, glass: glassLayer, text: textLayers,
+        magic: magicLayers, hide_background: hideBackground, hide_title_card: hideTitleCard,
+      },
       posterId: initialPoster?.poster_id,
     });
   }
@@ -468,7 +542,19 @@ export default function PosterConstructor({
         >
           <Layer>
             <Group x={marginLocal} y={marginLocal}>
-              <KonvaImage image={bg.image} width={bg.width} height={bg.height} listening={false} />
+              <KonvaImage image={bg.image} width={bg.width} height={bg.height} listening={false} visible={!hideBackground} />
+              {magicLayers.map((layer) => (
+                <MagicLayerNode
+                  key={layer.id}
+                  projectId={projectId} layer={layer}
+                  isSelected={selected?.kind === 'magic' && selected.id === layer.id}
+                  isCropEditing={cropEditing?.kind === 'magic' && cropEditing.id === layer.id}
+                  onSelect={() => setSelected({ kind: 'magic', id: layer.id })}
+                  onChange={(patch) => updateLayer('magic', layer.id, patch)}
+                  onCropChange={(crop) => updateLayer('magic', layer.id, { crop })}
+                  bgWidth={bg.width} bgHeight={bg.height} effectiveScale={effectiveScale} setGuides={setGuides}
+                />
+              ))}
               {glassLayer && (
                 <OverlayGlass
                   transform={glassLayer} isSelected={selected?.kind === 'glass'}
@@ -476,7 +562,7 @@ export default function PosterConstructor({
                   bgWidth={bg.width} bgHeight={bg.height} effectiveScale={effectiveScale} setGuides={setGuides}
                 />
               )}
-              {titleLayers.map((layer) => (
+              {!hideTitleCard && titleLayers.map((layer) => (
                 <OverlayImage
                   key={layer.id}
                   image={titleImg.image} layer={layer}
@@ -531,7 +617,7 @@ export default function PosterConstructor({
     </div>
   );
 
-  const selectedLayer = selected && (selected.kind === 'title' || selected.kind === 'logo' || selected.kind === 'text')
+  const selectedLayer = selected && ['title', 'logo', 'text', 'magic'].includes(selected.kind)
     ? layerListFor(selected.kind)[0].find((l) => l.id === selected.id)
     : null;
   const isEditingSelectedCrop = !!(selectedLayer && cropEditing?.kind === selected.kind && cropEditing.id === selected.id);
@@ -622,6 +708,20 @@ export default function PosterConstructor({
                 </PickerThumb>
               ))}
             </PickerRow>
+
+            <MagicLayersPanel
+              L={L} projectId={projectId}
+              groups={magicLayerGroups}
+              backgroundPath={backgroundPath}
+              titleCardPath={titleVariant?.file_path || null}
+              activeGroupId={magicLayers[0]?.src?.group_id || null}
+              busySources={magicBusySources}
+              disabled={!bg.width}
+              onDecompose={onDecomposeMagicLayers}
+              onApply={applyMagicGroup}
+              onClear={clearMagicLayers}
+              onDeleteGroup={onDeleteMagicLayerGroup}
+            />
 
             <PickerRow label={L.poster_logoLabel} collapsible defaultOpen={false}>
               <PickerThumb selected={!logoId} onClick={() => pickLogo(null)}>
@@ -723,11 +823,13 @@ export default function PosterConstructor({
                   siblingCount={layerListFor(selected.kind)[0].length}
                   isCropEditing={isEditingSelectedCrop}
                   allowCrop={selected.kind !== 'text'}
-                  alwaysDeletable={selected.kind === 'text'}
+                  alwaysDeletable={selected.kind === 'text' || selected.kind === 'magic'}
                   onDuplicate={() => duplicateLayer(selected.kind, selected.id)}
                   onDelete={() => deleteLayer(selected.kind, selected.id)}
                   onToggleCrop={() => setCropEditing(isEditingSelectedCrop ? null : { kind: selected.kind, id: selected.id })}
                   onResetCrop={() => updateLayer(selected.kind, selected.id, { crop: null })}
+                  onMoveBack={selected.kind === 'magic' ? () => moveMagicLayer(selected.id, -1) : undefined}
+                  onMoveFront={selected.kind === 'magic' ? () => moveMagicLayer(selected.id, 1) : undefined}
                   L={L}
                 />
                 {selected.kind === 'text' && (
@@ -744,7 +846,9 @@ export default function PosterConstructor({
                       ? L.poster_titleCardLabel
                       : selected.kind === 'logo'
                         ? L.poster_logoLabel
-                        : (selectedLayer.textType === 'badge' ? L.poster_textBadgeLabel : L.poster_textHaloLabel)}
+                        : selected.kind === 'magic'
+                          ? (selectedLayer.src?.is_background ? L.magic_backgroundLayer : `${L.magic_layer} ${selectedLayer.src?.index ?? ''}`)
+                          : (selectedLayer.textType === 'badge' ? L.poster_textBadgeLabel : L.poster_textHaloLabel)}
                     effects={selectedLayer.effects}
                     onChange={(next) => updateLayer(selected.kind, selected.id, { effects: next })}
                     L={L}

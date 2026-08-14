@@ -867,6 +867,10 @@
   padding-bottom: 40px;
 }
 
+.workflow-main-inner.is-wide {
+  max-width: 1500px;
+}
+
 .stage-heading {
   display: flex;
   align-items: center;
@@ -1725,6 +1729,69 @@
 .titlecard-gallery-bg-menu button:hover {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/* ---------- Magic layers (the ✨ button's method popup + the "already
+   decomposed" badge) - the popup mirrors .titlecard-gallery-bg-menu above,
+   with an extra layer-count row on top. See MagicLayersButton.jsx. ---------- */
+
+.magic-method-menu {
+  position: absolute;
+  bottom: 30px;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.magic-method-menu button {
+  font-size: 10.5px;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+}
+
+.magic-method-menu button:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.magic-method-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.magic-method-count select {
+  padding: 2px 4px;
+  font-size: 10.5px;
+  width: auto;
+}
+
+.magic-layer-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  pointer-events: none;
 }
 
 .titlecard-gallery-caption {
@@ -2765,4 +2832,414 @@
   flex-direction: column;
   gap: 6px;
   word-break: break-word;
+}
+
+/* ---------- Editor stage (NLE-style layout + timeline) ---------- */
+
+.editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.editor-layout.is-mobile {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Below the sidebar's own breakpoint the monitor column would be squeezed to
+   nothing next to the fixed side panel - stack them instead. */
+@media (max-width: 1180px) {
+  .editor-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.editor-preview {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.editor-preview-frame {
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  max-height: 44vh;
+  margin: 0 auto;
+}
+
+.editor-preview-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.editor-preview-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.editor-preview-time {
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.editor-preview-time span {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.editor-preview-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 6px;
+}
+
+.editor-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.editor-side-block {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.editor-side-renders {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.editor-side-warn {
+  font-size: 11.5px;
+  color: #fbbf24;
+  margin-top: 8px;
+}
+
+.editor-side-error {
+  font-size: 11.5px;
+  color: var(--danger);
+  margin-top: 8px;
+}
+
+.editor-side-dim {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.editor-render-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.editor-render-row video {
+  width: 96px;
+  border-radius: 6px;
+  background: #000;
+  flex-shrink: 0;
+}
+
+.editor-render-meta {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.editor-render-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.editor-render-actions .icon-btn {
+  width: 30px;
+  height: 30px;
+}
+
+.tl-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+  margin-bottom: 16px;
+}
+
+.tl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tl-toolbar .icon-btn {
+  width: 30px;
+  height: 30px;
+}
+
+.tl-toolbar-spacer {
+  flex: 1;
+}
+
+.tl-timecode {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+
+.tl-timecode-total {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.tl-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.tl-scroll {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 10px;
+  padding: 4px 0 6px;
+  outline: none;
+  user-select: none;
+  touch-action: pan-x;
+}
+
+.tl-scroll:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tl-content {
+  position: relative;
+  min-width: 100%;
+}
+
+.tl-ruler {
+  position: relative;
+  height: 20px;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+}
+
+.tl-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  padding-left: 4px;
+  font-size: 10px;
+  line-height: 20px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.tl-track {
+  position: relative;
+  margin-top: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tl-track-audio {
+  overflow: hidden;
+}
+
+.tl-track-empty {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.tl-clip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background-size: auto 100%;
+  background-repeat: repeat-x;
+  background-color: rgba(255, 157, 92, 0.16);
+  cursor: grab;
+}
+
+.tl-clip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.6));
+}
+
+.tl-clip.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  z-index: 4;
+}
+
+.tl-clip.is-dragging {
+  opacity: 0.85;
+  cursor: grabbing;
+  z-index: 5;
+}
+
+.tl-clip-label {
+  position: relative;
+  z-index: 1;
+  display: block;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.tl-clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: 3;
+  cursor: ew-resize;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tl-clip-handle-start {
+  left: 0;
+}
+
+.tl-clip-handle-end {
+  right: 0;
+}
+
+.tl-clip:hover .tl-clip-handle,
+.tl-clip.is-selected .tl-clip-handle {
+  background: var(--accent);
+}
+
+.tl-clip-pad {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.05) 0 6px, transparent 6px 12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.tl-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+  z-index: 6;
+}
+
+.tl-playhead span {
+  position: absolute;
+  top: 0;
+  left: -6px;
+  width: 12px;
+  height: 9px;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.tl-inspector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.tl-inspector-empty {
+  color: var(--text-faint);
+}
+
+.tl-inspector-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tl-inspector-field {
+  font-size: 11.5px;
+  padding: 3px 6px;
+  max-width: 210px;
+}
+
+.tl-inspector-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tl-inspector-num {
+  width: 64px;
+  font-size: 11.5px;
+  padding: 3px 6px;
+}
+
+.tl-inspector-warn {
+  color: #fbbf24;
+}
+
+.tl-inspector-remove {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+}
+
+.tl-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tl-add-chip {
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  cursor: pointer;
 }

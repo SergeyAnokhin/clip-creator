@@ -16,7 +16,7 @@ import ImageCropEditor from './ImageCropEditor.jsx';
  * overlaid directly on it - see ImageCarousel.jsx's docstring. */
 export default function SceneCard({
   L, projectId, scene, index, isRecording, recordingSeconds, voiceSupported, isLoading, columns, hideMotionPrompt,
-  outpaintQualityMode, actions,
+  outpaintQualityMode, magicLayerGroups, magicBusySources, actions,
 }) {
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [cropEditIndex, setCropEditIndex] = useState(null);
@@ -185,6 +185,9 @@ export default function SceneCard({
           onDropFile={(file) => actions.onUploadImageFile(index, file)}
           onDropUrl={(url) => actions.onUploadImageUrl(index, url)}
           onCrop={() => setCropEditIndex(boundedIndex)}
+          onDecomposeMagicLayers={actions.decomposeMagicLayers}
+          magicLayerGroups={magicLayerGroups}
+          magicBusySources={magicBusySources}
         />
       </div>
 

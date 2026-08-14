@@ -12,6 +12,7 @@ from .routers import (
     generation_music,
     generation_scenes,
     generation_title_card,
+    magic_layers,
     projects,
     settings,
     translate,
@@ -49,13 +50,14 @@ app.add_middleware(
 
 app.include_router(projects.router)
 app.include_router(settings.router)
-# All four share the `/api/projects` prefix; their path literals
-# (`suno`/`mureka`, `scenes`, `title-card`, `video-export`/`editor`) don't
-# overlap, so registration order doesn't affect matching.
+# All five share the `/api/projects` prefix; their path literals
+# (`suno`/`mureka`, `scenes`, `title-card`, `video-export`/`editor`,
+# `magic-layers`) don't overlap, so registration order doesn't affect matching.
 app.include_router(generation_music.router)
 app.include_router(generation_scenes.router)
 app.include_router(generation_title_card.router)
 app.include_router(generation_export.router)
+app.include_router(magic_layers.router)
 app.include_router(usage.router)
 app.include_router(translate.router)
 

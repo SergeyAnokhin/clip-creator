@@ -182,6 +182,7 @@ export default function TitleCardStage({
   isRecordingTitleCardWish, recordingSeconds, voiceSupported,
   elapsedSeconds, titleCardError, removingBgIds,
   posters, posterConstructorOpen, editingPoster, posterSaving, logos, posterTemplates,
+  magicLayerGroups, magicBusySources,
   actions,
 }) {
   const [pickerSlot, setPickerSlot] = useState(null);
@@ -398,6 +399,8 @@ export default function TitleCardStage({
           onExpand={(i) => setLightboxIndex(i)}
           onDelete={actions.onDelete} onSelectMain={actions.onSelectMain} onRate={actions.onRate}
           onRemoveBackground={actions.onRemoveBackground} removingBgIds={removingBgIds}
+          onDecomposeMagicLayers={actions.decomposeMagicLayers}
+          magicLayerGroups={magicLayerGroups || []} magicBusySources={magicBusySources}
         />
       )}
 
@@ -447,6 +450,9 @@ export default function TitleCardStage({
           onSave={actions.savePoster} onClose={actions.closeConstructor}
           posterTemplates={posterTemplates || []}
           onSaveTemplate={actions.savePosterTemplate} onDeleteTemplate={actions.deletePosterTemplate}
+          magicLayerGroups={magicLayerGroups || []} magicBusySources={magicBusySources}
+          onDecomposeMagicLayers={actions.decomposeMagicLayers}
+          onDeleteMagicLayerGroup={actions.deleteMagicLayerGroup}
         />
       )}
 

@@ -14,6 +14,7 @@ import { useVideoStage } from './hooks/useVideoStage.js';
 import { useExportStage } from './hooks/useExportStage.js';
 import { useEditorStage } from './hooks/useEditorStage.js';
 import { usePosterConstructor } from './hooks/usePosterConstructor.js';
+import { useMagicLayers } from './hooks/useMagicLayers.js';
 import { useVoice } from './hooks/useVoice.js';
 import { useMiniPlayer } from './hooks/useMiniPlayer.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
@@ -77,6 +78,12 @@ function App() {
   });
   const posterConstructor = usePosterConstructor({
     activeProject, setActiveProject, updateProject, showToast, L,
+  });
+  // Shared by the Images stage, the Title Card gallery and the poster
+  // constructor - one decomposition is reusable by all of them.
+  const magicLayers = useMagicLayers({
+    activeProject, setActiveProject, flushPendingSave, showToast, L,
+    onAiCall: usage.actions.refreshToday,
   });
   const video = useVideoStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
@@ -202,9 +209,13 @@ function App() {
     modelPrices: usage.priceMap,
     hideMotionPrompt: settings.hideMotionPrompt,
     outpaintQualityMode: settings.outpaintQualityMode,
+    magicLayerGroups: magicLayers.state.groups,
+    magicBusySources: magicLayers.state.busySources,
     actions: {
       ...images.actions, onVoiceEdit: (idx) => voice.startVoice('scene', idx),
       setHideMotionPrompt: settings.actions.setHideMotionPrompt,
+      decomposeMagicLayers: magicLayers.actions.decompose,
+      deleteMagicLayerGroup: magicLayers.actions.deleteGroup,
     },
   };
 
@@ -222,9 +233,13 @@ function App() {
     posters: posterConstructor.posters, posterConstructorOpen: posterConstructor.constructorOpen,
     editingPoster: posterConstructor.editingPoster, posterSaving: posterConstructor.saving,
     logos: settings.logos, posterTemplates: settings.posterTemplates,
+    magicLayerGroups: magicLayers.state.groups,
+    magicBusySources: magicLayers.state.busySources,
     actions: {
       ...titleCard.actions,
       ...posterConstructor.actions,
+      decomposeMagicLayers: magicLayers.actions.decompose,
+      deleteMagicLayerGroup: magicLayers.actions.deleteGroup,
       updateTitleCardBasePrompt: settings.actions.updateTitleCardBasePrompt,
       saveTitleCardBasePromptPreset: settings.actions.saveTitleCardBasePromptPreset,
       loadTitleCardBasePromptPreset: settings.actions.loadTitleCardBasePromptPreset,

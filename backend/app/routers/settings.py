@@ -118,6 +118,22 @@ DEFAULT_SETTINGS = {
     'background_remover_params': {
         'background_type': 'rgba', 'format': 'png', 'threshold': 0, 'reverse': False,
     },
+    # "Magic layers" (providers/magic_layers.py) - which hosted seam of
+    # Qwen-Image-Layered the ✨ button defaults to when no per-call `method`
+    # is given, and how many layers to ask for (the model accepts 1-10;
+    # clamped to 2-10 here since 1 layer is just a copy). Same
+    # per-click-overridable shape as background_remover_method above.
+    'magic_layers_method': 'fal',
+    'magic_layers_num_layers': 4,
+    # Method params. FAL's schema (fal.ai/models/fal-ai/qwen-image-layered,
+    # 2026-08): num_inference_steps 1-50 (28 = the model's own default,
+    # 15-20 is enough for a preview), acceleration none/regular/high.
+    'magic_layers_fal_params': {
+        'model': 'fal-ai/qwen-image-layered', 'num_inference_steps': 28, 'acceleration': 'regular',
+    },
+    # Replicate hosts the same model as an *official* one (replicate.com/qwen),
+    # so no version hash is needed - see providers/magic_layers.py.
+    'magic_layers_replicate_params': {'model': 'qwen/qwen-image-layered'},
     # Default for the scene-image crop editor's fast/cheap vs quality/
     # expensive outpaint mode (ImageCropEditor.jsx) - overridable per-save,
     # same shape as background_remover_method above. See providers/images.py's

@@ -148,6 +148,10 @@ export const api = {
   },
   deleteTitleCardPoster: (id, posterId) => request(`${projectPath(id)}/title-card/poster/${encodeURIComponent(posterId)}`, { method: 'DELETE' }),
 
+  startMagicLayers: (id, body) => request(`${projectPath(id)}/magic-layers`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  getMagicLayersJob: (id, jobId) => request(`${projectPath(id)}/magic-layers/jobs/${encodeURIComponent(jobId)}`),
+  deleteMagicLayerGroup: (id, groupId) => request(`${projectPath(id)}/magic-layers/${encodeURIComponent(groupId)}`, { method: 'DELETE' }),
+
   generateMureka: (id, body) => request(`${projectPath(id)}/mureka/generate`, { method: 'POST', body: JSON.stringify(body || {}) }),
   getMurekaJob: (id, jobId) => request(`${projectPath(id)}/mureka/jobs/${encodeURIComponent(jobId)}`),
   deleteMurekaTrack: (id, trackId) => request(`${projectPath(id)}/mureka/tracks/${encodeURIComponent(trackId)}`, { method: 'DELETE' }),

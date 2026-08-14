@@ -110,6 +110,50 @@ export function normalizeLayers(raw) {
   }));
 }
 
+/** A "magic layer" - one RGBA slice of a decomposed image (see
+ * providers/magic_layers.py). Unlike every other image layer, it carries its
+ * own `src` (the group + the layer's file path) rather than sharing one of
+ * the constructor's three fixed image slots, since a group contributes N
+ * different images at once. */
+export function makeMagicLayer({ groupId, index, filePath, isBackground }) {
+  return makeLayer({
+    kind: 'magic',
+    src: { group_id: groupId, index, file_path: filePath, is_background: !!isBackground },
+  });
+}
+
+/** Normalizes a saved poster's `magic` layer entries. Posters saved before
+ * this feature simply have no `magic` key, which reads as "no magic layers" -
+ * no migration needed. Entries whose `src` didn't survive are dropped rather
+ * than kept as un-renderable ghosts. */
+export function normalizeMagicLayers(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((l) => l?.src?.file_path)
+    .map((l) => ({
+      id: l.id || genId(),
+      x: l.x ?? 0, y: l.y ?? 0, scaleX: l.scaleX ?? 1, scaleY: l.scaleY ?? 1, rotation: l.rotation ?? 0,
+      kind: 'magic',
+      src: {
+        group_id: l.src.group_id, index: l.src.index ?? 0,
+        file_path: l.src.file_path, is_background: !!l.src.is_background,
+      },
+      crop: l.crop || null,
+      effects: migrateEffects(l.effects),
+    }));
+}
+
+/** Moves the layer at `index` one step towards the back (`-1`) or the front
+ * (`+1`) of the magic-layer block. Out-of-range moves return the list
+ * unchanged, so the caller can wire the buttons unconditionally. */
+export function moveLayerInList(list, index, delta) {
+  const target = index + delta;
+  if (index < 0 || index >= list.length || target < 0 || target >= list.length) return list;
+  const next = [...list];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
 /** Normalizes a saved poster's `text` layer entries (see `layers.text` in
  * the poster schema) back into full layer objects, backfilling any field
  * missing from an older/partial save with a sane default - mirrors

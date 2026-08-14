@@ -94,3 +94,82 @@ export function clampTrim(trimStartMs, trimEndMs, sourceDurationMs) {
   const end = Math.min(sourceDurationMs, Math.max(trimEndMs, start + 1));
   return { trimStartMs: start, trimEndMs: end };
 }
+
+// Shortest clip the direct-manipulation gestures below (edge drag, split)
+// are allowed to leave behind, in source-clip milliseconds. Purely an
+// ergonomics floor - it keeps a clip from collapsing into an unclickable
+// sliver on the timeline.
+export const MIN_CLIP_MS = 200;
+
+/** Array move: the clip at `fromIndex` lands at `toIndex`, everything else
+ * keeps its relative order. Out-of-range indices return `clips` unchanged. */
+export function moveClip(clips, fromIndex, toIndex) {
+  if (fromIndex === toIndex) return clips;
+  if (fromIndex < 0 || fromIndex >= clips.length) return clips;
+  if (toIndex < 0 || toIndex >= clips.length) return clips;
+  const next = [...clips];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+/** Index the clip at `fromIndex` should land at when it is dragged so that
+ * its own start sits at `newStartMs` on the output timeline. Compares the
+ * dragged clip's new centre against the *original* layout centres of the
+ * other clips - the sequential (gap-free) timeline re-lays itself out after
+ * the drop anyway, so an exact post-drop layout isn't needed to pick the
+ * slot. `timelineClips` must come from `computeTimelineClips`. */
+export function dropIndexForStart(timelineClips, fromIndex, newStartMs) {
+  const dragged = timelineClips[fromIndex];
+  if (!dragged) return fromIndex;
+  const draggedCentre = newStartMs + dragged.durationMs / 2;
+  let index = 0;
+  timelineClips.forEach((clip, i) => {
+    if (i === fromIndex) return;
+    if (clip.startMs + clip.durationMs / 2 < draggedCentre) index += 1;
+  });
+  return index;
+}
+
+/** New `{trimStartMs, trimEndMs}` after dragging one edge of a clip by
+ * `deltaOutputMs` on the output timeline. Output-space deltas are converted
+ * to source-space by the clip's own speed. The opposite edge never moves,
+ * and the window stays inside `[0, sourceDurationMs]` (unbounded above when
+ * the source duration is unknown - an imported clip, see
+ * `UNKNOWN_DURATION_FALLBACK_MS`). */
+export function applyEdgeTrim(clip, sourceDurationMs, edge, deltaOutputMs) {
+  const speed = clip.speed || 1;
+  const deltaSourceMs = deltaOutputMs * speed;
+  const trimStartMs = clip.trim_start_ms || 0;
+  const trimEndMs = resolveTrimEndMs(clip, sourceDurationMs);
+  const maxEnd = sourceDurationMs > 0 ? sourceDurationMs : Infinity;
+  if (edge === 'start') {
+    const start = Math.min(Math.max(0, trimStartMs + deltaSourceMs), trimEndMs - MIN_CLIP_MS);
+    return { trimStartMs: Math.round(start), trimEndMs: Math.round(trimEndMs) };
+  }
+  const end = Math.max(Math.min(maxEnd, trimEndMs + deltaSourceMs), trimStartMs + MIN_CLIP_MS);
+  return { trimStartMs: Math.round(trimStartMs), trimEndMs: Math.round(end) };
+}
+
+/** Splits whichever clip the playhead is inside into two clips that play
+ * back-to-back exactly like the original did (razor tool). The right half is
+ * a second clip over the *same* source video with a later trim window, which
+ * the renderer already supports - `build_render_plan` resolves every clip
+ * independently and never assumes a video is used once. Returns `clips`
+ * unchanged when the playhead sits outside the timeline, on a cut, or too
+ * close to either edge to leave `MIN_CLIP_MS` on both sides. `makeId`
+ * supplies the new clip's `clip_id`. */
+export function splitClipsAt(clips, sourceDurationsById, playheadMs, makeId) {
+  const timelineClips = computeTimelineClips(clips, sourceDurationsById);
+  const index = timelineClips.findIndex((c) => playheadMs > c.startMs && playheadMs < c.endMs);
+  if (index === -1) return clips;
+  const target = timelineClips[index];
+  const speed = target.speed || 1;
+  const cutSourceMs = Math.round(target.trimStartMs + (playheadMs - target.startMs) * speed);
+  if (cutSourceMs - target.trimStartMs < MIN_CLIP_MS) return clips;
+  if (target.trimEndMs - cutSourceMs < MIN_CLIP_MS) return clips;
+  const original = clips[index];
+  const left = { ...original, trim_start_ms: target.trimStartMs, trim_end_ms: cutSourceMs };
+  const right = { ...original, clip_id: makeId(), trim_start_ms: cutSourceMs, trim_end_ms: target.trimEndMs };
+  return [...clips.slice(0, index), left, right, ...clips.slice(index + 1)];
+}

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, mediaUrl } from '../api/client.js';
 import { buildDefaultClips, defaultMurekaTrackId } from '../lib/editorDefaults.js';
-import { computeTimelineClips, findActiveClip, getTotalDurationMs } from '../lib/timeline.js';
+import {
+  computeTimelineClips, findActiveClip, getTotalDurationMs, moveClip, splitClipsAt,
+} from '../lib/timeline.js';
 
 const EMPTY_VIDEO_EDIT = { mureka_track_id: null, clips: [], renders: [] };
 // Only re-seek the preview <video> once the drift from where it should be
@@ -49,6 +51,7 @@ function buildSourceDurations(scenes) {
 export function useEditorStage({ activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L }) {
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [selectedClipId, setSelectedClipId] = useState(null);
   const [renderLoading, setRenderLoading] = useState(false);
   const [renderError, setRenderError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -70,6 +73,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     setPlayheadMs(0);
     setIsPlaying(false);
     setRenderError(null);
+    setSelectedClipId(null);
     activeClipIndexRef.current = -1;
     // Loose check on purpose: a project's `video_edit` can be persisted as
     // `null` (not just absent) - e.g. `updateProject((p) => ({ ...p,
@@ -104,28 +108,35 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     updateProject((p) => ({ ...p, video_edit: mutator(p.video_edit || EMPTY_VIDEO_EDIT) }), opts);
   }
 
-  function moveClipUp(clipId) {
-    patchVideoEdit((edit) => {
-      const idx = edit.clips.findIndex((c) => c.clip_id === clipId);
-      if (idx <= 0) return edit;
-      const next = [...edit.clips];
-      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-      return { ...edit, clips: next };
-    });
+  // Every edit that changes *which* source frame sits under the playhead
+  // (order, cuts, removals) has to drop the "clip N is already loaded in the
+  // <video>" memo, or the preview keeps showing the old clip until the
+  // playhead happens to cross into another one.
+  function invalidatePreviewClip() {
+    activeClipIndexRef.current = -1;
   }
-  function moveClipDown(clipId) {
-    patchVideoEdit((edit) => {
-      const idx = edit.clips.findIndex((c) => c.clip_id === clipId);
-      if (idx === -1 || idx >= edit.clips.length - 1) return edit;
-      const next = [...edit.clips];
-      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-      return { ...edit, clips: next };
-    });
+
+  /** Drag-and-drop reorder on the timeline - array indices, not clip ids,
+   * because that is what `lib/timeline.js`'s drop-slot math returns. */
+  function reorderClip(fromIndex, toIndex) {
+    invalidatePreviewClip();
+    patchVideoEdit((edit) => ({ ...edit, clips: moveClip(edit.clips, fromIndex, toIndex) }));
+  }
+  /** Razor tool: cuts the clip under the playhead in two. */
+  function splitAtPlayhead() {
+    invalidatePreviewClip();
+    patchVideoEdit((edit) => ({
+      ...edit,
+      clips: splitClipsAt(edit.clips, sourceDurationsById, playheadMs, () => randomId('clip')),
+    }));
   }
   function removeClip(clipId) {
+    invalidatePreviewClip();
+    setSelectedClipId((current) => (current === clipId ? null : current));
     patchVideoEdit((edit) => ({ ...edit, clips: edit.clips.filter((c) => c.clip_id !== clipId) }));
   }
   function addSceneClip(sceneIndex, videoId) {
+    invalidatePreviewClip();
     patchVideoEdit((edit) => ({
       ...edit,
       clips: [...edit.clips, {
@@ -135,6 +146,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     }));
   }
   function changeClipVideo(clipId, videoId) {
+    invalidatePreviewClip();
     patchVideoEdit((edit) => ({
       ...edit,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, video_id: videoId, trim_start_ms: 0, trim_end_ms: null } : c)),
@@ -200,7 +212,10 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
   }
   function seek(ms) {
-    const clamped = Math.max(0, Math.min(ms, totalDurationMs));
+    // Clamped to the audio track too, not just the clips: when the clips run
+    // shorter, the tail still exists in the output (the render freeze-frames
+    // the last clip over it), so the playhead has to be able to go there.
+    const clamped = Math.max(0, Math.min(ms, Math.max(totalDurationMs, selectedTrack?.duration_ms || 0)));
     if (audioRef.current) audioRef.current.currentTime = clamped / 1000;
     activeClipIndexRef.current = -1;
     setPlayheadMs(clamped);
@@ -270,12 +285,12 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     state: {
       videoEdit, clips: timelineClips, totalDurationMs, selectedTrack, tracks,
       playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds,
-      videoRef, audioRef,
+      selectedClipId, videoRef, audioRef,
     },
     resetForProject,
     actions: {
-      moveClipUp, moveClipDown, removeClip, addSceneClip, changeClipVideo,
-      setClipTrim, setClipSpeed, setMurekaTrackId,
+      reorderClip, splitAtPlayhead, removeClip, addSceneClip, changeClipVideo,
+      setClipTrim, setClipSpeed, setMurekaTrackId, selectClip: setSelectedClipId,
       play, pause, seek, startRender, deleteRender, downloadRender,
     },
   };

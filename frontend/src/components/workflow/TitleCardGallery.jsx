@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Eraser, Loader2, Star, Trash2 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { formatCost } from '../../lib/pricing.js';
+import MagicLayersButton from './MagicLayersButton.jsx';
 
 const BG_REMOVE_METHODS = ['local', 'fal', 'replicate'];
 
@@ -15,6 +16,7 @@ const BG_REMOVE_METHODS = ['local', 'fal', 'replicate'];
  * on that exact variant (the caller owns the lightbox's open index). */
 export default function TitleCardGallery({
   L, projectId, variants, onExpand, onDelete, onSelectMain, onRate, onRemoveBackground, removingBgIds,
+  onDecomposeMagicLayers, magicLayerGroups = [], magicBusySources,
 }) {
   // Which variant's "choose background-removal method" menu is open (see
   // the guide this feature was implemented from: 3 interchangeable methods,
@@ -46,6 +48,9 @@ export default function TitleCardGallery({
       {variants.map((variant, i) => {
         const [w, h] = (variant.aspect_ratio || '1:1').split(':').map(Number);
         const removingBg = removingBgIds?.has(variant.variant_id);
+        const magicLayerCount = magicLayerGroups
+          .filter((g) => g.source_path === variant.file_path)
+          .reduce((max, g) => Math.max(max, g.layers?.length || 0), 0);
         return (
           <div className="titlecard-gallery-item" key={variant.variant_id || i}>
             <div
@@ -90,6 +95,20 @@ export default function TitleCardGallery({
                     </button>
                   ))}
                 </div>
+              )}
+              {onDecomposeMagicLayers && (
+                <MagicLayersButton
+                  L={L}
+                  className="titlecard-gallery-bg-btn"
+                  style={{ position: 'absolute', left: 34, bottom: 6, zIndex: 2 }}
+                  busy={magicBusySources?.has(variant.file_path)}
+                  onPick={(method, numLayers) => onDecomposeMagicLayers(variant.file_path, {
+                    method, numLayers, sourceKind: 'title_card_variant',
+                  })}
+                />
+              )}
+              {magicLayerCount > 0 && (
+                <span className="magic-layer-badge" title={L.magic_ready}>{`✨ ${magicLayerCount}`}</span>
               )}
             </div>
             <div className="titlecard-gallery-caption">

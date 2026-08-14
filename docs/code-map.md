@@ -38,6 +38,7 @@ provider → persist. Full route table in [data-model.md](data-model.md).
 | `generation_scenes.py` | Scene text, scene images (generate/poll/upload/crop), scene videos (generate/poll/upload), project reference images |
 | `generation_title_card.py` | Title-card generate/poll/delete/remove-background + poster save/delete |
 | `generation_export.py` | `/video-export`, `/video-import-batch`, `/final-export`, Editor-stage render start/poll/delete |
+| `magic_layers.py` | `/magic-layers` start/poll/delete — decomposing one image into movable RGBA layers |
 | `translate.py` | `POST /api/translate` — thin wrapper over `providers/translate.py` |
 | `usage.py` | `GET /api/usage/records\|summary\|today\|period-totals`, `GET/PUT /api/usage/pricing` |
 
@@ -54,6 +55,7 @@ its provider and quirks.
 | `images.py` | Krea/Replicate/FAL/Google/OpenRouter | Scene images: job store, upload (SSRF-guarded URL fetch), `crop_image` (local crop or FAL outpaint) |
 | `video.py` | Google Veo / OpenRouter | Image-to-video: job store (6s poll), `build_prompt`, `save_uploaded_video` |
 | `title_card.py` | Google Nano Banana / Krea | Multi-reference image-to-image title cards + `remove_background` (Replicate, versioned endpoint) |
+| `magic_layers.py` | FAL / Replicate (Qwen-Image-Layered) | Image → N inpainted RGBA layers: job store, both provider seams, and the pure `_postprocess` (upscale + alpha remap + background detection) |
 | `editor.py` | — (local ffmpeg) | `build_render_plan` + `build_ffmpeg_command` (both pure/testable), then the render job |
 | `translate.py` | Google Cloud Translation v2 | One-off prompt translation (separate key from Gemini) |
 | `text_models.py` | Google / OpenRouter / DeepSeek | Model catalog + `clean_wish_and_title`; local fallback when no key |
@@ -95,9 +97,9 @@ Two tests use a real local `ffmpeg` and `skipif` it isn't on `PATH`
 | `scenes.js` | `pickMainByRating`, `resolveAnimateImage` (which image the Video stage animates) |
 | `titleCard.js` | `pickTopReferenceImages` — auto-fills the Title Card reference slots |
 | `lyricsTiming.js` | Mureka `lyrics_sections` → karaoke line list, plus manual anchor re-timing. Handles untimed/partially-timed responses |
-| `timeline.js` | Editor-stage timeline math: clip offsets, `findActiveClip`, `clampTrim` |
+| `timeline.js` | Editor-stage timeline math: clip offsets, `findActiveClip`, `clampTrim`, plus the direct-manipulation helpers (`moveClip`, `dropIndexForStart`, `applyEdgeTrim`, `splitClipsAt`) |
 | `editorDefaults.js` | `buildDefaultClips`, `defaultMurekaTrackId` — the Editor stage's first-open seed |
-| `posterLayers.js` | Poster constructor's pure helpers: layer/effect factories, stored-poster normalization, center-snap and zoom-clamp math, `FONT_OPTIONS` |
+| `posterLayers.js` | Poster constructor's pure helpers: layer/effect factories (incl. `makeMagicLayer`), stored-poster normalization, `moveLayerInList`, center-snap and zoom-clamp math, `FONT_OPTIONS` |
 | `pricing.js` | Cost formatting/estimation for `text`/`image`/`video` kinds |
 | `musicTagColors.js` | Tag palette — mirrors `routers/settings.py`'s `MUSIC_TAG_COLORS`, **keep in sync** |
 | `videoModelLimits.js` | Hand-curated per-model duration/resolution limits. Informational only, never enforced |
@@ -128,11 +130,12 @@ hooks return `{ state, actions }`.
 | `useImagesStage` | Reference images, image variants, ratings, tier/model, upload, crop |
 | `useTitleCardStage` | `project.title_card`: text block, 4 reference slots, wishes, generation, rating, background removal |
 | `usePosterConstructor` | Poster modal open/save/delete/select-main. Separate from `useTitleCardStage` — posters composite, they don't call a model |
+| `useMagicLayers` | `project.magic_layer_groups`: start a decomposition, poll it, delete a group. Shared by the Images stage, the Title Card gallery and the poster constructor |
 | `useVideoStage` | Per-scene videos: one-scene-at-a-time nav, video wishes, generation, rating, folder import |
 | `useExportStage` | Export stage: `marked_for_export` toggles + the zip download |
 | `useEditorStage` | Editor stage: EDL seeding, clip mutations, the rAF-clocked preview engine, render job |
 | `useVoice` | Web Speech API dictation. Created **last**. Also exports `useFieldVoice` for Settings |
-| `useHtmlImage` | URL → `HTMLImageElement` via `fetch`+`blob:` (works around a Chrome cross-origin race). Poster constructor only |
+| `useHtmlImage` | URL → `HTMLImageElement` via `fetch`+`blob:` (works around a Chrome cross-origin race). Poster constructor only — once per fixed slot, plus once per magic layer via `MagicLayerNode` |
 
 ### `components/home/`
 
@@ -161,16 +164,19 @@ hooks return `{ state, actions }`.
 | `TitleCardStage.jsx` | Title-card generation + `TitleCardGallery.jsx` + the poster constructor entry point |
 | `TitleCardGallery.jsx` | All variants at once, each in its own aspect ratio; select/delete/rate/remove-bg |
 | `PosterConstructor.jsx` | The poster editor modal: Konva stage, layer state, undo/redo, zoom, templates, save |
-| `PosterCanvasLayers.jsx` | The three overlay node types it renders (image, glass panel, text) |
+| `PosterCanvasLayers.jsx` | The overlay node types it renders (image, magic layer, glass panel, text) |
+| `MagicLayersButton.jsx` | The ✨ button + its method/layer-count popup, shared by all three magic-layer entry points |
 | `PosterPanels.jsx` | Its side-panel widgets (effects, layer toolbar, glass/text panels, picker rows) |
 | `PosterGallery.jsx` | Saved posters; select-main, delete, reopen for editing |
 | `VideoStage.jsx` | Animation stage — **one scene at a time**; motion prompt, image pick, wishes, generation, batch export/import |
 | `VideoGallery.jsx` | All candidate clips for the scene, hover-preview `<video>`s, resizable tiles |
 | `VideoExportModal.jsx` | Scene picker for the batch export download |
 | `ExportStage.jsx` | Picks what goes in the final zip and downloads it |
-| `EditorStage.jsx` | Final render: track picker, `EditorPreview.jsx`, `EditorTimeline.jsx`, render list |
-| `EditorPreview.jsx` | Muted `<video>` synced to a hidden `<audio>` + waveform scrub bar. Approximate, not the real render |
-| `EditorTimeline.jsx` | One row per clip: thumbnail, video swap, trim, speed, reorder, remove |
+| `EditorStage.jsx` | NLE-style layout: program monitor + track/render side panel on top, `EditorTimeline.jsx` docked under them |
+| `EditorPreview.jsx` | Program monitor: muted `<video>` synced to a hidden `<audio>`, plus the transport row. Approximate, not the real render |
+| `EditorTimeline.jsx` | The timeline proper: ruler, clip blocks drawn to scale, playhead, zoom. Drag = reorder, edge drag = trim, ruler drag = scrub, razor = split |
+| `TimelineAudioTrack.jsx` | The timeline's audio row — decoded waveform `<canvas>` on the same px/ms scale |
+| `TimelineClipInspector.jsx` | Selected clip's exact values: video variant, trim, speed, remove |
 | `ModelPicker.jsx` | `<select>` over a favorites list → `"{provider}:{id}"` composite |
 | `TranslateButton.jsx` / `CopyButton.jsx` | Small self-contained utility buttons under a prompt field |
 | `Sidebar.jsx` | Stage nav + per-stage completion icon. Rows are `div.stage-row`, **not** `<button>` — see the file's comment before automating clicks |

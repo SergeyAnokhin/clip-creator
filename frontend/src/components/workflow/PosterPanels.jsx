@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import {
-  AlignCenter, AlignLeft, AlignRight, ChevronDown, ChevronUp, Copy, Crop, RotateCcw, Trash2,
+  AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowUp, ChevronDown, ChevronUp, Copy, Crop,
+  RotateCcw, Sparkles, Trash2,
 } from 'lucide-react';
+import { mediaUrl } from '../../api/client.js';
 import { FONT_OPTIONS } from '../../lib/posterLayers.js';
+import MagicLayersButton from './MagicLayersButton.jsx';
 
 /** The Poster constructor's side-panel widgets: per-layer effects
  * (opacity/glow/clone), the layer toolbar, the glass-panel and text-layer
@@ -140,9 +143,25 @@ export function EffectsPanel({ label, effects, onChange, L }) {
  * legitimately have zero text layers), so `alwaysDeletable` skips that gate
  * for them - otherwise a poster's only badge/halo layer could never be
  * removed. */
-export function LayerToolbar({ layer, siblingCount, isCropEditing, allowCrop = true, alwaysDeletable = false, onDuplicate, onDelete, onToggleCrop, onResetCrop, L }) {
+export function LayerToolbar({
+  layer, siblingCount, isCropEditing, allowCrop = true, alwaysDeletable = false,
+  onDuplicate, onDelete, onToggleCrop, onResetCrop, onMoveBack, onMoveFront, L,
+}) {
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {/* Ordering buttons only exist for magic layers - every other kind is
+          drawn in a fixed band (bg -> magic -> glass -> title -> logo ->
+          text), so there is nothing to reorder within it. */}
+      {onMoveBack && !isCropEditing && (
+        <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onMoveBack} title={L.magic_moveBack}>
+          <ArrowDown size={12} />
+        </button>
+      )}
+      {onMoveFront && !isCropEditing && (
+        <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onMoveFront} title={L.magic_moveFront}>
+          <ArrowUp size={12} />
+        </button>
+      )}
       {!isCropEditing && (
         <button className="btn btn-accent-soft" style={{ fontSize: 11.5, padding: '5px 9px', gap: 5 }} onClick={onDuplicate}>
           <Copy size={12} />
@@ -293,6 +312,84 @@ export function PickerRow({ label, children, scrollable, collapsible, defaultOpe
         </div>
       )}
     </div>
+  );
+}
+
+/** The poster's "magic layers" section: decompose the current background (or
+ * the current title-card variant) into movable RGBA slices, or apply a group
+ * that was already decomposed elsewhere (Images stage / Title Card gallery -
+ * groups are project-level, see providers/magic_layers.py).
+ *
+ * Only groups whose source is one of the two images currently on the poster
+ * are listed - a group made from some other scene image has nothing to line
+ * up with here. */
+export function MagicLayersPanel({
+  L, projectId, groups, backgroundPath, titleCardPath, activeGroupId, busySources, disabled,
+  onDecompose, onApply, onClear, onDeleteGroup,
+}) {
+  const sources = [
+    { path: backgroundPath, kind: 'scene_image', label: L.poster_backgroundLabel },
+    { path: titleCardPath, kind: 'title_card_variant', label: L.poster_titleCardLabel },
+  ].filter((s) => s.path);
+  const relevant = groups.filter((g) => sources.some((s) => s.path === g.source_path));
+
+  return (
+    <PickerRow label={L.magic_panelLabel} collapsible defaultOpen={false}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45 }}>{L.magic_panelHint}</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {sources.map((source) => (
+            <span key={source.path} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <MagicLayersButton
+                L={L}
+                busy={busySources?.has(source.path)}
+                disabled={disabled}
+                title={`${L.magic_button}: ${source.label}`}
+                onPick={(method, numLayers) => onDecompose?.(source.path, { method, numLayers, sourceKind: source.kind })}
+              />
+              <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{source.label}</span>
+            </span>
+          ))}
+        </div>
+        {relevant.map((group) => (
+          <div key={group.group_id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 3, flex: 1, minWidth: 0, overflowX: 'auto' }}>
+              {group.layers.map((layer) => (
+                <img
+                  key={layer.index}
+                  src={mediaUrl(`projects/${projectId}/${layer.file_path}`)}
+                  alt=""
+                  title={layer.is_background ? L.magic_backgroundLayer : `${L.magic_layer} ${layer.index}`}
+                  style={{
+                    width: 34, height: 34, objectFit: 'contain', borderRadius: 4, flexShrink: 0,
+                    background: 'repeating-conic-gradient(#2a2a2a 0% 25%, #363636 0% 50%) 50% / 8px 8px',
+                  }}
+                />
+              ))}
+            </div>
+            {group.group_id === activeGroupId ? (
+              <button className="btn btn-accent-soft" style={{ fontSize: 11, padding: '4px 8px' }} onClick={onClear}>
+                {L.magic_clear}
+              </button>
+            ) : (
+              <button
+                className="btn btn-accent-soft" style={{ fontSize: 11, padding: '4px 8px', gap: 4 }}
+                onClick={() => onApply?.(group)} disabled={disabled}
+              >
+                <Sparkles size={11} />
+                {L.magic_apply}
+              </button>
+            )}
+            <button
+              className="icon-btn" style={{ width: 22, height: 22 }}
+              title={L.magic_deleteGroup} onClick={() => onDeleteGroup?.(group.group_id)}
+            >
+              <Trash2 size={11} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </PickerRow>
   );
 }
 

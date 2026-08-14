@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import Konva from 'konva';
 import { Group, Image as KonvaImage, Rect, Text, Transformer } from 'react-konva';
+import { mediaUrl } from '../../api/client.js';
+import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import { glowPasses, snapGroupToCenter } from '../../lib/posterLayers.js';
 
-/** The three draggable overlay node types the Poster constructor's Konva
- * stage renders: an image layer (title card or logo), the frosted-glass
- * panel, and a text layer. Each owns its own drag/Transformer/snap wiring
- * and reports changes up through `onChange`; none of them holds poster
- * state - see `PosterConstructor.jsx`.
+/** The draggable overlay node types the Poster constructor's Konva stage
+ * renders: an image layer (title card or logo), a magic layer, the
+ * frosted-glass panel, and a text layer. Each owns its own
+ * drag/Transformer/snap wiring and reports changes up through `onChange`;
+ * none of them holds poster state - see `PosterConstructor.jsx`.
  */
 
 /** Blurring the "clone" back-copy (see `makeDefaultEffects`'s `clone`) needs
@@ -193,6 +195,22 @@ export function OverlayImage({
       )}
     </>
   );
+}
+
+/** One magic layer (see `makeMagicLayer` / providers/magic_layers.py). Exists
+ * as its own component purely so each layer can call `useHtmlImage` for its
+ * own file: the constructor loads its three fixed slots (background, title
+ * card, logo) with three top-level hook calls, and a decomposition
+ * contributes N images at once, which hooks can't be called in a loop for.
+ * Everything past image loading is the ordinary `OverlayImage`, so magic
+ * layers get drag/transform/crop/effects for free. */
+export function MagicLayerNode({ projectId, layer, ...rest }) {
+  // Same `?canvas` cache-key separator as PosterConstructor's slots - see the
+  // comment there for the cross-origin race it works around.
+  const img = useHtmlImage(layer?.src?.file_path
+    ? `${mediaUrl(`projects/${projectId}/${layer.src.file_path}`)}?canvas`
+    : null);
+  return <OverlayImage image={img.image} layer={layer} {...rest} />;
 }
 
 /** A draggable+resizable "frosted glass" panel object - a plain rounded

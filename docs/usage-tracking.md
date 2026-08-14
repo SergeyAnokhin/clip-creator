@@ -37,7 +37,7 @@ or date-ranged query.
 | --- | --- | --- |
 | `id` | str | `u_` + 12 hex chars |
 | `ts` | str | UTC ISO-8601, `…Z` |
-| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `scene_video` \| `title_card` \| `title_card_bg_remove` \| `translate` |
+| `task` | str | `suno_generate` \| `wish_title` \| `scene_storyboard` \| `scene_image` \| `scene_image_crop` \| `scene_video` \| `title_card` \| `title_card_bg_remove` \| `magic_layers` \| `translate` |
 | `project_id` | str \| null | The project slug; `null` for `wish_title` calls made from Settings → Wishes (library-only) and always `null` for `translate` |
 | `provider`, `model_id`, `model` | str | `model` is the `"{provider}:{model_id}"` composite, denormalized for grouping |
 | `status` | str | `ok` \| `error` |
@@ -184,6 +184,7 @@ Prices tab list every model the Models tab has ever seen.
 | Krea, Google Imagen (`images.py`) | none | `units: {images: 1}` only, catalog-priced |
 | OpenRouter images (`images.py`) | `data.usage.cost` | Exact USD, `source: 'provider'` |
 | Replicate background remover (`title_card.py`) | none | `units: {images: 1}`, catalog-priced off the `replicate:851-labs/background-remover` row. Task `title_card_bg_remove` |
+| Magic layers (`magic_layers.py`) | FAL: `payload.timings.inference`; Replicate: `data.metrics.predict_time` | `units: {images: 1}` — one decomposition is one billed call regardless of how many layers come back. Catalog-priced off `fal:fal-ai/qwen-image-layered` ($0.05) or `replicate:qwen/qwen-image-layered` ($0.03). Task `magic_layers` |
 | Google Translate (`providers/translate.py`) | none | `units: {characters: len(text)}` — `pricing.py` has no per-character row shape, so cost always reads `unknown` unless an override is entered for `google_translate:v2` |
 | FAL outpaint (`images.py`'s `crop_image`) | none — billed per output **megapixel**, a shape the catalog can't express | Cost computed from the result's pixel size and set on `usage_out['cost']` (same bypass as OpenRouter). **No `BUILTIN_PRICING` row**, so don't add one expecting it to be used. A plain in-bounds crop is a separate `local:crop` model hardcoded at `0.0` |
 | Google Veo (`providers/video.py`) | none | `units: {seconds: duration_seconds}`, catalog-priced off the `google:veo-3.1-*` `per_second` rows. Task `scene_video` |
