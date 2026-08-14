@@ -1,4 +1,4 @@
-from uuid import uuid4
+﻿from uuid import uuid4
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
@@ -305,7 +305,7 @@ async def add_scene_wish(body: dict = Body(...)):
     """Scene/imagery pожелания - a library separate from suno_wish_library
     (see wish_library.add_or_get_wish's docstring): same shape and flow, just
     a different domain and a different per-project toggle
-    (`active_scene_wish_ids`, see routers/generation.py)."""
+    (`active_scene_wish_ids`, see routers/generation_scenes.py)."""
     text = (body.get('text') or '').strip()
     if not text:
         raise HTTPException(422, 'text is required')
@@ -348,7 +348,7 @@ async def add_video_wish(body: dict = Body(...)):
     """Video/animation-prompt пожелания - a library separate from
     scene_wish_library (see wish_library.add_or_get_wish's docstring): same
     shape and flow, own per-project toggle (`active_video_wish_ids`, see
-    routers/generation.py)."""
+    routers/generation_scenes.py)."""
     text = (body.get('text') or '').strip()
     if not text:
         raise HTTPException(422, 'text is required')
@@ -389,7 +389,7 @@ def update_video_wish(wish_id: str, body: dict = Body(...)):
 @router.post('/logos')
 async def upload_logo(file: UploadFile = File(...), name: str = Form('')):
     """Global (cross-project) logo library for the Poster constructor (see
-    routers/generation.py's poster routes) - PNG/WebP with a transparent
+    routers/generation_title_card.py's poster routes) - PNG/WebP with a transparent
     background, stored under app_data/logos/ (served at /media/logos/... -
     the /media mount is storage.get_data_root(), see main.py) and listed in
     settings.logos, same partial-merge-PUT-visible pattern as

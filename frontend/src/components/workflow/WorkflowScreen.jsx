@@ -15,6 +15,7 @@ export default function WorkflowScreen({
   lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, videoState, exportState, editorState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
 }) {
   const isMobile = viewport === 'mobile';
 
@@ -33,6 +34,7 @@ export default function WorkflowScreen({
         onChangeAuthor={(author) => updateProject((p) => ({ ...p, author }), { immediate: false })}
         usageToday={usageToday} usagePeriodTotals={usagePeriodTotals} onOpenUsage={onOpenUsage}
         onLoadUsagePeriodTotals={onLoadUsagePeriodTotals}
+        miniPlayerTrack={miniPlayerTrack} miniPlayerIsPlaying={miniPlayerIsPlaying} onToggleMiniPlayer={onToggleMiniPlayer}
       />
 
       <div className="workflow-body">

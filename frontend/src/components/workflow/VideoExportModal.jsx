@@ -1,10 +1,10 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { CheckSquare, Download, Square, X } from 'lucide-react';
 import { mediaUrl, api } from '../../api/client.js';
 
 /** Scene picker for the Video stage's bulk export (VideoStage.jsx's "export"
  * button): lets the user pick all/some scenes, then downloads a zip built by
- * `GET .../video-export` (`export_video_stage` in `routers/generation.py`) -
+ * `GET .../video-export` (`export_video_stage` in `routers/generation_export.py`) -
  * each scene's animate-source picture named `{scene:03d}_{prompt-slug}.ext`
  * plus one `prompts.txt` of every included scene's `motion_prompt`, blank-
  * line separated, in the same order as the images. A scene with no picture

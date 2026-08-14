@@ -7,7 +7,16 @@ from fastapi.staticfiles import StaticFiles
 
 from . import storage
 from .request_log import RequestLogMiddleware
-from .routers import generation, projects, settings, translate, usage
+from .routers import (
+    generation_export,
+    generation_music,
+    generation_scenes,
+    generation_title_card,
+    projects,
+    settings,
+    translate,
+    usage,
+)
 from .seed import seed_if_empty
 
 # `request_log.RequestLogMiddleware` (added below) replaces uvicorn's own
@@ -40,7 +49,13 @@ app.add_middleware(
 
 app.include_router(projects.router)
 app.include_router(settings.router)
-app.include_router(generation.router)
+# All four share the `/api/projects` prefix; their path literals
+# (`suno`/`mureka`, `scenes`, `title-card`, `video-export`/`editor`) don't
+# overlap, so registration order doesn't affect matching.
+app.include_router(generation_music.router)
+app.include_router(generation_scenes.router)
+app.include_router(generation_title_card.router)
+app.include_router(generation_export.router)
 app.include_router(usage.router)
 app.include_router(translate.router)
 

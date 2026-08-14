@@ -1833,6 +1833,36 @@
   height: 34px;
 }
 
+.mureka-track-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mureka-track-progress {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mureka-track-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.mureka-track-progress-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .mureka-track-row-footer {
   display: flex;
   align-items: center;

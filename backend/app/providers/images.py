@@ -1,4 +1,4 @@
-"""Provider seam for scene image generation.
+﻿"""Provider seam for scene image generation.
 
 `model` is the composite "{provider}:{model_id}" string from
 `settings.image_models` (see `image_models.py` / `ScenesStage.jsx`'s
@@ -158,7 +158,7 @@ def _is_public_host(host: str) -> bool:
 
 async def download_user_image_url(url: str) -> tuple[bytes, str]:
     """Fetches a user-supplied image URL for the scene-image upload endpoint
-    (generation.py's `upload_scene_image`). Unlike `_download` above, `url`
+    (generation_scenes.py's `upload_scene_image`). Unlike `_download` above, `url`
     here is arbitrary user input (pasted or dropped by the user), so this is
     hardened accordingly: only http(s) with a hostname, the host is resolved
     up front and rejected if it points at a private/loopback/link-local

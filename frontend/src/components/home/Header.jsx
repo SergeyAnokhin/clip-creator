@@ -1,8 +1,10 @@
 import { Feather, Plus, Settings } from 'lucide-react';
 import UsagePill from '../UsagePill.jsx';
+import MiniPlayerWidget from '../MiniPlayerWidget.jsx';
 
 export default function Header({
   L, langLabel, onToggleLang, onOpenSettings, onNewWorkflow, usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
 }) {
   return (
     <div className="home-header">
@@ -16,6 +18,7 @@ export default function Header({
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', boxShadow: '0 0 6px #4ade80' }} />
         {L.apiConnected}
       </div>
+      <MiniPlayerWidget L={L} track={miniPlayerTrack} isPlaying={miniPlayerIsPlaying} onToggle={onToggleMiniPlayer} />
       <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       <div style={{ flex: 1 }} />
       <button className="btn btn-gradient" onClick={onNewWorkflow}>

@@ -1,10 +1,10 @@
-import { api } from '../api/client.js';
+﻿import { api } from '../api/client.js';
 
 /** Export stage - the final step: bundles the project's finished
  * deliverables (every generated video candidate across every scene, the
  * selected Mureka track, and whichever Title Card variants are marked for
  * export) into one zip via `GET .../final-export`
- * (`export_final_package` in `routers/generation.py`). No AI calls or
+ * (`export_final_package` in `routers/generation_export.py`). No AI calls or
  * per-project session state here - just a download trigger plus the one new
  * per-variant toggle (`marked_for_export`, independent of `is_selected`
  * since the Title Card stage's single "main" pick stays single while export

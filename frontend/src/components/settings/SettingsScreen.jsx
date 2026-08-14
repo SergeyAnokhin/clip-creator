@@ -1,54 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2, Upload, X } from 'lucide-react';
-import { api, mediaUrl } from '../../api/client.js';
+import { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
+import { api } from '../../api/client.js';
 import { modelPriceMap } from '../../lib/pricing.js';
 import { downloadJSON } from '../../lib/download.js';
-import { sortByUseCount } from '../../lib/wishes.js';
-import { useFieldVoice } from '../../hooks/useVoice.js';
-import { groupPresetsByService } from '../../lib/sunoPrompt.js';
-import { pickReadableTextColor } from '../../lib/musicTagColors.js';
-import ModelFavorites from './ModelFavorites.jsx';
 import PricingPanel from './PricingPanel.jsx';
-import BasePromptPresetEditor from './BasePromptPresetEditor.jsx';
 import UsagePill from '../UsagePill.jsx';
-
-const API_KEY_ROWS = [
-  { key: 'replicate', name: 'Replicate' },
-  { key: 'google', name: 'Google (Gemini)' },
-  { key: 'google_free', name: 'Google (Gemini) Free' },
-  { key: 'fal', name: 'FAL' },
-  { key: 'openrouter', name: 'OpenRouter' },
-  { key: 'deepseek', name: 'DeepSeek' },
-  { key: 'krea', name: 'Krea AI' },
-  { key: 'google_translate', name: 'Google Translate' },
-  { key: 'mureka', name: 'Mureka' },
-];
-
-const MODEL_PROVIDERS = [
-  { id: 'google', name: 'Google (Gemini)' },
-  { id: 'google_free', name: 'Google (Gemini) Free' },
-  { id: 'openrouter', name: 'OpenRouter' },
-  { id: 'deepseek', name: 'DeepSeek' },
-  { id: 'replicate', name: 'Replicate' },
-  { id: 'fal', name: 'FAL' },
-];
-
-// Krea (krea.ai) is image/video-only - it has no text/LLM models, so it's
-// only offered for the image-model favorites panel, not text/simple ones.
-const IMAGE_MODEL_PROVIDERS = [...MODEL_PROVIDERS, { id: 'krea', name: 'Krea AI' }];
-
-// Only Google (Veo) and OpenRouter do image-to-video generation for this app
-// - see providers/video.py's module docstring.
-const VIDEO_MODEL_PROVIDERS = [
-  { id: 'google', name: 'Google (Gemini)' },
-  { id: 'google_free', name: 'Google (Gemini) Free' },
-  { id: 'openrouter', name: 'OpenRouter' },
-];
+import MiniPlayerWidget from '../MiniPlayerWidget.jsx';
+import GeneralTab from './GeneralTab.jsx';
+import ProvidersTab from './ProvidersTab.jsx';
+import ModelsTab from './ModelsTab.jsx';
+import PromptsTab from './PromptsTab.jsx';
+import WishesTab from './WishesTab.jsx';
+import LogosTab from './LogosTab.jsx';
+import { IMAGE_MODEL_PROVIDERS, MODEL_PROVIDERS, VIDEO_MODEL_PROVIDERS } from './modelProviders.js';
 
 const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes', 'logos'];
 
-const BG_REMOVER_BACKGROUND_TYPES = ['rgba', 'white', 'green', 'blur', 'overlay', 'map'];
-
+// Shell only: header, tab bar, save button, and the model catalogs the
+// Models tab renders. Each tab's own UI and draft state lives in its
+// `*Tab.jsx` sibling.
 export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
   videoModels, videoWishLibrary,
@@ -57,41 +27,21 @@ export default function SettingsScreen({
   backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams, logos,
   outpaintQualityMode, musicTags, sunoBasePromptUserPresets, murekaBasePromptUserPresets,
   pricing, usageToday, usagePeriodTotals,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
   onClose, onOpenUsage, onLoadUsagePeriodTotals, actions,
 }) {
   const [activeTab, setActiveTab] = useState('general');
-  const [newTagDraft, setNewTagDraft] = useState('');
-  const [editingTagIndex, setEditingTagIndex] = useState(null);
-  const [newExampleDraft, setNewExampleDraft] = useState('');
-  const [editingExampleIndex, setEditingExampleIndex] = useState(null);
-  const [newWishDraft, setNewWishDraft] = useState('');
-  const [editingWishId, setEditingWishId] = useState(null);
-  const [editWishTitle, setEditWishTitle] = useState('');
-  const [editWishText, setEditWishText] = useState('');
-  const [newMusicTagDraft, setNewMusicTagDraft] = useState('');
-  const [editingMusicTagId, setEditingMusicTagId] = useState(null);
-  const [newSceneWishDraft, setNewSceneWishDraft] = useState('');
-  const [editingSceneWishId, setEditingSceneWishId] = useState(null);
-  const [editSceneWishTitle, setEditSceneWishTitle] = useState('');
-  const [editSceneWishText, setEditSceneWishText] = useState('');
-  const [newVideoWishDraft, setNewVideoWishDraft] = useState('');
-  const [editingVideoWishId, setEditingVideoWishId] = useState(null);
-  const [editVideoWishTitle, setEditVideoWishTitle] = useState('');
-  const [editVideoWishText, setEditVideoWishText] = useState('');
-  const wishVoice = useFieldVoice({ showToast, L, lang });
   const [catalog, setCatalog] = useState({});
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [imageCatalog, setImageCatalog] = useState({});
   const [refreshingImageModels, setRefreshingImageModels] = useState(false);
   const [videoCatalog, setVideoCatalog] = useState({});
   const [refreshingVideoModels, setRefreshingVideoModels] = useState(false);
-  const apiKeysFileRef = useRef(null);
-  const generalFileRef = useRef(null);
   const priceMap = modelPriceMap(pricing?.models);
 
   // Load the last-known-good model catalog on mount, so the favorites
-  // search and the Prices tab have something to show before anyone presses
-  // "Refresh models" in this session.
+  // search has something to show before anyone presses "Refresh models" in
+  // this session.
   useEffect(() => {
     api.getModelsCatalog().then((res) => {
       setCatalog(res.text || {});
@@ -126,109 +76,6 @@ export default function SettingsScreen({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (file) actions.importGeneralSettings(file);
-  }
-
-  function startEditTag(index) {
-    setEditingTagIndex(index);
-    setNewTagDraft(specialTags[index]);
-  }
-  function cancelEditTag() {
-    setEditingTagIndex(null);
-    setNewTagDraft('');
-  }
-  function submitTagDraft() {
-    if (editingTagIndex !== null) {
-      actions.updateSpecialTag(editingTagIndex, newTagDraft);
-    } else {
-      actions.addSpecialTag(newTagDraft);
-    }
-    setEditingTagIndex(null);
-    setNewTagDraft('');
-  }
-
-  function startEditMusicTag(tag) {
-    setEditingMusicTagId(tag.id);
-    setNewMusicTagDraft(tag.label);
-  }
-  function cancelEditMusicTag() {
-    setEditingMusicTagId(null);
-    setNewMusicTagDraft('');
-  }
-  function submitMusicTagDraft() {
-    if (editingMusicTagId !== null) {
-      actions.updateMusicTag(editingMusicTagId, newMusicTagDraft);
-    } else {
-      actions.addMusicTag(newMusicTagDraft);
-    }
-    setEditingMusicTagId(null);
-    setNewMusicTagDraft('');
-  }
-
-  function startEditExample(index) {
-    setEditingExampleIndex(index);
-    setNewExampleDraft(referenceExamples[index]);
-  }
-  function cancelEditExample() {
-    setEditingExampleIndex(null);
-    setNewExampleDraft('');
-  }
-  function submitExampleDraft() {
-    if (editingExampleIndex !== null) {
-      actions.updateReferenceExample(editingExampleIndex, newExampleDraft);
-    } else {
-      actions.addReferenceExample(newExampleDraft);
-    }
-    setEditingExampleIndex(null);
-    setNewExampleDraft('');
-  }
-
-  function startEditWish(wish) {
-    setEditingWishId(wish.id);
-    setEditWishTitle(wish.title);
-    setEditWishText(wish.text);
-  }
-  function cancelEditWish() {
-    setEditingWishId(null);
-  }
-  function saveEditWish() {
-    const title = editWishTitle.trim();
-    const text = editWishText.trim();
-    if (!title || !text) return;
-    actions.updateWishSnippet(editingWishId, { title, text });
-    setEditingWishId(null);
-  }
-
-  function startEditSceneWish(wish) {
-    setEditingSceneWishId(wish.id);
-    setEditSceneWishTitle(wish.title);
-    setEditSceneWishText(wish.text);
-  }
-  function cancelEditSceneWish() {
-    setEditingSceneWishId(null);
-  }
-  function saveEditSceneWish() {
-    const title = editSceneWishTitle.trim();
-    const text = editSceneWishText.trim();
-    if (!title || !text) return;
-    actions.updateSceneWishSnippet(editingSceneWishId, { title, text });
-    setEditingSceneWishId(null);
-  }
-
-  const tabLabels = {
-    general: L.settings_tab_general, providers: L.settings_tab_providers, models: L.settings_tab_models,
-    prices: L.settings_tab_prices, prompts: L.settings_tab_prompts, wishes: L.settings_tab_wishes,
-    logos: L.settings_tab_logos,
-  };
-
-  const logoFileRef = useRef(null);
-  const [logoNameDraft, setLogoNameDraft] = useState('');
-  function handleLogoFile(e) {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (file) {
-      actions.uploadLogo(logoNameDraft, file);
-      setLogoNameDraft('');
-    }
   }
 
   async function refreshModels() {
@@ -276,21 +123,11 @@ export default function SettingsScreen({
     }
   }
 
-  function startEditVideoWish(wish) {
-    setEditingVideoWishId(wish.id);
-    setEditVideoWishTitle(wish.title);
-    setEditVideoWishText(wish.text);
-  }
-  function cancelEditVideoWish() {
-    setEditingVideoWishId(null);
-  }
-  function saveEditVideoWish() {
-    const title = editVideoWishTitle.trim();
-    const text = editVideoWishText.trim();
-    if (!title || !text) return;
-    actions.updateVideoWishSnippet(editingVideoWishId, { title, text });
-    setEditingVideoWishId(null);
-  }
+  const tabLabels = {
+    general: L.settings_tab_general, providers: L.settings_tab_providers, models: L.settings_tab_models,
+    prices: L.settings_tab_prices, prompts: L.settings_tab_prompts, wishes: L.settings_tab_wishes,
+    logos: L.settings_tab_logos,
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -300,6 +137,7 @@ export default function SettingsScreen({
         </button>
         <div className="workflow-title">{L.settingsTitle}</div>
         <div style={{ flex: 1 }} />
+        <MiniPlayerWidget L={L} track={miniPlayerTrack} isPlaying={miniPlayerIsPlaying} onToggle={onToggleMiniPlayer} />
         <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       </div>
 
@@ -318,298 +156,39 @@ export default function SettingsScreen({
           </div>
 
           {activeTab === 'general' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_language}</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  className={`chip${lang === 'ru' ? ' is-active' : ''}`}
-                  style={{ flex: 1, textAlign: 'center', justifyContent: 'center', padding: 10 }}
-                  onClick={actions.setLangRu}
-                >
-                  Русский
-                </button>
-                <button
-                  className={`chip${lang === 'en' ? ' is-active' : ''}`}
-                  style={{ flex: 1, textAlign: 'center', justifyContent: 'center', padding: 10 }}
-                  onClick={actions.setLangEn}
-                >
-                  English
-                </button>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'general' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_requestTimeout}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_requestTimeoutHint}</div>
-              <input
-                className="field"
-                type="number"
-                min="5"
-                style={{ maxWidth: 120 }}
-                value={requestTimeoutSeconds}
-                onChange={(e) => actions.setRequestTimeoutSeconds(Math.max(5, Number(e.target.value) || 60))}
-              />
-            </div>
-          )}
-
-          {activeTab === 'general' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_backup}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="settings-row">
-                  <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>{L.settings_backupOther}</span>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-accent-soft" onClick={exportGeneralFile}>
-                      <Download size={13} /> {L.settings_exportBtn}
-                    </button>
-                    <button className="btn btn-accent-soft" onClick={() => generalFileRef.current?.click()}>
-                      <Upload size={13} /> {L.settings_importBtn}
-                    </button>
-                    <input
-                      ref={generalFileRef}
-                      type="file"
-                      accept="application/json"
-                      style={{ display: 'none' }}
-                      onChange={handleGeneralFile}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <GeneralTab
+              L={L} lang={lang} requestTimeoutSeconds={requestTimeoutSeconds} actions={actions}
+              onExport={exportGeneralFile} onImportFile={handleGeneralFile}
+            />
           )}
 
           {activeTab === 'providers' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_apiKeys}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {API_KEY_ROWS.map((row) => (
-                  <div className="settings-row" key={row.key}>
-                    <span className="settings-row-name">{row.name}</span>
-                    <input
-                      className="field"
-                      style={{ fontFamily: 'monospace' }}
-                      value={apiKeys[row.key] || ''}
-                      onChange={(e) => actions.setApiKey(row.key, e.target.value)}
-                      placeholder="sk-..."
-                    />
-                  </div>
-                ))}
-                <div className="settings-row">
-                  <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>{L.settings_backupApiKeys}</span>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-accent-soft" onClick={exportApiKeysFile}>
-                      <Download size={13} /> {L.settings_exportBtn}
-                    </button>
-                    <button className="btn btn-accent-soft" onClick={() => apiKeysFileRef.current?.click()}>
-                      <Upload size={13} /> {L.settings_importBtn}
-                    </button>
-                    <input
-                      ref={apiKeysFileRef}
-                      type="file"
-                      accept="application/json"
-                      style={{ display: 'none' }}
-                      onChange={handleApiKeysFile}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'providers' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_bgRemover}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverHint}</div>
-
-              <div className="settings-row" style={{ marginBottom: 16 }}>
-                <span className="settings-row-name">{L.settings_bgRemoverMethod}</span>
-                <select
-                  className="field"
-                  value={backgroundRemoverMethod}
-                  onChange={(e) => actions.setBackgroundRemoverMethod(e.target.value)}
-                >
-                  <option value="local">{L.settings_bgRemoverMethodLocal}</option>
-                  <option value="fal">{L.settings_bgRemoverMethodFal}</option>
-                  <option value="replicate">{L.settings_bgRemoverMethodReplicate}</option>
-                </select>
-              </div>
-
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 6 }}>{L.settings_bgRemoverMethodLocal}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverLocalHint}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-                <div className="settings-row">
-                  <span className="settings-row-name">{L.settings_bgRemoverLocalBg}</span>
-                  <select
-                    className="field"
-                    value={backgroundRemoverLocalParams.bg}
-                    onChange={(e) => actions.setBackgroundRemoverLocalParam('bg', e.target.value)}
-                  >
-                    <option value="black">black</option>
-                    <option value="white">white</option>
-                  </select>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-row-name">{L.settings_bgRemoverLocalThreshold}</span>
-                  <input
-                    className="field" type="number" min="0" max="255" step="1"
-                    style={{ maxWidth: 120 }}
-                    value={backgroundRemoverLocalParams.threshold}
-                    onChange={(e) => actions.setBackgroundRemoverLocalParam('threshold', Number(e.target.value) || 0)}
-                  />
-                </div>
-              </div>
-
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 6 }}>{L.settings_bgRemoverMethodFal}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverFalHint}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-                <div className="settings-row">
-                  <span className="settings-row-name">{L.settings_bgRemoverFalModel}</span>
-                  <select
-                    className="field"
-                    value={backgroundRemoverFalParams.model}
-                    onChange={(e) => actions.setBackgroundRemoverFalParam('model', e.target.value)}
-                  >
-                    <option value="fal-ai/bria/background/remove">fal-ai/bria/background/remove</option>
-                    <option value="fal-ai/imageutils/rembg">fal-ai/imageutils/rembg</option>
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 6 }}>{L.settings_bgRemoverMethodReplicate}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_bgRemoverReplicateHint}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="settings-row">
-                  <span className="settings-row-name">{L.settings_bgRemoverType}</span>
-                  <select
-                    className="field"
-                    value={backgroundRemoverParams.background_type}
-                    onChange={(e) => actions.setBackgroundRemoverParam('background_type', e.target.value)}
-                  >
-                    {BG_REMOVER_BACKGROUND_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-row-name">{L.settings_bgRemoverFormat}</span>
-                  <select
-                    className="field"
-                    value={backgroundRemoverParams.format}
-                    onChange={(e) => actions.setBackgroundRemoverParam('format', e.target.value)}
-                  >
-                    <option value="png">png</option>
-                    <option value="jpg">jpg</option>
-                  </select>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-row-name">{L.settings_bgRemoverThreshold}</span>
-                  <input
-                    className="field" type="number" min="0" max="1" step="0.05"
-                    style={{ maxWidth: 120 }}
-                    value={backgroundRemoverParams.threshold}
-                    onChange={(e) => actions.setBackgroundRemoverParam('threshold', Number(e.target.value) || 0)}
-                  />
-                </div>
-                <div className="settings-row">
-                  <span className="settings-row-name" style={{ width: 'auto', flex: 1 }}>{L.settings_bgRemoverReverse}</span>
-                  <input
-                    type="checkbox"
-                    checked={!!backgroundRemoverParams.reverse}
-                    onChange={(e) => actions.setBackgroundRemoverParam('reverse', e.target.checked)}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'providers' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_outpaint}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_outpaintHint}</div>
-              <div className="settings-row">
-                <span className="settings-row-name">{L.settings_outpaintMode}</span>
-                <select
-                  className="field"
-                  value={outpaintQualityMode}
-                  onChange={(e) => actions.setOutpaintQualityMode(e.target.value)}
-                >
-                  <option value="fast">{L.settings_outpaintModeFast}</option>
-                  <option value="quality">{L.settings_outpaintModeQuality}</option>
-                </select>
-              </div>
-            </div>
+            <ProvidersTab
+              L={L} apiKeys={apiKeys}
+              backgroundRemoverMethod={backgroundRemoverMethod}
+              backgroundRemoverLocalParams={backgroundRemoverLocalParams}
+              backgroundRemoverFalParams={backgroundRemoverFalParams}
+              backgroundRemoverParams={backgroundRemoverParams}
+              outpaintQualityMode={outpaintQualityMode}
+              actions={actions}
+              onExportApiKeys={exportApiKeysFile} onImportApiKeysFile={handleApiKeysFile}
+            />
           )}
 
           {activeTab === 'models' && (
-            <>
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_textModels}</div>
-                <ModelFavorites
-                  L={L} providers={MODEL_PROVIDERS}
-                  favorites={textModels.favorites} defaultValue={textModels.default}
-                  catalog={catalog} refreshing={refreshingModels} onRefresh={refreshModels}
-                  prices={priceMap}
-                  onAddFavorite={actions.addTextModelFavorite}
-                  onRemoveFavorite={actions.removeTextModelFavorite}
-                  onSetDefault={actions.setTextModelDefault}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_simpleModels}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_simpleModelsHint}</div>
-                <ModelFavorites
-                  L={L} providers={MODEL_PROVIDERS}
-                  favorites={simpleModels.favorites} defaultValue={simpleModels.default}
-                  catalog={catalog} refreshing={refreshingModels} onRefresh={refreshModels}
-                  prices={priceMap}
-                  onAddFavorite={actions.addSimpleModelFavorite}
-                  onRemoveFavorite={actions.removeSimpleModelFavorite}
-                  onSetDefault={actions.setSimpleModelDefault}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_imageModels}</div>
-                <ModelFavorites
-                  L={L} providers={IMAGE_MODEL_PROVIDERS}
-                  favorites={imageModels.favorites} defaultValue={imageModels.default}
-                  catalog={imageCatalog} refreshing={refreshingImageModels} onRefresh={refreshImageModels}
-                  prices={priceMap}
-                  onAddFavorite={actions.addImageModelFavorite}
-                  onRemoveFavorite={actions.removeImageModelFavorite}
-                  onSetDefault={actions.setImageModelDefault}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_imageModelsSimple}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_imageModelsSimpleHint}</div>
-                <ModelFavorites
-                  L={L} providers={IMAGE_MODEL_PROVIDERS}
-                  favorites={imageModelsSimple.favorites} defaultValue={imageModelsSimple.default}
-                  catalog={imageCatalog} refreshing={refreshingImageModels} onRefresh={refreshImageModels}
-                  prices={priceMap}
-                  onAddFavorite={actions.addImageModelSimpleFavorite}
-                  onRemoveFavorite={actions.removeImageModelSimpleFavorite}
-                  onSetDefault={actions.setImageModelSimpleDefault}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_videoModels}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_videoModelsHint}</div>
-                <ModelFavorites
-                  L={L} providers={VIDEO_MODEL_PROVIDERS}
-                  favorites={videoModels.favorites} defaultValue={videoModels.default}
-                  catalog={videoCatalog} refreshing={refreshingVideoModels} onRefresh={refreshVideoModels}
-                  prices={priceMap}
-                  onAddFavorite={actions.addVideoModelFavorite}
-                  onRemoveFavorite={actions.removeVideoModelFavorite}
-                  onSetDefault={actions.setVideoModelDefault}
-                />
-              </div>
-            </>
+            <ModelsTab
+              L={L}
+              textModels={textModels} simpleModels={simpleModels}
+              imageModels={imageModels} imageModelsSimple={imageModelsSimple} videoModels={videoModels}
+              catalog={catalog} imageCatalog={imageCatalog} videoCatalog={videoCatalog}
+              refreshingModels={refreshingModels}
+              refreshingImageModels={refreshingImageModels}
+              refreshingVideoModels={refreshingVideoModels}
+              onRefreshModels={refreshModels}
+              onRefreshImageModels={refreshImageModels}
+              onRefreshVideoModels={refreshVideoModels}
+              priceMap={priceMap} actions={actions}
+            />
           )}
 
           {activeTab === 'prices' && (
@@ -617,480 +196,26 @@ export default function SettingsScreen({
           )}
 
           {activeTab === 'prompts' && (
-            <>
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_specialTags}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {specialTags.map((tag, i) => (
-                    <div
-                      className="settings-row"
-                      key={i}
-                      style={i === editingTagIndex ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
-                    >
-                      <span
-                        className="settings-row-name"
-                        style={{ width: 'auto', flex: 1, cursor: 'pointer' }}
-                        title={L.settings_clickToEdit}
-                        onClick={() => startEditTag(i)}
-                      >
-                        {tag}
-                      </span>
-                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeSpecialTag(i)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                  <input
-                    className="field"
-                    value={newTagDraft}
-                    onChange={(e) => setNewTagDraft(e.target.value)}
-                    placeholder={L.settings_specialTagsPlaceholder}
-                  />
-                  <button className="btn btn-accent-soft" onClick={submitTagDraft}>
-                    {editingTagIndex !== null ? L.save : L.add}
-                  </button>
-                  {editingTagIndex !== null && (
-                    <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditTag}>
-                      {L.cancel}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_musicTags}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_musicTagsHint}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {musicTags.map((tag) => (
-                    <div
-                      className="settings-row"
-                      key={tag.id}
-                      style={tag.id === editingMusicTagId ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
-                    >
-                      <span
-                        className="chip"
-                        style={{
-                          padding: '4px 12px', fontSize: 12.5, cursor: 'pointer',
-                          background: tag.color || 'rgba(255,255,255,0.06)', color: pickReadableTextColor(tag.color),
-                          border: 'none',
-                        }}
-                        title={L.settings_clickToEdit}
-                        onClick={() => startEditMusicTag(tag)}
-                      >
-                        {tag.label}
-                      </span>
-                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeMusicTag(tag.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                  <input
-                    className="field"
-                    value={newMusicTagDraft}
-                    onChange={(e) => setNewMusicTagDraft(e.target.value)}
-                    placeholder={L.settings_musicTagsPlaceholder}
-                  />
-                  <button className="btn btn-accent-soft" onClick={submitMusicTagDraft}>
-                    {editingMusicTagId !== null ? L.save : L.add}
-                  </button>
-                  {editingMusicTagId !== null && (
-                    <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditMusicTag}>
-                      {L.cancel}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {sunoPromptPresets.length > 0 && (
-                <div className="settings-panel">
-                  <div className="settings-panel-label">{L.settings_sunoPromptPresets}</div>
-                  <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>{L.settings_sunoPromptPresetsHint}</div>
-                  {groupPresetsByService(sunoPromptPresets).map(([service, presets]) => (
-                    <div key={service} style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 11.5, opacity: 0.6, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>{service}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {presets.map((preset) => {
-                          const isActive = sunoBasePrompt === preset.prompt;
-                          return (
-                            <div className="settings-row" key={preset.id} style={{ alignItems: 'flex-start' }}>
-                              <div>
-                                <div className="settings-row-name">{preset.name}</div>
-                                <div style={{ fontSize: 12, opacity: 0.7 }}>{preset.description}</div>
-                              </div>
-                              <button
-                                className={`btn btn-accent-soft${isActive ? ' is-active' : ''}`}
-                                style={{ flexShrink: 0 }}
-                                onClick={() => actions.setSunoBasePrompt(preset.prompt)}
-                              >
-                                {isActive ? L.settings_presetLoaded : L.settings_loadPreset}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <BasePromptPresetEditor
-                L={L} title={L.settings_sunoUserPresets} hint={L.settings_sunoUserPresetsHint}
-                presets={sunoBasePromptUserPresets}
-                onSave={actions.saveSunoBasePromptUserPreset}
-                onUpdate={actions.updateSunoBasePromptUserPreset}
-                onDelete={actions.deleteSunoBasePromptUserPreset}
-              />
-              <BasePromptPresetEditor
-                L={L} title={L.settings_murekaUserPresets} hint={L.settings_murekaUserPresetsHint}
-                presets={murekaBasePromptUserPresets}
-                onSave={actions.saveMurekaBasePromptUserPreset}
-                onUpdate={actions.updateMurekaBasePromptUserPreset}
-                onDelete={actions.deleteMurekaBasePromptUserPreset}
-              />
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_sunoBasePrompt}</div>
-                <textarea
-                  className="suno-textarea"
-                  style={{ minHeight: 180 }}
-                  value={sunoBasePrompt}
-                  onChange={(e) => actions.setSunoBasePrompt(e.target.value)}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_sceneBasePromptNarrative}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{L.settings_sceneBasePromptNarrativeHint}</div>
-                <textarea
-                  className="suno-textarea"
-                  style={{ minHeight: 180 }}
-                  value={sceneBasePromptNarrative}
-                  onChange={(e) => actions.updateSceneBasePromptNarrative(e.target.value)}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_sceneBasePromptAbstract}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{L.settings_sceneBasePromptAbstractHint}</div>
-                <textarea
-                  className="suno-textarea"
-                  style={{ minHeight: 180 }}
-                  value={sceneBasePromptAbstract}
-                  onChange={(e) => actions.updateSceneBasePromptAbstract(e.target.value)}
-                />
-              </div>
-
-              <div className="settings-panel">
-                <div className="settings-panel-label">{L.settings_referenceExamples}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {referenceExamples.map((example, i) => (
-                    <div
-                      className="settings-row"
-                      key={i}
-                      style={i === editingExampleIndex ? { background: 'rgba(255,255,255,0.06)', borderRadius: 8, margin: '0 -6px', padding: '4px 6px' } : undefined}
-                    >
-                      <span
-                        className="settings-row-name"
-                        style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-                        title={L.settings_clickToEdit}
-                        onClick={() => startEditExample(i)}
-                      >
-                        {example}
-                      </span>
-                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeReferenceExample(i)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-                  <textarea
-                    className="suno-textarea"
-                    style={{ minHeight: 80 }}
-                    value={newExampleDraft}
-                    onChange={(e) => setNewExampleDraft(e.target.value)}
-                    placeholder={L.settings_referenceExamplesPlaceholder}
-                  />
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-accent-soft" style={{ alignSelf: 'flex-start' }} onClick={submitExampleDraft}>
-                      {editingExampleIndex !== null ? L.save : L.add}
-                    </button>
-                    {editingExampleIndex !== null && (
-                      <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditExample}>
-                        {L.cancel}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </>
+            <PromptsTab
+              L={L} specialTags={specialTags} musicTags={musicTags}
+              sunoPromptPresets={sunoPromptPresets} sunoBasePrompt={sunoBasePrompt}
+              sunoBasePromptUserPresets={sunoBasePromptUserPresets}
+              murekaBasePromptUserPresets={murekaBasePromptUserPresets}
+              sceneBasePromptNarrative={sceneBasePromptNarrative}
+              sceneBasePromptAbstract={sceneBasePromptAbstract}
+              referenceExamples={referenceExamples} actions={actions}
+            />
           )}
 
           {activeTab === 'wishes' && (
-            <>
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_wishLibrary}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {sortByUseCount(wishLibrary).map((wish) => (
-                  editingWishId === wish.id ? (
-                    <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                        <input
-                          className="field"
-                          value={editWishTitle}
-                          onChange={(e) => setEditWishTitle(e.target.value)}
-                          placeholder={L.settings_wishLibraryTitleLabel}
-                          autoFocus
-                        />
-                        {wishVoice.isSupported && (
-                          <button
-                            className={`icon-btn${wishVoice.recordingField === `wish-title-${wish.id}` ? ' icon-btn-recording' : ''}`}
-                            style={{ width: 38, height: 38, flexShrink: 0 }}
-                            title={L.voiceEdit}
-                            onClick={() => wishVoice.startFieldVoice(`wish-title-${wish.id}`, (t) => setEditWishTitle(t))}
-                          >
-                            {wishVoice.recordingField === `wish-title-${wish.id}` ? <MicOff size={15} /> : <Mic size={15} />}
-                          </button>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                        <textarea
-                          className="suno-textarea"
-                          style={{ minHeight: 70, flex: 1 }}
-                          value={editWishText}
-                          onChange={(e) => setEditWishText(e.target.value)}
-                          placeholder={L.settings_wishLibraryTextLabel}
-                        />
-                        {wishVoice.isSupported && (
-                          <button
-                            className={`icon-btn${wishVoice.recordingField === `wish-text-${wish.id}` ? ' icon-btn-recording' : ''}`}
-                            style={{ width: 38, height: 38, flexShrink: 0 }}
-                            title={L.voiceEdit}
-                            onClick={() => wishVoice.startFieldVoice(`wish-text-${wish.id}`, (t) => setEditWishText((prev) => (prev ? `${prev}\n${t}` : t)))}
-                          >
-                            {wishVoice.recordingField === `wish-text-${wish.id}` ? <MicOff size={15} /> : <Mic size={15} />}
-                          </button>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                        <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={saveEditWish}>{L.save}</button>
-                        <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditWish}>{L.cancel}</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="settings-row" key={wish.id} title={wish.text}>
-                      <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {wish.title}
-                      </span>
-                      <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.settings_wishLibraryEdit} onClick={() => startEditWish(wish)}>
-                        <Pencil size={13} />
-                      </button>
-                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeWishSnippet(wish.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <input
-                  className="field"
-                  value={newWishDraft}
-                  onChange={(e) => setNewWishDraft(e.target.value)}
-                  placeholder={wishVoice.recordingField === 'wish-draft' ? L.listening : L.settings_wishLibraryPlaceholder}
-                />
-                {wishVoice.isSupported && (
-                  <button
-                    className={`icon-btn${wishVoice.recordingField === 'wish-draft' ? ' icon-btn-recording' : ''}`}
-                    style={{ width: 38, height: 38, flexShrink: 0 }}
-                    title={L.voiceEdit}
-                    onClick={() => wishVoice.startFieldVoice('wish-draft', (t) => setNewWishDraft((prev) => (prev ? `${prev} ${t}` : t)))}
-                  >
-                    {wishVoice.recordingField === 'wish-draft' ? <MicOff size={15} /> : <Mic size={15} />}
-                  </button>
-                )}
-                <button
-                  className="btn btn-accent-soft"
-                  onClick={() => { actions.saveWishToLibrary(newWishDraft); setNewWishDraft(''); }}
-                >
-                  {L.add}
-                </button>
-              </div>
-            </div>
-
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.scene_wishesTitle}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {sortByUseCount(sceneWishLibrary).map((wish) => (
-                  editingSceneWishId === wish.id ? (
-                    <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                        <input
-                          className="field"
-                          value={editSceneWishTitle}
-                          onChange={(e) => setEditSceneWishTitle(e.target.value)}
-                          placeholder={L.settings_wishLibraryTitleLabel}
-                          autoFocus
-                        />
-                      </div>
-                      <textarea
-                        className="suno-textarea"
-                        style={{ minHeight: 70 }}
-                        value={editSceneWishText}
-                        onChange={(e) => setEditSceneWishText(e.target.value)}
-                        placeholder={L.settings_wishLibraryTextLabel}
-                      />
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                        <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={saveEditSceneWish}>{L.save}</button>
-                        <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditSceneWish}>{L.cancel}</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="settings-row" key={wish.id} title={wish.text}>
-                      <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {wish.title}
-                      </span>
-                      <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.settings_wishLibraryEdit} onClick={() => startEditSceneWish(wish)}>
-                        <Pencil size={13} />
-                      </button>
-                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeSceneWishSnippet(wish.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <input
-                  className="field"
-                  value={newSceneWishDraft}
-                  onChange={(e) => setNewSceneWishDraft(e.target.value)}
-                  placeholder={L.scene_wishPlaceholder}
-                />
-                <button
-                  className="btn btn-accent-soft"
-                  onClick={() => { actions.saveSceneWishToLibrary(newSceneWishDraft); setNewSceneWishDraft(''); }}
-                >
-                  {L.add}
-                </button>
-              </div>
-            </div>
-
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.video_wishesTitle}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {sortByUseCount(videoWishLibrary).map((wish) => (
-                  editingVideoWishId === wish.id ? (
-                    <div className="settings-panel" style={{ padding: 12 }} key={wish.id}>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                        <input
-                          className="field"
-                          value={editVideoWishTitle}
-                          onChange={(e) => setEditVideoWishTitle(e.target.value)}
-                          placeholder={L.settings_wishLibraryTitleLabel}
-                          autoFocus
-                        />
-                      </div>
-                      <textarea
-                        className="suno-textarea"
-                        style={{ minHeight: 70 }}
-                        value={editVideoWishText}
-                        onChange={(e) => setEditVideoWishText(e.target.value)}
-                        placeholder={L.settings_wishLibraryTextLabel}
-                      />
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                        <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={saveEditVideoWish}>{L.save}</button>
-                        <button className="btn-ghost" style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }} onClick={cancelEditVideoWish}>{L.cancel}</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="settings-row" key={wish.id} title={wish.text}>
-                      <span className="settings-row-name" style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {wish.title}
-                      </span>
-                      <button className="icon-btn" style={{ width: 30, height: 30, opacity: 0.75 }} title={L.settings_wishLibraryEdit} onClick={() => startEditVideoWish(wish)}>
-                        <Pencil size={13} />
-                      </button>
-                      <button className="icon-btn icon-btn-danger" onClick={() => actions.removeVideoWishSnippet(wish.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <input
-                  className="field"
-                  value={newVideoWishDraft}
-                  onChange={(e) => setNewVideoWishDraft(e.target.value)}
-                  placeholder={L.video_wishPlaceholder}
-                />
-                <button
-                  className="btn btn-accent-soft"
-                  onClick={() => { actions.saveVideoWishToLibrary(newVideoWishDraft); setNewVideoWishDraft(''); }}
-                >
-                  {L.add}
-                </button>
-              </div>
-            </div>
-            </>
+            <WishesTab
+              L={L} lang={lang} showToast={showToast}
+              wishLibrary={wishLibrary} sceneWishLibrary={sceneWishLibrary} videoWishLibrary={videoWishLibrary}
+              actions={actions}
+            />
           )}
 
-          {activeTab === 'logos' && (
-            <div className="settings-panel">
-              <div className="settings-panel-label">{L.settings_logosLabel}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{L.settings_logosHint}</div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-                {(logos || []).map((logo) => (
-                  <div key={logo.id} style={{ width: 84 }}>
-                    <div
-                      style={{
-                        position: 'relative', width: 84, height: 84, borderRadius: 8, overflow: 'hidden',
-                        background: 'repeating-conic-gradient(#2a2a2a 0% 25%, #363636 0% 50%) 50% / 12px 12px',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                      }}
-                    >
-                      <img src={mediaUrl(logo.file_path)} alt={logo.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                      <button
-                        className="icon-btn" style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20 }}
-                        title={L.settings_logosDelete}
-                        onClick={() => actions.deleteLogo(logo.id)}
-                      >
-                        <X size={11} />
-                      </button>
-                    </div>
-                    {logo.name && (
-                      <div style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 4, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {logo.name}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  className="field" style={{ flex: 1 }}
-                  value={logoNameDraft}
-                  onChange={(e) => setLogoNameDraft(e.target.value)}
-                  placeholder={L.settings_logosNamePlaceholder}
-                />
-                <button className="btn btn-accent-soft" onClick={() => logoFileRef.current?.click()}>
-                  <Upload size={13} /> {L.settings_logosUpload}
-                </button>
-                <input
-                  ref={logoFileRef}
-                  type="file"
-                  accept="image/png,image/webp"
-                  style={{ display: 'none' }}
-                  onChange={handleLogoFile}
-                />
-              </div>
-            </div>
-          )}
+          {activeTab === 'logos' && <LogosTab L={L} logos={logos} actions={actions} />}
 
           <button className="btn btn-gradient" style={{ justifyContent: 'center', padding: 12, fontSize: 14 }} onClick={actions.onSave}>
             {L.save}

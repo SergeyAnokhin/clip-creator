@@ -1,8 +1,8 @@
-# Data model & API
+﻿# Data model & API
 
 Everything is JSON on disk under `app_data/` (git-ignored, override the root
-with the `APP_DATA_DIR` env var). No database, no migrations — a project file
-is whatever shape `storage.save_project` last wrote.
+with the `APP_DATA_DIR` env var). No database, no migrations — a project file is
+whatever shape `storage.save_project` last wrote.
 
 ```text
 app_data/
@@ -17,11 +17,11 @@ app_data/
       references/ref_{uuid}.{ext}
       titlecard/{shorthex}.{png|jpg|webp}
       titlecard/posters/{shorthex}.png   # Poster constructor output (flattened)
-      music/{track_id}.mp3               # Mureka-generated tracks, downloaded immediately (see below)
-      music/{stem_id}.zip                # stem-separation output (see MurekaTrack.stems below)
+      music/{track_id}.mp3               # Mureka tracks, downloaded immediately (see below)
+      music/{stem_id}.zip                # stem-separation output (see MurekaTrack.stems)
       music/references/ref_{uuid}.{ext}  # trimmed reference audio actually sent to Mureka
-      music/reference-sources/{id}.{ext} # raw uploaded file, pre-trim staging area (ReferenceAudioTrimmer.jsx)
-      editor/rnd_{shorthex}.mp4          # Editor stage final renders (providers/editor.py, local ffmpeg only)
+      music/reference-sources/{id}.{ext} # raw uploaded file, pre-trim staging area
+      editor/rnd_{shorthex}.mp4          # Editor stage final renders (local ffmpeg only)
   logos/logo_{shorthex}.{png|webp}       # global, cross-project - see settings.logos
   usage/
     YYYY-MM.jsonl             # append-only AI-call ledger, one JSON object per line
@@ -54,22 +54,18 @@ app_data/
 | `mureka` | Mureka \| absent | Real audio generation via the Mureka API (distinct from `style`/`lyrics` above, which are just text) — absent until the stage is first opened, defaults to `{style_input: '', lyrics_input: '', reference_audio: [], reference_sources: [], tracks: []}` |
 | `video_edit` | VideoEdit \| absent/null | Editor stage state (final render) — absent/`null` until the stage is first opened, or if it's ever explicitly cleared; the frontend treats either the same and re-seeds a fresh default (see below) |
 
-**Project rename** (`app_data/projects/_redirects.json`): when a `PATCH` changes
-`title`/`author`, `routers/projects.py::patch_project` moves the project's
-folder to the new slug (uniquified like `create_project`'s `-2`/`-3` suffix on
-collision) and appends `{old_slug: new_slug}` to this flat, never-pruned
-redirect map. `storage.resolve_slug`/`project_dir`/`project_lock` transparently
-follow the chain, so any caller still holding the old slug — a background
-generation job that started before the rename finished, or a stale client
-request — lands in the renamed folder instead of recreating an orphaned old
-one. `resolve_slug` only follows a redirect when `slug` **isn't itself a
-real, currently-existing project** (checks for `<slug>/config.json` on disk
-first) — slugs are content-derived, not permanently unique, so a vacated old
-slug can later coincide with a wholly unrelated project's own real address;
-without that check, opening the unrelated project would silently load (and
-overwrite) the renamed one's data instead (confirmed live, 2026-08). See
-`architecture.md`'s "Project rename" section for the failure mode this
-avoids.
+**Project rename** (`app_data/projects/_redirects.json`): a `PATCH` that changes
+`title`/`author` moves the folder to the new slug (uniquified like
+`create_project`'s `-2`/`-3` suffix) and appends `{old_slug: new_slug}` to this
+flat, never-pruned map. `storage.resolve_slug`/`project_dir`/`project_lock`
+follow the chain, so a caller still holding the old slug — a background job that
+started before the rename, or a stale client request — lands in the renamed
+folder instead of recreating an orphaned one. **`resolve_slug` only follows a
+redirect when `slug` isn't itself a real, currently-existing project** (it checks
+for `<slug>/config.json` first): slugs are content-derived and not permanently
+unique, so a vacated old slug can later be a wholly unrelated project's real
+address, and without that check opening it would silently load and overwrite the
+renamed one's data.
 
 **Block**: `{id, type, importance, content}` — `type` is
 `intro|verse|chorus|bridge|outro|interlude`; `content` is plain multi-line text.
@@ -79,361 +75,267 @@ backward compatibility, never read or edited.
 
 **Scene**: `{lyric_segment, static_prompt, motion_prompt, images[], videos[],
 animate_image_id?}` — `videos` is absent/`[]` until the Video stage first
-generates one. `animate_image_id` is an optional override, set by clicking a
-thumbnail in the Video stage's own per-scene picker: it names which
-`images[].image_id` gets animated, independent of that image's `is_selected`
-flag (picking an image to animate must not change the scene's main picture
-elsewhere). Resolution order (`lib/scenes.js`'s `resolveAnimateImage`, mirrored
-server-side by the `image_id` override on `POST .../scenes/{n}/videos` below):
-`animate_image_id` match → the `is_selected` image → the first image → none.
+generates one. `animate_image_id` is an optional override set by clicking a
+thumbnail in the Video stage's picker: it names which `images[].image_id` gets
+animated, independent of that image's `is_selected` flag, so picking something to
+animate never changes the scene's main picture elsewhere. Resolution order
+(`lib/scenes.js`'s `resolveAnimateImage`, mirrored server-side by the `image_id`
+override on `POST .../scenes/{n}/videos`): `animate_image_id` match → the
+`is_selected` image → the first image → none.
 
 **Image**: `{image_id, file_path, rating, is_selected, generated_at, model,
-aspect_ratio, cost, source_image_id?}` — `file_path` is relative to the
-project folder (`images/scene_1_a1b2c3d4.png`; extension depends on the
-provider - `png`/`jpg`/`webp`), `rating` 0-5, exactly one `is_selected` per
-scene once anything is rated. `model` is `'upload'` for a user-uploaded
-image, `'local:crop'` for a plain (no outpainting) crop, or the usual
-`{provider}:{model_id}` composite otherwise (`fal:fal-ai/flux-2-pro/outpaint`
-for an outpainted crop). `source_image_id` is only present on a crop/outpaint
-result (`images.crop_image` — see the API table below): it points at the
-original image's `image_id`, and the original is left untouched — cropping
-always **appends** a new image, mirroring `TitleCardVariant.source_variant_id`
-below.
+aspect_ratio, cost, source_image_id?}` — `file_path` is relative to the project
+folder (`images/scene_1_a1b2c3d4.png`), `rating` 0-5, exactly one `is_selected`
+per scene once anything is rated. `model` is `'upload'` for a user upload,
+`'local:crop'` for a plain crop, `fal:fal-ai/flux-2-pro/outpaint` for an
+outpainted one, or the usual `{provider}:{model_id}` composite. `source_image_id`
+appears only on a crop/outpaint result and points at the original, which is left
+untouched — cropping always **appends**, mirroring
+`TitleCardVariant.source_variant_id` below.
 
-**Video** (Video/animation stage, `providers/video.py`): `{video_id,
-file_path, rating, is_selected, generated_at, model, motion_prompt,
-aspect_ratio, resolution, duration_seconds, generation_ms, cost,
-source_image_id}` — `file_path` is `videos/scene_1_a1b2c3d4.mp4` (always
-`.mp4`, both providers). `model` is the `{provider}:{model_id}` composite
-(`provider ∈ google\|google_free\|openrouter` — only these two do
-image-to-video generation for this app, see `architecture.md`).
-`motion_prompt` is a snapshot of the exact prompt sent (the scene's own
-`motion_prompt` plus any active video wishes folded in, see
-`video.build_prompt`) — kept alongside the live, still-editable
-`scene.motion_prompt` so a past video's prompt stays inspectable even after
-the field is edited again. `source_image_id` points at the `Image` (from the
-same scene's `images[]`) that was animated — the scene's `is_selected` image
-at generation time, or an explicit override. `generation_ms` is wall-clock
-time the call took (independent of the usage ledger's `duration_ms`, though
-they're the same number - stored on the record itself so it's visible
-without opening the debug panel or Usage screen). `cost` follows the same
-priority as `Image.cost`: a provider-reported price (OpenRouter's
-`usage.cost`) wins over the catalog (`pricing.BUILTIN_PRICING`'s
-`per_second` rate × `duration_seconds`, Google Veo). `videos[]` is
-append-only, like `images[]`; deleting one removes it from this array and
-unlinks its file (`DELETE .../scenes/{n}/videos/{video_id}`). A manually
-uploaded or imported clip (`model: 'upload'`, `video.save_uploaded_video`/
-`import_video_batch`) never has the file probed, so `duration_seconds` (and
-`resolution`/`aspect_ratio`/`generation_ms`) is `null` on it — the Editor
-stage below is the one place this actually matters, since its trim math
-needs a real length; see `VideoEdit`'s note on unbounded clips.
+**Video** (`providers/video.py`): `{video_id, file_path, rating, is_selected,
+generated_at, model, motion_prompt, aspect_ratio, resolution, duration_seconds,
+generation_ms, cost, source_image_id}` — `file_path` is
+`videos/scene_1_a1b2c3d4.mp4` (always `.mp4`, both providers), `model` a
+`{provider}:{model_id}` composite with `provider ∈ google|google_free|openrouter`.
+`motion_prompt` is a snapshot of the exact prompt sent (the scene's own field
+plus any active video wishes), kept alongside the still-editable
+`scene.motion_prompt` so a past video's prompt stays inspectable.
+`source_image_id` points at the animated `Image`. `generation_ms` is wall-clock
+time, stored on the record so it's visible without opening the debug panel or
+Usage screen. `cost` follows `Image.cost`'s priority: a provider-reported price
+(OpenRouter) wins over the catalog (Veo's `per_second` × `duration_seconds`).
+`videos[]` is append-only. **A manually uploaded or imported clip is never
+probed**, so `duration_seconds`/`resolution`/`aspect_ratio`/`generation_ms` are
+`null` on it — which matters for the Editor stage's trim math below.
 
-**VideoEdit** (Editor stage, the last step, `providers/editor.py`): `{mureka_track_id, clips[], renders[]}`.
-Lazily seeded the first time the stage opens (one clip per scene that already
-has an `is_selected` video, in scene order; `mureka_track_id` defaults to
-whichever `MurekaTrack.is_selected` — both overridable afterward) — same
-one-time-seed convention as `TitleCard.text_block` below, except this seed is
-persisted immediately (not left client-only) so a reload right after first
-opening the stage doesn't lose it. `clips`/`mureka_track_id` are edited only
-through the generic `PATCH /api/projects/{id}` (no dedicated save route —
-same convention as a `MurekaTrack`'s `rating`/`is_selected` or
-`karaoke_sync` below); only the actual render is a real job/poll call (see
-the API table). An **`EditorClip`** is `{clip_id, scene_index, video_id,
-trim_start_ms, trim_end_ms, speed}` — `video_id` must resolve inside
-`scenes[scene_index].videos[]`; `trim_end_ms: null` means "to the end of the
-source clip" (falls back to that video's own `duration_seconds`) — **except**
-when the source clip's `duration_seconds` is itself unknown (an
-uploaded/imported clip, see `Video` above), in which case the render leaves
-the clip's end genuinely unbounded (ffmpeg runs it to its own EOF) rather
-than collapsing it to zero length; the frontend timeline/preview, which has
-no way to probe the real file client-side, lays such a clip out using a
-fixed 5s stand-in (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) purely
-for display until the user sets a real trim end after watching it play.
-`speed` is a playback-rate multiplier (ffmpeg `setpts`); video clips are
-always muted in the render — the picked Mureka track is the only audio
-source. `renders[]` is server-managed and append-only:
-`{render_id, file_path, created_at, duration_ms, clip_count,
-mureka_track_id}`, `file_path` under `editor/` (see the file-tree above).
-v1 deliberately has no filters/transitions/overlays — reorder, trim, speed,
-and one audio track only; `EditorClip` has room to grow new optional fields
-later without a schema rewrite. Output canvas is a fixed 1920×1080 (or
-1080×1920 if every clip's own `aspect_ratio` is `9:16`) — every clip is
-scaled+letterboxed into it, never cropped; if the picked clips run shorter
-than the audio track, the **last** clip is frozen (ffmpeg `tpad`) to fill the
-remainder, and if they run longer, the render is hard-capped at the audio
-track's own length (`-t`), silently truncating the tail — the Editor stage UI
-shows a non-blocking duration-mismatch warning for both cases, computed
-client-side (`lib/timeline.js`'s `getTotalDurationMs`).
+**VideoEdit** (Editor stage, `providers/editor.py`): `{mureka_track_id, clips[],
+renders[]}`. Lazily seeded the first time the stage opens (one clip per scene
+that has an `is_selected` video, in scene order; `mureka_track_id` from whichever
+`MurekaTrack.is_selected`), but — unlike `TitleCard.text_block` — persisted
+immediately, so a reload right after first opening the stage doesn't lose it.
+`clips`/`mureka_track_id` are edited only through the generic
+`PATCH /api/projects/{id}`; only the render is a real job/poll call.
 
-**TitleCard**: `{text_block, reference_image_paths, variants, posters}` — `text_block`
-is one free-text field the user edits directly (not separate title/author
-inputs the server wraps in quotes), lazily seeded to `'"Заголовок"\n"Автор"'`
-the first time the stage loads for a project (`useTitleCardStage.js`'s
-`resetForProject`, only if the key is `undefined`, so a later intentional
-clear-to-`''` sticks). It's appended to the assembled prompt verbatim
-(`title_card._build_prompt`). `reference_image_paths` is up to 4 paths
-(relative to the project folder) picked from `scenes[].images[].file_path` or
-`reference_images`, persisted so the picks survive a reload.
+An **`EditorClip`** is `{clip_id, scene_index, video_id, trim_start_ms,
+trim_end_ms, speed}` — `video_id` must resolve inside
+`scenes[scene_index].videos[]`; `speed` is an ffmpeg `setpts` multiplier; video
+clips are always muted, the picked track being the only audio.
+`trim_end_ms: null` means "to the end of the source", falling back to that
+video's `duration_seconds` — **except when that duration is itself unknown** (an
+uploaded/imported clip), where the render leaves the end genuinely unbounded
+(ffmpeg runs to EOF) rather than collapsing the clip to zero length; the
+frontend, which can't probe the file, lays such a clip out with a fixed 5s
+stand-in (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) purely for display.
+
+`renders[]` is server-managed and append-only: `{render_id, file_path,
+created_at, duration_ms, clip_count, mureka_track_id}`. Output canvas is a fixed
+1920×1080 (or 1080×1920 if every clip's `aspect_ratio` is `9:16`); clips are
+scaled and letterboxed into it, never cropped. If the clips run **shorter** than
+the audio the last clip is frozen (ffmpeg `tpad`) to fill the remainder; if
+**longer**, the render is hard-capped at the audio's length (`-t`), silently
+truncating the tail. The UI shows a non-blocking duration-mismatch warning for
+both, computed client-side.
+
+**TitleCard**: `{text_block, reference_image_paths, variants, posters}` —
+`text_block` is one free-text field the user edits directly (not separate
+title/author inputs the server wraps in quotes), lazily seeded to
+`'"Заголовок"\n"Автор"'` the first time the stage loads **only if the key is
+`undefined`**, so a later intentional clear-to-`''` sticks. It's appended to the
+assembled prompt verbatim. `reference_image_paths` is up to 4 paths picked from
+`scenes[].images[].file_path` or `reference_images`, persisted so the picks
+survive a reload.
+
 **TitleCardVariant**: `{variant_id, file_path, rating, is_selected,
 generated_at, model, aspect_ratio, cost, text_block, base_prompt,
 reference_image_paths, source_variant_id?, marked_for_export?}` — same
-`rating`/`is_selected`/`model`/`aspect_ratio`/`cost` shape as `Image`
-(`file_path` under `titlecard/` instead of `images/`), plus a snapshot of
-the text/prompt/references that produced it. `variants` is append-only;
-deleting one removes it from this array and unlinks its file.
-`source_variant_id` is only present on a "remove background" result
-(`title_card.remove_background` — see the API table below): it points at the
-original variant's `variant_id`, and the original is left untouched —
-background removal always **appends** a new variant rather than replacing
-one. `marked_for_export` (bool, absent/`false` on older variants — no
-migration, an absent key just reads as unmarked) is set by the Export
-stage's own per-variant toggle (`ExportStage.jsx`/`useExportStage.js`'s
-`toggleTitleCardExport`, plain `updateProject` recompute like `rating`):
-unlike `is_selected` (single-pick "main" title card, used elsewhere e.g. the
-Poster constructor), several variants can be marked at once — the final
-export zip (`GET .../final-export` below) includes every marked variant, or
-falls back to the single `is_selected` one if none are marked.
+`rating`/`is_selected`/`model`/`aspect_ratio`/`cost` shape as `Image` (under
+`titlecard/`), plus a snapshot of the text/prompt/references that produced it.
+`variants` is append-only; deleting one unlinks its file. `source_variant_id`
+appears only on a "remove background" result and points at the original, which is
+left untouched. `marked_for_export` (absent reads as unmarked, no migration) is
+the Export stage's own per-variant toggle: unlike `is_selected` (a single "main"
+pick used e.g. by the Poster constructor), **several variants can be marked at
+once**, and the final-export zip includes every marked one, falling back to the
+`is_selected` variant when none are.
 
 **Poster**: `{poster_id, file_path, background_path, title_card_variant_id,
 logo_id, canvas_size{width,height}, layers{title_card[{id,x,y,scaleX,scaleY,rotation,crop,effects}],
 logo[{...}]|null, glass{x,y,width,height,scaleX,scaleY,rotation,cornerRadius,opacity,thickness}|null,
 text[{id,x,y,scaleX,scaleY,rotation,textType,text,fontFamily,fontSize,color,bgColor,effects}]},
-rating, is_selected, generated_at}` — the Poster
-constructor's output: `background_path` (a scene/reference image path,
-same shape as `TitleCard.reference_image_paths` entries) and
-`title_card_variant_id` (points into `variants[]`) are the two source
-layers, `logo_id` optionally points into the global `settings.logos[]`;
-`file_path` is the flattened PNG (composited client-side, see
-`architecture.md`'s "Poster constructor"), `layers` the per-layer
-drag/scale/rotate transform, kept so `PosterConstructor.jsx` can reopen and
-re-edit the exact same arrangement. `posters` is append-only like `variants`
-except re-saving with an existing `poster_id` updates that entry in place
-(new flattened PNG, same id/file path) instead of appending.
+rating, is_selected, generated_at}` — the Poster constructor's output.
+`background_path` (a scene/reference image path) and `title_card_variant_id`
+(into `variants[]`) are the two source layers; `logo_id` optionally points into
+the global `settings.logos[]`; `file_path` is the client-side flattened PNG, and
+`layers` the per-layer transform kept so the exact arrangement can be reopened.
+`posters` is append-only **except** that re-saving with an existing `poster_id`
+updates that entry in place (new PNG, same id and path).
 
-`title_card` and `logo` are **arrays**, not single objects — the same
-source image (the chosen title-card variant, or the chosen logo) can appear
-as several independent layers, each with its own transform/crop/effects,
-via `PosterConstructor.jsx`'s "Дублировать" (duplicate) button. `crop` is
-`{x,y,width,height}` in the source image's natural pixel space, or `null`
-for the full image — how a single title-card render (e.g. headline + author
-baked into one PNG) gets split into independently-movable pieces (crop one
-duplicate to the headline, another to the author line). Older saved posters
-stored a single transform object here instead of an array; the frontend
-wraps it into a one-item array on load (`normalizeLayers` in
-`PosterConstructor.jsx`), so both shapes still open correctly.
+`title_card` and `logo` are **arrays**, not single objects — the same source
+image can appear as several independent layers, each with its own
+transform/crop/effects. `crop` is `{x,y,width,height}` in the source image's
+natural pixel space, or `null` for the full image. Older saved posters stored a
+single transform object here; `normalizeLayers` in `lib/posterLayers.js` wraps it
+into a one-item array on load, so both shapes still open.
 
-Each layer's `effects` is opaque to the backend (stored and round-tripped
-as-is, no schema validation) — `PosterConstructor.jsx` currently writes
+Each layer's `effects` is **opaque to the backend** (stored and round-tripped
+as-is, no schema validation). The frontend writes
 `{glow{enabled,color,blur,distance,opacity}, clone{enabled,offsetX,offsetY,opacity,blur}, opacity}`,
-`glow` rendered client-side as a Konva shadow on the overlay's own alpha
-shape, `clone` an offset second copy of the same layer rendered behind the
-real one (a cheap fake-depth "double object" look; it renders with the same
-`glow` as the real layer, plus its own `opacity` and an optional `blur` -
-Konva filter, needs `.cache()` - that only ever applies to this back copy),
-and `opacity` applied directly to the image; all are baked into the
-flattened PNG at save time, same as position/scale/rotation/crop.
-`glow.opacity` is stored 0-5 (the constructor's intensity slider shows it as
-0-100%, i.e. `glow.opacity/5*100` - a single Konva shadow pass caps its
-visible strength once `shadowOpacity` reaches ~1, so values above the old
-1.0/100% ceiling render as several stacked shadow passes instead of one,
-see `glowPasses` in `PosterConstructor.jsx`). (An earlier `backdrop` effect
-— a feathered filled `Rect` behind the image — was dropped in favor of the
-plain `opacity` control; old saved posters with a `backdrop` key simply
-lose that effect on next load, no migration.)
+all baked into the flattened PNG at save time alongside
+position/scale/rotation/crop. `glow.opacity` is stored **0-5** while the slider
+shows 0-100%; see `architecture.md` for why values past 1.0 render as stacked
+shadow passes. An earlier `backdrop` effect was dropped in favor of plain
+`opacity` — old posters carrying that key simply lose the effect on load, no
+migration.
 
-Unlike `title_card`/`logo`, `glass` is not tied to a picked source image —
-it's a standalone decorative rounded-rect panel (a simulated "frosted glass"
-look), limited to one instance, and also opaque/unvalidated on the backend.
+`glass` is not tied to any source image — a standalone decorative rounded-rect
+panel, limited to one instance, also opaque/unvalidated on the backend.
 
-`text` is an array of freely-editable text layers (also opaque/unvalidated on
-the backend, added client-side after both title-card variants and posters
-already existed, so older saved posters simply have no `text` key —
-`normalizeTextLayers` in `PosterConstructor.jsx` treats a missing/non-array
-value as `[]`). `textType` is `'badge'` (a black rounded-pill background with
-white text, defaults to the author line) or `'halo'` (bare text with a
-drop-shadow "halo" effect reusing the `effects.glow` shape below, defaults to
-the title line) — both default from `title_card.text_block`'s two quoted
-lines (title / author), parsed by `parseTextBlock`. `fontFamily` is one of
-`PosterConstructor.jsx`'s `FONT_OPTIONS` (Forum, Montserrat, PT Sans, Lato,
-Oswald, Roboto Condensed, Rubik, Playfair Display — all verified to include
-cyrillic glyphs except Lato, kept only for latin text since poster text is
-typically Russian). `fontSize`/`color` and, for `badge`, `bgColor` are plain
-per-layer style fields; `align` is `'left'\|'center'\|'right'` (defaults to
-`'left'` on any older layer missing the key); `effects` reuses the exact
-same `{glow{...}, clone{...}, opacity}` shape as `title_card`/`logo` layers.
+`text` is an array of freely-editable text layers, added client-side after
+variants and posters already existed, so **older posters have no `text` key at
+all** (`normalizeTextLayers` treats a missing/non-array value as `[]`).
+`textType` is `'badge'` or `'halo'`, both defaulting from
+`title_card.text_block`'s two quoted lines (`parseTextBlock`). `fontFamily` is
+one of `lib/posterLayers.js`'s `FONT_OPTIONS`; `fontSize`/`color` and, for
+`badge`, `bgColor` are plain style fields; `align` is `'left'|'center'|'right'`
+(defaults `'left'` on older layers); `effects` reuses the shape above.
 
-**Mureka**: `{style_input, lyrics_input, reference_audio[], reference_sources[], tracks[]}` — the
-Mureka stage's own state. `style_input`/`lyrics_input` are seeded lazily
-(only if still `undefined`) from the project's `style`/`lyrics` the first
-time the stage loads (`useMurekaStage.js`'s `resetForProject`), then kept in
-sync with `style`/`lyrics` on every subsequent Suno-stage regenerate too
-(`useSunoStage.js`'s `generateSuno` overwrites both alongside `project.style`/
-`project.lyrics`) - otherwise a later regenerate on the Suno stage would go
-unnoticed here. Editing them directly on the Mureka stage (`setStyleInput`/
-`setLyricsInput`) still works freely in between regenerates - this is
-literally what gets sent to Mureka's `song/generate`, so it doubles as the
-"what goes to the model" preview the stage shows. `reference_audio` is
-`[{id, mureka_file_id, file_path, filename, uploaded_at, source_id?, start_ms?,
-end_ms?}]` — `file_path` a local copy under `music/references/` (already
-trimmed to a valid window, mp3), `mureka_file_id` the id Mureka's
-`files/upload` returned for it (usable as `reference_id` on a generate call).
-An entry produced by the trimmer (below) also carries `source_id` (which
-`reference_sources` entry it was cut from) and the `start_ms`/`end_ms` window
-used — a plain direct upload (`uploadReferenceAudio`, no trim step) leaves
-all three `undefined`. `reference_sources` is
-`[{id, file_path, filename, uploaded_at}]` — the **untrimmed** file a user
-just uploaded (`music/reference-sources/`, any decodable audio format),
-staged so `ReferenceAudioTrimmer.jsx` can let them pick a ≥30s window before
-anything reaches Mureka (which hard-rejects reference audio under 30s). A
-source is **never** deleted by a successful (or cancelled) trim — it stays in
-this array so the same upload can be trimmed into another window later
-(`MurekaStage.jsx`'s reference-menu list, a "✂ trim" action per source); only
-an explicit `DELETE .../reference-sources/{id}` removes it, so this array
-grows with every distinct upload rather than staying usually-empty. `tracks`
-is append-only, one entry per generated song:
+**Mureka**: `{style_input, lyrics_input, reference_audio[], reference_sources[],
+tracks[]}`. `style_input`/`lyrics_input` are seeded lazily (only if still
+`undefined`) from the project's `style`/`lyrics`, **and then re-synced on every
+subsequent Suno-stage regenerate** (`useSunoStage.js`'s `generateSuno` overwrites
+both) — otherwise a later regenerate would go unnoticed here. Editing them
+directly on the Mureka stage still works freely in between; this is literally
+what gets sent to `song/generate`, so it doubles as the "what goes to the model"
+preview.
+
+`reference_audio` is `[{id, mureka_file_id, file_path, filename, uploaded_at,
+source_id?, start_ms?, end_ms?}]` — `file_path` a local copy under
+`music/references/` (already trimmed, mp3), `mureka_file_id` the id Mureka's
+`files/upload` returned. An entry produced by the trimmer also carries
+`source_id` and the `start_ms`/`end_ms` window used; a plain direct upload leaves
+all three `undefined`.
+
+`reference_sources` is `[{id, file_path, filename, uploaded_at}]` — the
+**untrimmed** upload (`music/reference-sources/`, any decodable format), staged
+so a ≥30s window can be picked before anything reaches Mureka (which hard-rejects
+reference audio under 30s). **A source is never deleted by a successful or
+cancelled trim** — it stays so the same upload can be trimmed into another window
+later; only an explicit `DELETE .../reference-sources/{id}` removes it, so this
+array grows with every distinct upload.
 
 **MurekaTrack**: `{track_id, task_id, choice_index, file_path, duration_ms,
 model, style, lyrics, params{n, gender, reference_id}, rating, is_selected,
-tag_ids[], generated_at, raw, reference_used?, extended_from_track_id?,
-stems?, descriptions?, transcriptions?, lyrics_videos?}` — `file_path`
-under `music/` (always `.mp3`, downloaded immediately since Mureka's own
-`url` expires after 30 days). `style`/`lyrics`/`params` are a snapshot of
-exactly what was sent for this track (a "regenerate 3 tracks" call can
-produce several `MurekaTrack`s from one task, one per `choices[]` entry —
-`choice_index` is that entry's index; for a track produced by "Продлить"
-(extend), `params` is `{extend_at, extend_type}` instead and
-`extended_from_track_id` points back at the source track's `track_id`).
-`reference_used` is `{source_id, filename, start_ms, end_ms} | null` — set on
-a `song/generate` call (never on extend) when `params.reference_id` resolved
-against `reference_audio` at generation time, `null` when no reference was
-used. It's a snapshot taken at generation time, not a live reference, so it
-still shows which clip/window produced this track even if that
-`reference_audio` entry is later deleted (`MurekaTrackDetailModal.jsx`).
-`request` is `{url, body} | null` — the exact HTTP request `providers/mureka.py`
-sent to Mureka for this track (`song/generate` or `song/extend`), kept
-alongside `raw` so the generation parameters can be double-checked from the
-UI (`MurekaStage.jsx`'s inline "Детали" panel and `MurekaTrackDetailModal.jsx`
-both show it collapsed, next to "Сырые данные Mureka"). Only present on
-tracks generated after this field was added — older tracks have no `request`
-key at all, not a `null`.
-`rating` (0-5) and `is_selected` mirror `Image`'s shape, but **`is_selected`
-is set only by an explicit user action** (`PATCH /api/projects/{id}` with a
-recomputed `tracks` array — see the API table below) — unlike `Image`, it is
-never auto-promoted from the highest rating; this stage treats "sounds good"
-(rating) and "this is the one I'll use" (`is_selected`) as independent
-judgments. `tag_ids` references `settings.music_tags` entries (see below).
-`tracks[]` itself always stays in generation order (oldest first, new ones
-appended) - `MurekaStage.jsx` renders it through a display-only sort toggle
-(newest first / oldest first / by rating, cycled by one button, default
-newest) that never touches the stored array.
-`raw` is the untouched `choices[]` entry Mureka returned
-(`url`/`flac_url`/`wav_url`/`id`/`lyrics_sections` — the latter has per-line/
-per-word timing (ms), used by `KaraokeLyrics.jsx`/`MurekaTrackDetailModal.jsx`/
-`lib/lyricsTiming.js` while the track plays; confirmed via Mureka's own
-OpenAPI schema that `Song` has no image/cover field at all) — kept for
-reference even though only the plain MP3 is downloaded to disk; `raw.id` is
-the Mureka `song_id` "Продлить" needs. **Three data-quality quirks confirmed
-against real generated tracks, not hypothetical** — `lib/lyricsTiming.js`
-and its consumers (`KaraokeLyrics.jsx`, `MurekaTrackDetailModal.jsx`) are
-built around all three: (1) `lyrics_sections` timing can stop well before
-the track's actual `duration_ms` (one real response timed lines only up to
-~43% of the track, with no further sections after — not an `extend`,
-nothing truncated on our end); (2) a line's `words[]` array has been seen
-offset by one line from that line's own `text` (each line's words actually
-spell out the *previous* line's text), so `words[].text` is never rendered,
-only `.start`/`.end` would be trustworthy; (3) a leading run of sections can
-carry **no** `start`/`end` at all — neither on the section nor on any of its
-lines (one real response: an `intro` section and the `verse` right after it,
-both fully untimed, together holding the track's actual opening vocal hook)
-— `flattenLyricsLines` still emits these as rows (`static: true`, `start`/
-`end` both `null`) instead of dropping them, so the intro reads as intro
-text instead of silently vanishing from the karaoke view. **Checked against
-Mureka's own published OpenAPI schema at platform.mureka.ai/docs (2026-08):
-neither `POST /v1/song/generate` nor `GET /v1/song/query/{task_id}` expose
-any parameter that affects how much of a track gets timed — quirks (1) and
-(3) are inherent to what Mureka's alignment step returns, not something a
-request parameter on our side controls.** One further wrinkle spotted on the
-same real response, documented but *not* corrected in code because there's
-no way to derive the true offset from the API response alone: once a
-section's lines *do* have timing, comparing those timestamps against the
-track actually playing (by ear) suggested they may be measured from where
-Mureka's alignment first locked on, not from the track's true start — i.e.
-the untimed leading content in (3) can make every later timestamp read
-several seconds to tens of seconds earlier than reality. Treat any
-`lyrics_sections` timestamp as *approximate*, not frame-accurate.
-`stems` (only present once "Разделить на дорожки" has run at least once) is
-`[{id, file_path, model, expires_at, created_at}]` — `file_path` a downloaded
-copy of the stem-separation zip (`music/{stem_id}.zip`; the CDN `zip_url`
-Mureka returns expires, same convention as everything else in this file),
-`model` one of `audio-separation-1\|2\|3` (stem count/format, see
-`providers/mureka.py`).
+tag_ids[], generated_at, raw, request?, reference_used?, extended_from_track_id?,
+stems?, descriptions?, transcriptions?, lyrics_videos?}` — `file_path` under
+`music/` (always `.mp3`, downloaded immediately since Mureka's own `url` expires
+after 30 days).
 
-`descriptions`/`transcriptions`/`lyrics_videos` (each absent until its
-button has been pressed at least once) are append-only arrays, one entry per
-call, mirroring `stems[]`'s "keep history, don't replace" shape — repeat
-calls add another entry rather than overwriting the previous result:
-`descriptions` is `[{id, instrument[], genres[], tags[], description,
-created_at}]` (Mureka `song/describe` - genre/instrument/mood, no file
-involved); `transcriptions` is `[{id, file_path, expires_at, created_at}]`
-(Mureka `song/transcribe` - `file_path` a downloaded copy of the
-`.musicxml`+`.pdf` zip under `music/{id}.zip`, same expiring-CDN-link
-convention as `stems`); `lyrics_videos` is `[{id, file_path, title,
-aspect_ratio, created_at}]` (Mureka `lyrics-video/generate` - `file_path` a
-downloaded mp4 under `music/{id}.mp4`; the call always sends the whole track
-as `selection_start: 0` / `selection_end: <track duration_ms>` since Mureka
-requires either that pair or a `lyrics_start_row`/`lyrics_end_row` pair and
-there's no UI for picking a partial range). `transcribe`/`lyrics-video` both key
-off the track's Mureka `song_id` (`raw.id`) rather than re-uploading audio,
-same id `/extend` uses, so they share `/extend`'s "no `song_id`" `422`
-failure mode for a track past Mureka's ~1-month retention window; `describe`
-has no such constraint since it uploads the track's own `.mp3` directly
-(same base64-data-URI technique and 10MB cap as `/stem`). None of the three
-has a `pricing.py` catalog row (Mureka doesn't report a per-call cost for
-any of them) - same "cost: unknown" convention as the rest of this file.
+- `style`/`lyrics`/`params` snapshot exactly what was sent. One task can produce
+  several tracks (`choice_index` is the `choices[]` index). For a track produced
+  by "Продлить" (extend), `params` is `{extend_at, extend_type}` instead and
+  `extended_from_track_id` points back at the source track.
+- `reference_used` is `{source_id, filename, start_ms, end_ms} | null` — set on
+  generate (never extend) when `params.reference_id` resolved against
+  `reference_audio`. It's a snapshot, not a live reference, so it still shows
+  which clip/window produced the track after that entry is deleted.
+- `request` is `{url, body} | null`, the exact HTTP request sent to Mureka, kept
+  alongside `raw` so generation parameters can be double-checked from the UI.
+  Tracks predating this field have **no `request` key at all**, not a `null`.
+- `rating` (0-5) and `is_selected` mirror `Image`, but **`is_selected` is only
+  ever set by explicit user action** — never auto-promoted from the highest
+  rating, unlike `Image`. `tag_ids` references `settings.music_tags`.
+- `tracks[]` always stays in generation order (oldest first); `MurekaStage.jsx`
+  applies a display-only sort toggle that never touches the stored array.
 
-`karaoke_sync` (absent until the user taps or marks anything in
-`MurekaTrackDetailModal.jsx`) is `{anchors: {[rowIndex]: userMs}, tempo_marks:
-[{id, time_ms, direction}]}` — the manual correction for the timestamp-drift
-quirk described above, entirely client-derived and never touching `raw`.
-`anchors` keys are indices into that track's `lib/lyricsTiming.js`
-`flattenLyricsLines(raw)` output (stable as long as `raw` itself doesn't
-change); `applyManualAnchors(rows, anchors)` uses them as pinned control
-points and linearly rescales every other line's original timestamp between
-the anchors bracketing it (falling back to interpolating by row position
-when a line - or its neighbouring anchor - has no original timestamp at
-all, e.g. an untimed leading intro), so tapping just the start of each
-verse/chorus is enough to correct the whole track without tapping every
-line. This corrected timeline, not the raw one, drives the "current line"
-highlight in `MurekaTrackDetailModal.jsx`. `tempo_marks` (`direction`:
-`'faster'\|'slower'`) is unrelated bookkeeping — user-placed markers for
-where the track's tempo audibly changes, set via the ↑/↓ hotkeys while the
-modal is open, shown inline in the timeline but never affecting line timing.
-Persisted through the same generic whole-project `PATCH /api/projects/{id}`
-path as rating/tag edits (`useMurekaStage.js`'s `setKaraokeSync` mirrors
-`rateTrack`/`toggleTrackTag`) — no dedicated backend route.
+`raw` is the untouched `choices[]` entry (`url`/`flac_url`/`wav_url`/`id`/
+`lyrics_sections`); `raw.id` is the Mureka `song_id` that extend/transcribe/
+lyrics-video key off. `lyrics_sections` carries per-line/per-word timing (ms) and
+drives the karaoke views via `lib/lyricsTiming.js`. **Three data-quality quirks,
+confirmed against real tracks, that `lib/lyricsTiming.js` and its consumers are
+built around:**
+
+1. Timing can stop well before the track's actual `duration_ms` (one response
+   timed lines only to ~43% of the track, with nothing after).
+2. A line's `words[]` array has been seen offset by one line (each line's words
+   spell out the *previous* line's text), so `words[].text` is never rendered —
+   only `.start`/`.end` would be trustworthy.
+3. A leading run of sections can carry **no** `start`/`end` at all, neither on
+   the section nor its lines — one response had an untimed `intro` and `verse`
+   holding the track's actual opening hook. `flattenLyricsLines` still emits
+   these as rows (`static: true`, both timestamps `null`) instead of dropping
+   them, so the intro reads as intro text rather than vanishing.
+
+Neither `song/generate` nor `song/query` exposes any parameter affecting how much
+gets timed — quirks 1 and 3 are inherent to Mureka's alignment step. A further
+wrinkle is documented but **not** corrected in code, since the true offset can't
+be derived from the response: once lines do have timing, comparing by ear
+suggests the timestamps may be measured from where alignment first locked on
+rather than the track's true start, so untimed leading content can make every
+later timestamp read seconds-to-tens-of-seconds early. Treat any
+`lyrics_sections` timestamp as **approximate**, not frame-accurate.
+
+`karaoke_sync` (absent until the user taps or marks anything) is
+`{anchors: {[rowIndex]: userMs}, tempo_marks: [{id, time_ms, direction}]}` — the
+manual correction for that drift, entirely client-derived and never touching
+`raw`. `anchors` keys are indices into that track's `flattenLyricsLines(raw)`
+output (stable as long as `raw` doesn't change); `applyManualAnchors` uses them
+as pinned control points and linearly rescales every other line's timestamp
+between the anchors bracketing it (falling back to interpolating by row position
+when a line or its neighbouring anchor has no original timestamp), so tapping the
+start of each verse/chorus corrects the whole track. This corrected timeline, not
+the raw one, drives the current-line highlight. `tempo_marks` (`direction`:
+`'faster'|'slower'`) is unrelated bookkeeping — user-placed markers for audible
+tempo changes, shown inline but never affecting line timing. Persisted through
+the same generic whole-project `PATCH` as rating/tag edits, no dedicated route.
+
+`stems` (present once "Разделить на дорожки" has run) is `[{id, file_path, model,
+expires_at, created_at}]` — `file_path` a downloaded copy of the separation zip
+(`music/{stem_id}.zip`; Mureka's CDN link expires), `model` one of
+`audio-separation-1|2|3`.
+
+`descriptions`/`transcriptions`/`lyrics_videos` (each absent until its button has
+been pressed) are append-only, one entry per call — repeat calls **add** an entry
+rather than overwriting:
+
+- `descriptions`: `[{id, instrument[], genres[], tags[], description,
+  created_at}]` (`song/describe`, no file involved).
+- `transcriptions`: `[{id, file_path, expires_at, created_at}]`
+  (`song/transcribe` — `file_path` a downloaded copy of the `.musicxml`+`.pdf`
+  zip under `music/{id}.zip`).
+- `lyrics_videos`: `[{id, file_path, title, aspect_ratio, created_at}]`
+  (`lyrics-video/generate` — mp4 under `music/{id}.mp4`). The call always sends
+  the whole track as `selection_start: 0` / `selection_end: duration_ms`, since
+  Mureka requires either that pair or a row-range pair and there's no UI for a
+  partial range.
+
+`transcribe`/`lyrics-video` key off `raw.id` rather than re-uploading audio, so
+they share `/extend`'s "no `song_id`" `422` failure mode for a track past
+Mureka's ~1-month retention window; `describe` has no such constraint since it
+uploads the `.mp3` directly (base64 data URI, 10MB cap, same as `/stem`). None of
+the three has a `pricing.py` row — same "cost: unknown" convention as the rest of
+this file.
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
-predating the AI-wish library rework. The first time such a project loads
-through any route (`routers/projects.py::migrate_legacy_project`), its
-`skill_prompt` is reset to the default skill text, `refinement_comments` is
-cleared, and `active_wish_ids` is set to `[]` — persisted immediately, so
-this only ever fires once per project.
+predating the AI-wish library rework. The first time such a project loads through
+any route (`routers/projects.py::migrate_legacy_project`), its `skill_prompt` is
+reset to the default skill text, `refinement_comments` cleared, and
+`active_wish_ids` set to `[]` — persisted immediately, so it only fires once.
 
 ## Usage ledger (`app_data/usage/YYYY-MM.jsonl`)
 
 One JSON object per line, append-only, one file per calendar month. Full
-field-by-field detail, cost-resolution rules, and how to instrument a new
-call site are in [usage-tracking.md](usage-tracking.md); summary:
+field-by-field detail, cost-resolution rules, and how to instrument a new call
+site are in [usage-tracking.md](usage-tracking.md); summary:
 
 `{id, ts, task, project_id, provider, model_id, model, status, duration_ms, units{kind,input_tokens,output_tokens,reasoning_tokens,cached_input_tokens,total_tokens,images,compute_seconds}, cost{amount,currency,source,pricing_version,saved_amount?}, prompt_preview, response_preview, prompt_chars, response_chars, error, meta}`
 
-`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image|title_card|title_card_bg_remove|translate`.
-`cost.amount` is `null` (never `0`) when the price or usage units needed to
-compute it are unknown; `cost.source` is `provider|catalog|free|unknown`. A
-`google_free` call always resolves to `amount: 0`/`source: 'free'` (it's a
-free-tier API key, not a discount) — `cost.saved_amount` carries what the
-same call would have cost on the paid `google` catalog price, so it's visible
-without polluting any spend total. See [usage-tracking.md](usage-tracking.md).
+`task` is one of `suno_generate|wish_title|scene_storyboard|scene_image|scene_video|title_card|title_card_bg_remove|translate`.
+`cost.amount` is `null` (never `0`) when the price or units needed to compute it
+are unknown; `cost.source` is `provider|catalog|free|unknown`. A `google_free`
+call always resolves to `amount: 0`/`source: 'free'` (a free-tier key, not a
+discount), with `cost.saved_amount` carrying what it would have cost at the paid
+rate so that figure is visible without polluting any spend total.
 
 ## Settings (`settings.json`)
 
@@ -446,224 +348,112 @@ request_timeout_seconds, hide_motion_prompt, title_card_base_prompt, title_card_
 title_card_wish_library[], background_remover_method, background_remover_local_params{bg,threshold},
 background_remover_fal_params{model}, background_remover_params{background_type,format,threshold,reverse},
 outpaint_quality_mode, logos[], poster_templates[], music_tags[],
-suno_base_prompt_user_presets[], mureka_base_prompt_user_presets[]}`.
-The Title Card stage's "remove background" button offers 3 interchangeable methods (see `architecture.md`),
-each with its own param group here (Settings → Providers): `background_remover_method` is which one the
-button defaults to when no `method` is passed per-call (`'local'\|'fal'\|'replicate'`, default `'replicate'`);
-`background_remover_local_params` (`bg`: `'black'\|'white'`, `threshold`: 0-255) feeds the free pixel-threshold
-cutout; `background_remover_fal_params.model` picks between FAL's `fal-ai/bria/background/remove` and
-`fal-ai/imageutils/rembg`; `background_remover_params` feeds Replicate's `851-labs/background-remover`'s input
-directly (defaults match the model's own schema defaults). `outpaint_quality_mode`
-(`'fast'\|'quality'`, default `'fast'`) is the default for the Images stage's crop/outpaint
-editor's fast-vs-quality toggle (see `architecture.md`'s "Crop/outpaint editor" section) —
-overridable per-save in the editor itself, same shape as `background_remover_method` above.
-`logos` is `[{id, name, file_path}]` — the global,
-cross-project logo library for the Poster constructor (Settings → Logos;
-`POST/DELETE /api/settings/logos[/{id}]`, files under `app_data/logos/`).
-`poster_templates` is `[{id, name, layers{logo_id, logo[], glass, text[]}, created_at}]`
-— reusable poster layouts saved from the constructor ("Сохранить как
-шаблон"/"Save as template"), global like `logos` but plain-array CRUD'd
-through the regular partial-merge `PUT` (no dedicated endpoint, same
-pattern as `title_card_base_prompt_presets`). `layers` deliberately omits
-`background_path`/`title_card_variant_id`/`title_card` layers - those are
-specific to the poem the poster was originally built for; applying a
-template only restores the logo, glass panel, and text layers (with fresh
-ids) onto whatever background/title-card is already picked. `google_free` is a second Google Gemini API key (see `architecture.md`'s
-provider-seams section) - same models/calls as `google`, but always priced at `$0`/`source: 'free'`
-in the usage ledger (see [usage-tracking.md](usage-tracking.md)) since it's a free-tier key, not a
-discount. Reads and
-writes merge over `DEFAULT_SETTINGS` in
-[`routers/settings.py`](../backend/app/routers/settings.py) (seed text for
-`suno_base_prompt`/`suno_reference_examples` comes from
-[`providers/suno_prompt_defaults.py`](../backend/app/providers/suno_prompt_defaults.py)),
-so adding a key there is enough — existing files keep loading. `PUT` is a
-partial merge server-side, so the frontend can persist e.g. just
-`{suno_wish_library}` without resending the whole settings object.
+suno_base_prompt_user_presets[], mureka_base_prompt_user_presets[]}`
 
-- `text_models` / `simple_models` / `image_models` / `image_models_simple` —
-  same shape: `favorites` is `{provider, id, label}[]`; `default` is a
-  composite `"{provider}:{id}"` string (e.g. `"google:gemini-2.5-flash"`).
-  `text_models`/`simple_models` only accept `provider`
-  `google|google_free|openrouter|deepseek|replicate|fal`; `image_models`/`image_models_simple`
-  additionally accept `krea` (Krea AI is image/video-only, so it's excluded
-  from the text-model provider set — see `_IMAGE_MODEL_PROVIDERS` vs
-  `_MODEL_PROVIDERS` in `routers/settings.py`). `text_models.default` is
-  what `suno.generate`/`scenes.generate` parse to decide whether to call a
-  real chat API (see below); `simple_models.default` is used for lightweight
-  tasks — in one call, tidying up the user's free-text "AI-wish" and
-  generating its emoji-prefixed title when it's saved to `suno_wish_library`
-  ([`providers/text_models.py`](../backend/app/providers/text_models.py)
-  `clean_wish_and_title`, wrapped by
-  [`providers/wish_library.py`](../backend/app/providers/wish_library.py)
-  `add_or_get_wish`) — there is deliberately **no** per-call model picker for
-  this on the Suno stage, only the one global default in Settings;
-  `image_models`/`image_models_simple` are a quality/cheap tier pair — both
-  populate their own favorites panel in Settings
-  ([`providers/image_models.py`](../backend/app/providers/image_models.py))
-  and the per-generation `ModelPicker` in `ImagesStage.jsx` (a tier toggle
-  picks which list feeds it), whose composite is what `providers/images.py`
-  actually dispatches to a real provider call (see `architecture.md`).
-  `video_models` is a single favorites list (no cheap/quality tier split,
-  unlike the image pair — not asked for) accepting `provider ∈
-  google\|google_free\|openrouter` only (`_VIDEO_MODEL_PROVIDERS` in
-  `routers/settings.py` — the only two providers confirmed to do
-  image-to-video generation for this app, see `architecture.md`), populated
-  via [`providers/video_models.py`](../backend/app/providers/video_models.py)
-  and the Video stage's own `ModelPicker`.
-- `video_wish_library` — global, reusable animation/video-prompt wish
-  "cards", same `{id, title, text, created_at, use_count?}` shape and
-  `clean_wish_and_title` flow as `scene_wish_library` above, but its own
-  separate list (`wish_library.add_or_get_wish`'s
-  `library_key='video_wish_library'`) — animation wishes ("плавное движение
-  камеры", "без резких склеек") are a different domain from scene/imagery
-  wishes. Each project toggles a subset on via its own
-  `active_video_wish_ids` (see above); resolved wish texts are folded into
-  the scene's `motion_prompt` as an emphasized numbered block
-  (`video.build_prompt`, same "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" convention as
-  `scenes.py`'s wishes block) right before a generation call.
-- `suno_base_prompt` — the general "how to adapt for this music service"
-  instructions, sent on every real (non-stub) `suno/generate` call.
-  `GET /api/settings/suno-prompt-presets` (not part of `settings.json` — a
-  read-only, hardcoded list combining `suno_prompt_defaults.SUNO_BASE_PROMPT_PRESETS`
-  and `mureka_prompt_defaults.MUREKA_BASE_PROMPT_PRESETS`) offers alternate
-  full-text variants of this prompt to load into the field from Settings, for
-  A/B testing. Each entry is `{id, service, name, description, prompt}` —
-  `service` groups them in the UI ("Suno": vocal-first vs. canonical
-  genre-first field ordering; "Mureka": vocal cues only in the Style-block vs.
-  also as in-text parenthetical directives like `(whispering)`). This
-  read-only list is merged with the **user-managed** ones below before being
-  served.
-- `suno_base_prompt_user_presets` / `mureka_base_prompt_user_presets` — unlike
-  the built-in presets above, these are freely added/renamed/deleted from
-  Settings → "Музыкальные промпты" (`BasePromptPresetEditor.jsx`, one instance
-  per list), `{id, name, prompt}[]`, plain-array CRUD'd through the regular
-  partial-merge `PUT` (no dedicated endpoint, same pattern as
-  `title_card_base_prompt_presets`). `GET /api/settings/suno-prompt-presets`
-  converts each to `{id, service: 'Suno'|'Mureka', name, description: '', prompt}`
-  and appends them to the built-in list, so they show up in the same
-  `groupPresetsByService` picker on the Suno stage without any separate UI.
-- `suno_reference_examples` — curated example style+lyrics blocks, sent
+Reads and writes merge over `DEFAULT_SETTINGS` in
+[`routers/settings.py`](../backend/app/routers/settings.py), so adding a key
+there is enough — existing files keep loading. **`PUT` is a partial merge
+server-side**, so the frontend can persist just `{suno_wish_library}` without
+resending everything.
+
+- **Model favorites lists** — `text_models` / `simple_models` / `image_models` /
+  `image_models_simple` / `video_models` all share the shape
+  `{favorites: {provider, id, label}[], default: "{provider}:{id}"}`. Accepted
+  providers differ (`_MODEL_PROVIDERS` / `_IMAGE_MODEL_PROVIDERS` /
+  `_VIDEO_MODEL_PROVIDERS` in `routers/settings.py`): text adds nothing beyond
+  `google|google_free|openrouter|deepseek|replicate|fal`; image additionally
+  accepts `krea`; video accepts only `google|google_free|openrouter`.
+  `text_models.default` is what `suno.generate`/`scenes.generate` parse;
+  `simple_models.default` drives `clean_wish_and_title` (no per-call picker
+  anywhere); `image_models`/`image_models_simple` are a quality/cheap tier pair
+  feeding the Images stage's `ModelPicker` via a tier toggle; `video_models` has
+  no tier split.
+- **Wish libraries** — `suno_wish_library`, `scene_wish_library`,
+  `video_wish_library`, `title_card_wish_library` are four **separate** global
+  lists of the same shape `{id, title, text, created_at, use_count?}`, all built
+  by `wish_library.add_or_get_wish` parameterized by `library_key`. Each project
+  toggles a subset of each on via its own `active_*_wish_ids`, so the same card
+  can be active for one song and inactive for another. `text` and `title` are
+  both produced by one `clean_wish_and_title` call on save — `text` is the
+  **tidied** wish, not the raw input, and `title` a short emoji-prefixed label;
+  with no model configured, `text` is kept as-is and `title` falls back to a
+  local truncate. `use_count` is bumped client-side on every toggle-on and drives
+  chip order (`lib/wishes.js`'s `sortByUseCount`; missing/`0` sorts last).
+  Deleting a card is the same partial-`PUT`. Legacy plain-string entries are
+  normalized on `GET /api/settings` (not rewritten to disk until the next save).
+  `title_card_wish_library` is the one library with no Settings-screen UI — it's
+  managed inline on the Title Card stage only.
+- **Base prompts** — `suno_base_prompt`, `scene_base_prompt_narrative`/
+  `_abstract`, `title_card_base_prompt` are each seeded from the matching
+  `providers/*_prompt_defaults.py` and sent on every real (non-stub) call. See
+  `architecture.md` for the layering, and for why editing a defaults constant
+  does not affect an install that has already written settings once.
+- **Prompt presets** — `GET /api/settings/suno-prompt-presets` serves a
+  **read-only**, hardcoded list (`SUNO_BASE_PROMPT_PRESETS` +
+  `MUREKA_BASE_PROMPT_PRESETS`, not part of `settings.json`) merged with the
+  user-managed `suno_base_prompt_user_presets`/`mureka_base_prompt_user_presets`
+  (`{id, name, prompt}[]`, converted to `{id, service, name, description: '',
+  prompt}` on the way out) so both appear in the same picker.
+  `title_card_base_prompt_presets` is likewise user-managed (`{id, name,
+  prompt}[]`, seeded with 3 built-ins). All of these are plain client-side array
+  CRUD through the partial-merge `PUT` — no dedicated endpoints, unlike the wish
+  libraries, whose saves involve an LLM call.
+- **`suno_reference_examples`** — curated example style+lyrics blocks sent
   alongside the base prompt as "reference, don't copy verbatim" material.
-- `suno_wish_library` — global, reusable wish "cards", each
-  `{id, title, text, created_at, use_count?}`. `use_count` is bumped by
-  `useSettings.js`'s `bumpWishUse` every time the wish is toggled *on* on the
-  Suno stage (client-side, via the regular partial `PUT /api/settings` — no
-  dedicated route) and drives the chip list's display order
-  (`lib/wishes.js`'s `sortByUseCount`, most-used first; missing/`0` sorts
-  last). A chip's "×" (`removeWishSnippet`) deletes the wish outright, same
-  partial-`PUT` mechanism. `text` and `title` are both produced in a
-  single call to `clean_wish_and_title` on save — `text` is the tidied-up
-  wish (not the user's raw input verbatim), `title` a short auto-generated
-  label prefixed with one emoji (e.g. `"🎷 Больше саксофона"`) — real LLM
-  call if `simple_models.default` points at Google/OpenRouter/DeepSeek with a
-  key configured, otherwise `text` is kept as-is and `title` falls back to a
-  local truncate. Legacy plain-string entries are normalized to this shape on
-  `GET /api/settings` (not rewritten to disk until the next save). Each
-  project independently toggles a subset of these cards on via its own
-  `active_wish_ids` (see above) — the same card can be active for one song
-  and inactive for another.
-- `scene_base_prompt_narrative` / `scene_base_prompt_abstract` — the general
-  "how to turn this text into a scene image prompt" instructions, one per
-  `scene_mode`, sent on every real (non-stub) `scenes/generate` call (see
-  "The scene prompt" in `architecture.md`). Seeded from
-  [`providers/scenes_prompt_defaults.py`](../backend/app/providers/scenes_prompt_defaults.py).
-  No presets-to-load endpoint like Suno's — each is directly edited in
-  Settings or in the compact panel on the Scenes stage itself.
-- `scene_wish_library` — global, reusable scene/imagery wish "cards", same
-  `{id, title, text, created_at, use_count?}` shape (incl. the same
-  `use_count`/sort-by-popularity/delete-via-partial-`PUT` behaviour as
-  `suno_wish_library` above, via `bumpSceneWishUse`/`removeSceneWishSnippet`)
-  and `clean_wish_and_title` flow as `suno_wish_library`, but a **separate**
-  list (`wish_library.add_or_get_wish`'s `library_key` parameter picks which
-  one) — scene wishes ("больше драмы", "зимняя атмосфера") are a different
-  domain from music/lyrics wishes. Each project toggles a subset on via its
-  own `active_scene_wish_ids` (see above).
-- `request_timeout_seconds` — how long (seconds) a single outbound call to a
-  text-model provider may run before being treated as a timeout; read by
-  `suno.py`'s `_generate_via_*`, `scenes.py`'s `_generate_via_*` and
-  `text_models.py`'s `_complete_*`. Defaults to `60` when unset. Edited from
-  Settings → General.
-- `hide_motion_prompt` — UI-only preference shared by the Scenes and Images
-  stages: hides every `motion_prompt` field/label (and its translate button)
-  when set, leaving only the static image prompt. Doesn't touch any scene's
-  actual `motion_prompt` value — purely what's rendered. Toggled from a chip
-  on either stage (`ScenesStage.jsx`/`ImagesStage.jsx`), autosaves immediately
-  via `useSettings.js`'s `setHideMotionPrompt` (same one-boolean-flip pattern
-  as everything else that isn't a debounced text field).
-- `title_card_base_prompt` — the general "render this text in the reference
-  images' style" instructions for the Title Card stage, sent ahead of the
-  active-wishes block and the stage's free-text `text_block` on every
-  `title-card/generate` call. Seeded from
-  [`providers/title_card_prompt_defaults.py`](../backend/app/providers/title_card_prompt_defaults.py),
-  editable in the stage's own collapsible panel (autosaves like
-  `updateSunoBasePrompt`).
-- `title_card_base_prompt_presets` — unlike Suno's read-only
-  `suno-prompt-presets` endpoint, this is a **user-managed** list of named
-  variants of the base prompt, `{id, name, prompt}[]`, seeded by default with
-  3 built-ins from `title_card_prompt_defaults.TITLE_CARD_BASE_PROMPT_PRESETS`
-  (2 user-supplied "black background lettering" style prompts + this app's own
-  default). Saved/loaded/deleted entirely client-side (`useSettings.js`'s
-  `saveTitleCardBasePromptPreset` / `loadTitleCardBasePromptPreset` /
-  `deleteTitleCardBasePromptPreset`) against the regular partial-merge `PUT
-  /api/settings` — no dedicated endpoints, unlike
-  `suno_wish_library`/`scene_wish_library`/`title_card_wish_library` which get
-  their own routes because saving those also involves an LLM clean+title call.
-- `title_card_wish_library` — global, reusable poster-generation wish "cards",
-  same `{id, title, text, created_at, use_count?}` shape and
-  `clean_wish_and_title` flow as `suno_wish_library`/`scene_wish_library`
-  (incl. the same `use_count` popularity sort), but its own separate list
-  (`wish_library.add_or_get_wish`'s `library_key='title_card_wish_library'`).
-  Each project toggles a subset on via its own `active_title_card_wish_ids`
-  (see above); resolved wish texts are folded into the prompt ahead of the
-  stage's `text_block` (`title_card._build_prompt`). Unlike the other two
-  libraries, it isn't surfaced in `SettingsScreen.jsx` at all (only inline on
-  the Title Card stage), so its delete action (`removeTitleCardWishSnippet`)
-  lives in `useSettings.js` but is only wired up from `TitleCardStage.jsx`.
-- `pricing_overrides` — user-supplied AI price corrections, keyed by
-  `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider
-  wildcard), same row shape as `pricing.BUILTIN_PRICING` (see
-  [usage-tracking.md](usage-tracking.md)). Saved via its own
-  `PUT /api/usage/pricing`, not the general settings `PUT` — **not** included
-  in the Settings screen's backup export/import.
-- `music_tags` — user-defined quality-review labels for Mureka tracks,
-  `{id, label, color}[]`, global (cross-project) and plain-array CRUD'd
-  through the regular partial-merge `PUT` (`useSettings.js`'s `addMusicTag`/
-  `removeMusicTag`/`updateMusicTag`, same pattern as `poster_templates` — no
-  dedicated endpoint, no LLM call). Seeded with 8 default tags
-  (`routers/settings.py`'s `DEFAULT_MUSIC_TAGS`) instead of empty. `color` is
-  auto-assigned from a fixed 10-hex palette (`MUSIC_TAG_COLORS` in
-  `routers/settings.py`, mirrored in `frontend/src/lib/musicTagColors.js` —
-  keep both in sync), cycling by list position — never hand-picked, so two
-  tags never collide visually; `GET /api/settings` backfills a `color` onto
-  any tag that predates this field (`normalize_music_tags`). Assigned to a
-  track via its `tag_ids` (see `MurekaTrack` above) — the Mureka stage only
-  shows a track's *added* tags as colored badges, with a "+" popover to add
-  from the rest; edited from Settings → Музыкальные промпты ("Теги для
-  оценки треков"), same inline add/edit/delete UI as `special_tags`, rendered
-  as a colored `.chip` instead of plain text.
-- The Settings screen's "Backup" controls (`SettingsScreen.jsx`, general and
-  providers tabs) export/import `api_keys` separately from every other
-  settings field as downloadable JSON files. This is pure client-side file
-  I/O (`Blob` download, `FileReader` + hidden `<input type="file">`) — there
-  is no dedicated `/export`/`/import` route; import just calls the existing
-  `PUT /api/settings` with the parsed file content
-  ([`hooks/useSettings.js`](../frontend/src/hooks/useSettings.js)
-  `importApiKeys`/`importGeneralSettings`).
+- **`background_remover_*`** — the Title Card stage's 3 interchangeable removal
+  methods (see `architecture.md`), each with its own param group:
+  `background_remover_method` is the default when no per-call `method` is passed
+  (`'local'|'fal'|'replicate'`, default `'replicate'`);
+  `background_remover_local_params` (`bg`: `'black'|'white'`, `threshold` 0-255)
+  feeds the free pixel cutout; `background_remover_fal_params.model` picks
+  between FAL's bria and rembg; `background_remover_params` feeds Replicate's
+  model input directly (defaults match its own schema).
+- **`outpaint_quality_mode`** (`'fast'|'quality'`, default `'fast'`) — the
+  default for the crop/outpaint editor's toggle, overridable per save.
+- **`request_timeout_seconds`** (default 60) — caps a single outbound text-model
+  call in `suno.py`/`scenes.py`/`text_models.py`.
+- **`hide_motion_prompt`** — UI-only: hides every `motion_prompt` field and its
+  translate button on the Scenes and Images stages. Doesn't touch any stored
+  value. Autosaves immediately on toggle.
+- **`music_tags`** — user-defined quality-review labels for Mureka tracks,
+  `{id, label, color}[]`, global and plain-array CRUD'd through the partial-merge
+  `PUT`. Seeded with 8 defaults (`DEFAULT_MUSIC_TAGS`). `color` is auto-assigned
+  by list position from a fixed 10-hex palette (`MUSIC_TAG_COLORS` in
+  `routers/settings.py`, **mirrored in `frontend/src/lib/musicTagColors.js` —
+  keep both in sync**), never hand-picked, so two tags never collide visually;
+  `GET /api/settings` backfills a `color` onto tags predating the field.
+- **`logos`** — `[{id, name, file_path}]`, the global cross-project logo library
+  for the Poster constructor (files under `app_data/logos/`, own endpoints).
+- **`poster_templates`** — `[{id, name, layers{logo_id, logo[], glass, text[]},
+  created_at}]`, reusable poster layouts, global like `logos` but no files, so
+  plain array CRUD through the partial-merge `PUT`. `layers` deliberately omits
+  `background_path`/`title_card_variant_id`/`title_card` layers — those belong to
+  the poem the poster was built for.
+- **`pricing_overrides`** — user price corrections keyed by
+  `"{provider}:{model_id}"` (or `"{provider}:*"` as a whole-provider wildcard),
+  same row shape as `pricing.BUILTIN_PRICING`. Saved via its own
+  `PUT /api/usage/pricing`, **not** the general settings `PUT`, and therefore
+  **not** part of the Settings screen's backup export/import (it has its own
+  Export/Import on the Prices tab).
+- **`api_keys.google_free`** is a second Google key: same models and calls as
+  `google`, but always priced at `$0`/`source: 'free'` in the ledger.
+- **Backup controls** (Settings, General and Providers tabs) export/import
+  `api_keys` separately from every other settings field as downloadable JSON.
+  Pure client-side file I/O — there is no `/export`/`/import` route; import just
+  calls the existing `PUT /api/settings` with the parsed content.
 
 ## Model catalog (`model_catalog.json`)
 
 `{text: {provider: {source, models, error?}}, image: {provider: {...}}, video: {provider: {...}}}` —
-the last-known-good response of every `GET /api/settings/models/{provider}`,
-`GET /api/settings/image-models/{provider}` and `GET
-/api/settings/video-models/{provider}` call, keyed by provider,
-managed by `storage.load_model_catalog`/`save_model_catalog`. Written by
-`routers/settings.py::_remember_catalog_entry` on every successful (non-
-`error`) model fetch, so a transient API failure never overwrites a
-previously good list. Read back by `GET /api/settings/models-catalog` (the
-Settings "Models" tab's initial state, before "Refresh models" is pressed in
-the current session) and by `routers/usage.py::_known_models()` (feeds
-`pricing.catalog_with_known_models`, see [usage-tracking.md](usage-tracking.md),
-so the "Prices" tab lists every known model even before it has a price).
+the last-known-good response of every `.../models/{provider}`,
+`.../image-models/{provider}` and `.../video-models/{provider}` call, managed by
+`storage.load_model_catalog`/`save_model_catalog`. `_remember_catalog_entry`
+writes it only on a successful (non-`error`) fetch, **so a transient API failure
+never overwrites a previously good list**. Read back by
+`GET /api/settings/models-catalog` (the Models tab's initial state before
+"Refresh models" is pressed) and by `routers/usage.py::_known_models()`, which
+feeds `pricing.catalog_with_known_models` so the Prices tab lists every known
+model even before it has a price.
 
 ## API
 

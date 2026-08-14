@@ -1,4 +1,4 @@
-import io
+﻿import io
 import os
 import time
 import zipfile
@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock
 
 from PIL import Image
 
-from app.routers import generation as generation_router
+# The routes under test live in `app/routers/generation_{music,scenes,
+# title_card,export}.py`, but every patch target below is a *provider* module
+# (or `storage`) - the same module object those routers hold, so patching an
+# attribute here is seen by whichever router imported it.
+from app import storage
+from app.providers import editor, images, mureka, scenes, suno, title_card, video
 
 
 class _FakeImagesResponse:
@@ -50,7 +55,7 @@ def _poll_until_done(client, pid, scene_index, job_id, timeout=5.0):
 def test_generate_suno_calls_provider_seam_and_persists(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     monkeypatch.setattr(
-        generation_router.suno, 'generate',
+        suno, 'generate',
         AsyncMock(return_value={'style': 'Test Style', 'lyrics': 'Test Lyrics'}),
     )
 
@@ -73,7 +78,7 @@ def test_generate_suno_calls_provider_seam_and_persists(client, monkeypatch):
 def test_generate_suno_passes_usage_ctx_with_project_id_and_task(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     fake_generate = AsyncMock(return_value={'style': 'S', 'lyrics': 'L'})
-    monkeypatch.setattr(generation_router.suno, 'generate', fake_generate)
+    monkeypatch.setattr(suno, 'generate', fake_generate)
 
     client.post(f'/api/projects/{pid}/suno/generate', json={'skill_id': 'skill_b'})
 
@@ -178,7 +183,7 @@ def test_generate_suno_sends_active_wishes_as_resolved_list(client, monkeypatch)
     pid = client.get('/api/projects').json()[0]['id']
     added = client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Add more jazz'}).json()
     fake_generate = AsyncMock(return_value={'style': 'S', 'lyrics': 'L'})
-    monkeypatch.setattr(generation_router.suno, 'generate', fake_generate)
+    monkeypatch.setattr(suno, 'generate', fake_generate)
 
     client.post(f'/api/projects/{pid}/suno/generate', json={'active_wish_ids': [added['wish']['id']]})
 
@@ -189,7 +194,7 @@ def test_generate_suno_falls_back_to_projects_active_wish_ids_when_not_sent(clie
     pid = client.get('/api/projects').json()[0]['id']
     client.post(f'/api/projects/{pid}/suno/wishes', json={'text': 'Add more jazz'})
     fake_generate = AsyncMock(return_value={'style': 'S', 'lyrics': 'L'})
-    monkeypatch.setattr(generation_router.suno, 'generate', fake_generate)
+    monkeypatch.setattr(suno, 'generate', fake_generate)
 
     client.post(f'/api/projects/{pid}/suno/generate', json={})
 
@@ -199,7 +204,7 @@ def test_generate_suno_falls_back_to_projects_active_wish_ids_when_not_sent(clie
 def test_generate_scenes_calls_provider_seam_and_persists(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     canned = [{'lyric_segment': 'X', 'static_prompt': 'sp', 'motion_prompt': 'mp', 'images': []}]
-    monkeypatch.setattr(generation_router.scenes, 'generate', AsyncMock(return_value={'scenes': canned, 'debug': {'stub': True}}))
+    monkeypatch.setattr(scenes, 'generate', AsyncMock(return_value={'scenes': canned, 'debug': {'stub': True}}))
 
     resp = client.post(
         f'/api/projects/{pid}/scenes/generate',
@@ -225,7 +230,7 @@ def test_generate_scenes_forwards_model_to_provider(client, monkeypatch):
     to the provider seam even though the stub itself ignores it."""
     pid = client.get('/api/projects').json()[0]['id']
     fake_generate = AsyncMock(return_value={'scenes': [], 'debug': {'stub': True}})
-    monkeypatch.setattr(generation_router.scenes, 'generate', fake_generate)
+    monkeypatch.setattr(scenes, 'generate', fake_generate)
 
     client.post(f'/api/projects/{pid}/scenes/generate', json={'model': 'google:gemini-2.5-flash'})
 
@@ -237,7 +242,7 @@ def test_generate_scene_images_starts_jobs_and_forwards_prompt_and_model(client,
     project = client.get(f'/api/projects/{pid}').json()
     project['scenes'][2]['static_prompt'] = 'a cinematic frame'
     client.patch(f'/api/projects/{pid}', json=project)
-    monkeypatch.setattr(generation_router.images, 'start_jobs', lambda *a, **kw: ['job_1', 'job_2'])
+    monkeypatch.setattr(images, 'start_jobs', lambda *a, **kw: ['job_1', 'job_2'])
 
     resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 2, 'model': 'krea:krea/krea-2/medium'})
 
@@ -247,7 +252,7 @@ def test_generate_scene_images_starts_jobs_and_forwards_prompt_and_model(client,
 
 def test_generate_scene_images_zero_count_returns_no_jobs(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(generation_router.images, 'start_jobs', lambda *a, **kw: [])
+    monkeypatch.setattr(images, 'start_jobs', lambda *a, **kw: [])
 
     resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 0})
 
@@ -267,7 +272,7 @@ def test_generate_scene_images_forwards_aspect_ratio(client, monkeypatch):
         captured.update(kwargs)
         return ['job_1']
 
-    monkeypatch.setattr(generation_router.images, 'start_jobs', fake_start_jobs)
+    monkeypatch.setattr(images, 'start_jobs', fake_start_jobs)
 
     client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'krea:krea/krea-2/medium', 'aspect_ratio': '9:16'})
 
@@ -277,7 +282,7 @@ def test_generate_scene_images_forwards_aspect_ratio(client, monkeypatch):
 def test_get_scene_image_job_returns_status(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     image = {'image_id': 'img_x', 'file_path': 'images/x.png', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}
-    monkeypatch.setattr(generation_router.images, 'get_job', lambda job_id: {'status': 'completed', 'image': image, 'error': None})
+    monkeypatch.setattr(images, 'get_job', lambda job_id: {'status': 'completed', 'image': image, 'error': None})
 
     resp = client.get(f'/api/projects/{pid}/scenes/2/images/jobs/job_1')
 
@@ -287,7 +292,7 @@ def test_get_scene_image_job_returns_status(client, monkeypatch):
 
 def test_get_scene_image_job_missing_returns_404(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(generation_router.images, 'get_job', lambda job_id: None)
+    monkeypatch.setattr(images, 'get_job', lambda job_id: None)
 
     resp = client.get(f'/api/projects/{pid}/scenes/2/images/jobs/does-not-exist')
 
@@ -310,7 +315,7 @@ def test_generate_scene_images_end_to_end_with_google_writes_file_and_persists(c
     import base64
     payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
     fake_client = _FakeImagesAsyncClient([_FakeImagesResponse(200, payload)])
-    monkeypatch.setattr(generation_router.images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
 
     resp = client.post(f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'google:imagen-4.0-generate-001'})
     assert resp.status_code == 200
@@ -406,7 +411,7 @@ def test_delete_scene_image_removes_file_and_entry(client, monkeypatch):
     import base64
     payload = {'predictions': [{'bytesBase64Encoded': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}]}
     fake_client = _FakeImagesAsyncClient([_FakeImagesResponse(200, payload)])
-    monkeypatch.setattr(generation_router.images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(images.httpx, 'AsyncClient', lambda **kwargs: fake_client)
     job_id = client.post(
         f'/api/projects/{pid}/scenes/2/images', json={'count': 1, 'model': 'google:imagen-4.0-generate-001'},
     ).json()['job_ids'][0]
@@ -446,7 +451,7 @@ def test_generate_scene_videos_starts_jobs_and_forwards_selected_image(client, m
         captured.update(kwargs)
         return ['job_1', 'job_2']
 
-    monkeypatch.setattr(generation_router.video, 'start_jobs', fake_start_jobs)
+    monkeypatch.setattr(video, 'start_jobs', fake_start_jobs)
 
     resp = client.post(
         f'/api/projects/{pid}/scenes/0/videos',
@@ -470,7 +475,7 @@ def test_generate_scene_videos_explicit_image_id_overrides_selected(client, monk
     project = client.get(f'/api/projects/{pid}').json()
     non_selected = next(img for img in project['scenes'][0]['images'] if not img['is_selected'])
     captured = {}
-    monkeypatch.setattr(generation_router.video, 'start_jobs', lambda *a, **kw: (captured.update(args=a) or ['job_1']))
+    monkeypatch.setattr(video, 'start_jobs', lambda *a, **kw: (captured.update(args=a) or ['job_1']))
 
     client.post(f'/api/projects/{pid}/scenes/0/videos', json={'model': 'x:y', 'image_id': non_selected['image_id']})
 
@@ -494,7 +499,7 @@ def test_generate_scene_videos_sends_active_video_wishes_folded_into_prompt(clie
     pid = client.get('/api/projects').json()[0]['id']
     added = client.post(f'/api/projects/{pid}/scenes/videos/wishes', json={'text': 'no sudden cuts'}).json()
     captured = {}
-    monkeypatch.setattr(generation_router.video, 'start_jobs', lambda *a, **kw: (captured.update(args=a) or ['job_1']))
+    monkeypatch.setattr(video, 'start_jobs', lambda *a, **kw: (captured.update(args=a) or ['job_1']))
 
     client.post(
         f'/api/projects/{pid}/scenes/0/videos',
@@ -509,7 +514,7 @@ def test_generate_scene_videos_sends_active_video_wishes_folded_into_prompt(clie
 def test_get_scene_video_job_returns_status(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     video_record = {'video_id': 'vid_x', 'file_path': 'videos/x.mp4', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}
-    monkeypatch.setattr(generation_router.video, 'get_job', lambda job_id: {'status': 'completed', 'video': video_record, 'error': None})
+    monkeypatch.setattr(video, 'get_job', lambda job_id: {'status': 'completed', 'video': video_record, 'error': None})
 
     resp = client.get(f'/api/projects/{pid}/scenes/0/videos/jobs/job_1')
 
@@ -519,7 +524,7 @@ def test_get_scene_video_job_returns_status(client, monkeypatch):
 
 def test_get_scene_video_job_missing_returns_404(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(generation_router.video, 'get_job', lambda job_id: None)
+    monkeypatch.setattr(video, 'get_job', lambda job_id: None)
 
     resp = client.get(f'/api/projects/{pid}/scenes/0/videos/jobs/does-not-exist')
 
@@ -684,7 +689,7 @@ def test_final_export_bundles_videos_audio_and_marked_title_cards(client):
     project['scenes'][0]['videos'][1]['rating'] = 5
 
     # A selected Mureka track with a real file on disk.
-    project_dir = generation_router.storage.project_dir(pid)
+    project_dir = storage.project_dir(pid)
     music_dir = project_dir / 'music'
     music_dir.mkdir(parents=True, exist_ok=True)
     (music_dir / 'track1.mp3').write_bytes(b'audio-bytes')
@@ -729,7 +734,7 @@ def test_final_export_bundles_videos_audio_and_marked_title_cards(client):
 
 def test_final_export_falls_back_to_selected_title_card_when_none_marked(client):
     pid = client.get('/api/projects').json()[0]['id']
-    project_dir = generation_router.storage.project_dir(pid)
+    project_dir = storage.project_dir(pid)
     titlecard_dir = project_dir / 'titlecard'
     titlecard_dir.mkdir(parents=True, exist_ok=True)
     (titlecard_dir / 'tc1.png').write_bytes(b'title-bytes')
@@ -775,7 +780,7 @@ def test_start_editor_render_starts_job(client, monkeypatch):
     client.patch(f'/api/projects/{pid}', json={'video_edit': {
         'mureka_track_id': 'trk_1', 'clips': [{'scene_index': 0, 'video_id': 'v'}],
     }})
-    monkeypatch.setattr(generation_router.editor, 'start_render_job', lambda slug: 'job_123')
+    monkeypatch.setattr(editor, 'start_render_job', lambda slug: 'job_123')
 
     resp = client.post(f'/api/projects/{pid}/editor/render')
 
@@ -790,7 +795,7 @@ def test_start_editor_render_missing_project_returns_404(client):
 def test_get_editor_render_job_returns_status(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     render_record = {'render_id': 'rnd_1', 'file_path': 'editor/rnd_1.mp4', 'duration_ms': 1000, 'clip_count': 1}
-    monkeypatch.setattr(generation_router.editor, 'get_job', lambda job_id: {'status': 'completed', 'render': render_record, 'error': None})
+    monkeypatch.setattr(editor, 'get_job', lambda job_id: {'status': 'completed', 'render': render_record, 'error': None})
 
     resp = client.get(f'/api/projects/{pid}/editor/jobs/job_1')
 
@@ -800,7 +805,7 @@ def test_get_editor_render_job_returns_status(client, monkeypatch):
 
 def test_get_editor_render_job_missing_returns_404(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(generation_router.editor, 'get_job', lambda job_id: None)
+    monkeypatch.setattr(editor, 'get_job', lambda job_id: None)
 
     resp = client.get(f'/api/projects/{pid}/editor/jobs/does-not-exist')
 
@@ -984,8 +989,8 @@ def test_generate_scene_videos_end_to_end_with_openrouter_writes_file_and_persis
         _FakeVideoResponse(200, {'id': 'job1', 'status': 'completed', 'unsigned_urls': ['https://cdn.example/vid.mp4'], 'usage': {'cost': 0.5}}),
         _FakeVideoResponse(200, content=b'MP4DATA'),
     ])
-    monkeypatch.setattr(generation_router.video.httpx, 'AsyncClient', lambda **kwargs: fake_client)
-    monkeypatch.setattr(generation_router.video.asyncio, 'sleep', AsyncMock())
+    monkeypatch.setattr(video.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(video.asyncio, 'sleep', AsyncMock())
 
     resp = client.post(
         f'/api/projects/{pid}/scenes/0/videos', json={'model': 'openrouter:google/veo-3.1'},
@@ -1136,7 +1141,7 @@ def test_crop_scene_image_too_large_selection_returns_400(client):
 def test_upload_scene_image_from_url_uses_download_helper(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     fake_download = AsyncMock(return_value=(b'downloaded-bytes', 'jpg'))
-    monkeypatch.setattr(generation_router.images, 'download_user_image_url', fake_download)
+    monkeypatch.setattr(images, 'download_user_image_url', fake_download)
 
     resp = client.post(
         f'/api/projects/{pid}/scenes/2/images/upload',
@@ -1159,7 +1164,7 @@ def test_upload_scene_image_from_url_surfaces_ssrf_rejection(client, monkeypatch
     async def _reject(url):
         raise RuntimeError('Ссылка указывает на недопустимый адрес')
 
-    monkeypatch.setattr(generation_router.images, 'download_user_image_url', _reject)
+    monkeypatch.setattr(images, 'download_user_image_url', _reject)
 
     resp = client.post(
         f'/api/projects/{pid}/scenes/2/images/upload',
@@ -1189,7 +1194,7 @@ def test_generate_title_card_starts_jobs_and_forwards_fields(client, monkeypatch
         captured['kwargs'] = kwargs
         return ['job_1', 'job_2']
 
-    monkeypatch.setattr(generation_router.title_card, 'start_jobs', fake_start_jobs)
+    monkeypatch.setattr(title_card, 'start_jobs', fake_start_jobs)
 
     resp = client.post(f'/api/projects/{pid}/title-card/generate', json={
         'text_block': '"Зимнее утро"\n"Пушкин"', 'base_prompt': 'base',
@@ -1244,7 +1249,7 @@ def test_generate_title_card_rejects_path_escaping_project_dir(client):
 def test_get_title_card_job_returns_status(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     variant = {'variant_id': 'tc_x', 'file_path': 'titlecard/x.png', 'rating': 0, 'is_selected': False, 'generated_at': 'now'}
-    monkeypatch.setattr(generation_router.title_card, 'get_job', lambda job_id: {'status': 'completed', 'variant': variant, 'error': None})
+    monkeypatch.setattr(title_card, 'get_job', lambda job_id: {'status': 'completed', 'variant': variant, 'error': None})
 
     resp = client.get(f'/api/projects/{pid}/title-card/jobs/job_1')
 
@@ -1254,7 +1259,7 @@ def test_get_title_card_job_returns_status(client, monkeypatch):
 
 def test_get_title_card_job_missing_returns_404(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(generation_router.title_card, 'get_job', lambda job_id: None)
+    monkeypatch.setattr(title_card, 'get_job', lambda job_id: None)
 
     resp = client.get(f'/api/projects/{pid}/title-card/jobs/does-not-exist')
 
@@ -1283,7 +1288,7 @@ def test_generate_title_card_end_to_end_with_google_writes_file_and_persists(cli
         {'inlineData': {'data': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}},
     ]}}]}
     fake_client = _FakeImagesAsyncClient([_FakeImagesResponse(200, payload)])
-    monkeypatch.setattr(generation_router.title_card.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(title_card.httpx, 'AsyncClient', lambda **kwargs: fake_client)
 
     resp = client.post(f'/api/projects/{pid}/title-card/generate', json={
         'text_block': '"Зимнее утро"\n"Пушкин"', 'base_prompt': 'base instructions',
@@ -1321,7 +1326,7 @@ def test_delete_title_card_variant_removes_file_and_entry(client, monkeypatch):
         {'inlineData': {'data': base64.b64encode(b'PNGDATA').decode(), 'mimeType': 'image/png'}},
     ]}}]}
     fake_client = _FakeImagesAsyncClient([_FakeImagesResponse(200, payload)])
-    monkeypatch.setattr(generation_router.title_card.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(title_card.httpx, 'AsyncClient', lambda **kwargs: fake_client)
     job_id = client.post(f'/api/projects/{pid}/title-card/generate', json={
         'reference_image_paths': [ref_path], 'model': 'google:gemini-3.1-flash-lite-image',
     }).json()['job_ids'][0]
@@ -1361,7 +1366,7 @@ def test_generate_mureka_starts_job_and_forwards_fields(client, monkeypatch):
         captured.update(slug=slug, style=style, lyrics=lyrics, model=model, n=n, gender=gender, reference_id=reference_id)
         return 'job_1'
 
-    monkeypatch.setattr(generation_router.mureka, 'start_job', fake_start_job)
+    monkeypatch.setattr(mureka, 'start_job', fake_start_job)
 
     resp = client.post(
         f'/api/projects/{pid}/mureka/generate',
@@ -1384,7 +1389,7 @@ def test_generate_mureka_missing_project_returns_404(client):
 def test_get_mureka_job_returns_status(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     track = {'track_id': 'trk_x', 'file_path': 'music/trk_x.mp3', 'rating': 0, 'is_selected': False, 'tag_ids': []}
-    monkeypatch.setattr(generation_router.mureka, 'get_job', lambda job_id: {'status': 'completed', 'tracks': [track], 'error': None})
+    monkeypatch.setattr(mureka, 'get_job', lambda job_id: {'status': 'completed', 'tracks': [track], 'error': None})
 
     resp = client.get(f'/api/projects/{pid}/mureka/jobs/job_1')
 
@@ -1394,7 +1399,7 @@ def test_get_mureka_job_returns_status(client, monkeypatch):
 
 def test_get_mureka_job_missing_returns_404(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
-    monkeypatch.setattr(generation_router.mureka, 'get_job', lambda job_id: None)
+    monkeypatch.setattr(mureka, 'get_job', lambda job_id: None)
 
     resp = client.get(f'/api/projects/{pid}/mureka/jobs/does-not-exist')
 
@@ -1412,7 +1417,7 @@ def test_generate_mureka_end_to_end_writes_file_and_persists(client, monkeypatch
 
     async def _fast_sleep(*args, **kwargs):
         pass
-    monkeypatch.setattr(generation_router.mureka.asyncio, 'sleep', _fast_sleep)
+    monkeypatch.setattr(mureka.asyncio, 'sleep', _fast_sleep)
 
     fake_client = _FakeImagesAsyncClient([
         _FakeImagesResponse(200, {'id': 'task_1', 'status': 'preparing'}),
@@ -1420,8 +1425,8 @@ def test_generate_mureka_end_to_end_writes_file_and_persists(client, monkeypatch
             {'index': 0, 'id': 'c0', 'url': 'https://cdn.mureka.ai/c0.mp3', 'duration': 42000},
         ]}),
     ])
-    monkeypatch.setattr(generation_router.mureka.httpx, 'AsyncClient', lambda **kwargs: fake_client)
-    monkeypatch.setattr(generation_router.mureka, '_download', AsyncMock(return_value=b'MP3DATA'))
+    monkeypatch.setattr(mureka.httpx, 'AsyncClient', lambda **kwargs: fake_client)
+    monkeypatch.setattr(mureka, '_download', AsyncMock(return_value=b'MP3DATA'))
 
     resp = client.post(f'/api/projects/{pid}/mureka/generate', json={'style': 's', 'lyrics': 'la la', 'model': 'auto', 'n': 1})
     assert resp.status_code == 200
@@ -1476,7 +1481,7 @@ def test_delete_mureka_track_missing_returns_404(client):
 def test_upload_mureka_reference_audio_writes_file_and_appends(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     monkeypatch.setattr(
-        generation_router.mureka, 'upload_reference_audio',
+        mureka, 'upload_reference_audio',
         AsyncMock(return_value={'id': 'mureka_file_1', 'filename': 'ref.mp3'}),
     )
 
@@ -1512,7 +1517,7 @@ def test_upload_mureka_reference_audio_rejects_bad_extension(client):
 def test_upload_mureka_reference_audio_provider_failure_returns_502(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     monkeypatch.setattr(
-        generation_router.mureka, 'upload_reference_audio',
+        mureka, 'upload_reference_audio',
         AsyncMock(side_effect=RuntimeError('Mureka API вернул 500')),
     )
 
@@ -1527,7 +1532,7 @@ def test_upload_mureka_reference_audio_provider_failure_returns_502(client, monk
 def test_delete_mureka_reference_audio_removes_file_and_entry(client, monkeypatch):
     pid = client.get('/api/projects').json()[0]['id']
     monkeypatch.setattr(
-        generation_router.mureka, 'upload_reference_audio',
+        mureka, 'upload_reference_audio',
         AsyncMock(return_value={'id': 'mureka_file_1', 'filename': 'ref.mp3'}),
     )
     upload = client.post(
@@ -1627,9 +1632,9 @@ def test_trim_mureka_reference_source_success_calls_ffmpeg_then_upload(client, m
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(b'trimmed-mp3-bytes')
 
-    monkeypatch.setattr(generation_router.mureka, 'trim_audio', fake_trim_audio)
+    monkeypatch.setattr(mureka, 'trim_audio', fake_trim_audio)
     monkeypatch.setattr(
-        generation_router.mureka, 'upload_reference_audio',
+        mureka, 'upload_reference_audio',
         AsyncMock(return_value={'id': 'mureka_file_trimmed'}),
     )
 
@@ -1668,9 +1673,9 @@ def test_trim_mureka_reference_source_twice_keeps_source_and_appends_second_clip
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(f'trimmed-{start_ms}-{end_ms}'.encode())
 
-    monkeypatch.setattr(generation_router.mureka, 'trim_audio', fake_trim_audio)
+    monkeypatch.setattr(mureka, 'trim_audio', fake_trim_audio)
     monkeypatch.setattr(
-        generation_router.mureka, 'upload_reference_audio',
+        mureka, 'upload_reference_audio',
         AsyncMock(side_effect=[{'id': 'mureka_file_1'}, {'id': 'mureka_file_2'}]),
     )
 
@@ -1705,7 +1710,7 @@ def test_trim_mureka_reference_source_ffmpeg_failure_returns_502(client, monkeyp
     async def fake_trim_audio(*args, **kwargs):
         raise RuntimeError('ffmpeg не найден в PATH')
 
-    monkeypatch.setattr(generation_router.mureka, 'trim_audio', fake_trim_audio)
+    monkeypatch.setattr(mureka, 'trim_audio', fake_trim_audio)
 
     resp = client.post(
         f'/api/projects/{pid}/mureka/reference-sources/{source_id}/trim',
@@ -1754,7 +1759,7 @@ def test_extend_mureka_track_starts_job_defaulting_extend_at_to_duration(client,
         captured.update(slug=slug, source_track_id=source_track_id, song_id=song_id, lyrics=lyrics, extend_at=extend_at)
         return 'job_ext_1'
 
-    monkeypatch.setattr(generation_router.mureka, 'start_extend_job', fake_start_extend_job)
+    monkeypatch.setattr(mureka, 'start_extend_job', fake_start_extend_job)
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/extend', json={'lyrics': 'continuation'})
 
@@ -1788,7 +1793,7 @@ def test_stem_mureka_track_success_appends_stem_entry(client, monkeypatch):
         dest_zip_path.write_bytes(b'zip-bytes')
         return {'zip_url': 'https://cdn.mureka.ai/x.zip', 'expires_at': 999}
 
-    monkeypatch.setattr(generation_router.mureka, 'stem_track', fake_stem_track)
+    monkeypatch.setattr(mureka, 'stem_track', fake_stem_track)
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/stem', json={'model': 'audio-separation-1'})
 
@@ -1812,7 +1817,7 @@ def test_stem_mureka_track_provider_failure_returns_502(client, monkeypatch):
     ]}
     client.patch(f'/api/projects/{pid}', json=project)
 
-    monkeypatch.setattr(generation_router.mureka, 'stem_track', AsyncMock(side_effect=RuntimeError('boom')))
+    monkeypatch.setattr(mureka, 'stem_track', AsyncMock(side_effect=RuntimeError('boom')))
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/stem', json={})
     assert resp.status_code == 502
@@ -1847,7 +1852,7 @@ def test_describe_mureka_track_success_appends_description(client, monkeypatch):
     async def fake_describe_song(content, api_key, usage_ctx=None):
         return {'instrument': ['piano'], 'genres': ['ballad'], 'tags': ['sad'], 'description': 'A sad piano ballad.'}
 
-    monkeypatch.setattr(generation_router.mureka, 'describe_song', fake_describe_song)
+    monkeypatch.setattr(mureka, 'describe_song', fake_describe_song)
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/describe')
 
@@ -1870,7 +1875,7 @@ def test_describe_mureka_track_provider_failure_returns_502(client, monkeypatch)
     ]}
     client.patch(f'/api/projects/{pid}', json=project)
 
-    monkeypatch.setattr(generation_router.mureka, 'describe_song', AsyncMock(side_effect=RuntimeError('boom')))
+    monkeypatch.setattr(mureka, 'describe_song', AsyncMock(side_effect=RuntimeError('boom')))
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/describe')
     assert resp.status_code == 502
@@ -1902,7 +1907,7 @@ def test_transcribe_mureka_track_success_appends_transcription(client, monkeypat
         dest_zip_path.write_bytes(b'notes-zip')
         return {'zip_url': 'https://cdn.mureka.ai/notes.zip', 'expires_at': 999}
 
-    monkeypatch.setattr(generation_router.mureka, 'transcribe_song', fake_transcribe_song)
+    monkeypatch.setattr(mureka, 'transcribe_song', fake_transcribe_song)
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/transcribe')
 
@@ -1935,7 +1940,7 @@ def test_transcribe_mureka_track_provider_failure_returns_502(client, monkeypatc
     ]}
     client.patch(f'/api/projects/{pid}', json=project)
 
-    monkeypatch.setattr(generation_router.mureka, 'transcribe_song', AsyncMock(side_effect=RuntimeError('boom')))
+    monkeypatch.setattr(mureka, 'transcribe_song', AsyncMock(side_effect=RuntimeError('boom')))
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/transcribe')
     assert resp.status_code == 502
@@ -1959,7 +1964,7 @@ def test_lyrics_video_mureka_track_success_appends_video(client, monkeypatch):
         dest_path.write_bytes(b'mp4-bytes')
         return {'url': 'https://cdn.mureka.ai/lyrics.mp4'}
 
-    monkeypatch.setattr(generation_router.mureka, 'generate_lyrics_video', fake_generate_lyrics_video)
+    monkeypatch.setattr(mureka, 'generate_lyrics_video', fake_generate_lyrics_video)
 
     resp = client.post(
         f'/api/projects/{pid}/mureka/tracks/trk_x/lyrics-video', json={'aspect_ratio': '16:9'},
@@ -1994,7 +1999,7 @@ def test_lyrics_video_mureka_track_provider_failure_returns_502(client, monkeypa
     ]}
     client.patch(f'/api/projects/{pid}', json=project)
 
-    monkeypatch.setattr(generation_router.mureka, 'generate_lyrics_video', AsyncMock(side_effect=RuntimeError('boom')))
+    monkeypatch.setattr(mureka, 'generate_lyrics_video', AsyncMock(side_effect=RuntimeError('boom')))
 
     resp = client.post(f'/api/projects/{pid}/mureka/tracks/trk_x/lyrics-video', json={})
     assert resp.status_code == 502

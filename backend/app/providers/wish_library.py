@@ -1,7 +1,7 @@
-"""Shared logic for adding a wish to the global settings.suno_wish_library -
+﻿"""Shared logic for adding a wish to the global settings.suno_wish_library -
 used both by the library-only Settings endpoint and by the Suno-stage
 "Применить" flow, which also activates the wish for the current project
-(see routers/generation.py)."""
+(see the routers/generation_*.py modules)."""
 
 from datetime import datetime, timezone
 from uuid import uuid4

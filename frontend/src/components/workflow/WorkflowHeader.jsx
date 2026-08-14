@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Menu, Settings } from 'lucide-react';
 import UsagePill from '../UsagePill.jsx';
+import MiniPlayerWidget from '../MiniPlayerWidget.jsx';
 
 /** Click-to-edit span: shows plain text, swaps to an input on click, commits
  * on blur/Enter (Escape reverts). Used for the project title and author in
@@ -46,6 +47,7 @@ function EditableField({ value, placeholder, onCommit }) {
 export default function WorkflowHeader({
   L, langLabel, title, author, onGoHome, onToggleSidebar, onToggleLang, onOpenSettings,
   onChangeTitle, onChangeAuthor, usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
 }) {
   return (
     <div className="workflow-header">
@@ -63,6 +65,7 @@ export default function WorkflowHeader({
         </span>
       </div>
       <div style={{ flex: 1 }} />
+      <MiniPlayerWidget L={L} track={miniPlayerTrack} isPlaying={miniPlayerIsPlaying} onToggle={onToggleMiniPlayer} />
       <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       <button
         className="btn-ghost"

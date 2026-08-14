@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import { resolveAnimateImage } from '../lib/scenes.js';
 
@@ -223,7 +223,7 @@ export function useVideoStage({
   /** Reverse of the Video stage's export button: a folder of finished clips
    * named by that same `{scene:03d}_...` convention, matched back to their
    * scenes purely by that leading number (`import_video_batch` in
-   * `routers/generation.py`) - lets the whole batch land in one call instead
+   * `routers/generation_export.py`) - lets the whole batch land in one call instead
    * of the single-file `uploadSceneVideoFile` above, repeated by hand per
    * scene. */
   async function importVideoBatch(files) {

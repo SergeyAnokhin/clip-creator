@@ -15,6 +15,7 @@ import { useExportStage } from './hooks/useExportStage.js';
 import { useEditorStage } from './hooks/useEditorStage.js';
 import { usePosterConstructor } from './hooks/usePosterConstructor.js';
 import { useVoice } from './hooks/useVoice.js';
+import { useMiniPlayer } from './hooks/useMiniPlayer.js';
 import HomeScreen from './components/home/HomeScreen.jsx';
 import WorkflowScreen from './components/workflow/WorkflowScreen.jsx';
 import SettingsScreen from './components/settings/SettingsScreen.jsx';
@@ -36,6 +37,7 @@ function App() {
   const { toast, showToast } = useToast();
   const view = useViewport();
   const usage = useUsage();
+  const miniPlayer = useMiniPlayer();
   const settings = useSettings({ showToast, onAiCall: usage.actions.refreshToday });
   const L = settings.L;
 
@@ -157,7 +159,14 @@ function App() {
   const murekaState = {
     ...mureka.state,
     musicTags: settings.musicTags,
-    actions: { ...mureka.actions, onOpenSettings: openSettings },
+    miniPlayerTrack: miniPlayer.state.track,
+    miniPlayerIsPlaying: miniPlayer.state.isPlaying,
+    miniPlayerCurrentTimeMs: miniPlayer.state.currentTimeMs,
+    actions: {
+      ...mureka.actions, onOpenSettings: openSettings,
+      onPlayTrack: miniPlayer.actions.playTrack, onToggleTrack: miniPlayer.actions.toggle,
+      onSeekTrack: miniPlayer.actions.seek,
+    },
   };
 
   const scenesState = {
@@ -269,6 +278,8 @@ function App() {
           onOpenProject={openProject} onDeleteProject={projects.homeActions.deleteProject}
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
+          miniPlayerTrack={miniPlayer.state.track} miniPlayerIsPlaying={miniPlayer.state.isPlaying}
+          onToggleMiniPlayer={miniPlayer.actions.toggle}
         />
       )}
 
@@ -282,6 +293,8 @@ function App() {
           onToggleLang={settings.toggleLang} onOpenSettings={openSettings} onSelectStage={setActiveStage}
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
+          miniPlayerTrack={miniPlayer.state.track} miniPlayerIsPlaying={miniPlayer.state.isPlaying}
+          onToggleMiniPlayer={miniPlayer.actions.toggle}
         />
       )}
 
@@ -306,6 +319,8 @@ function App() {
           murekaBasePromptUserPresets={settings.murekaBasePromptUserPresets}
           pricing={usage.pricing} usageToday={usage.today} usagePeriodTotals={usage.periodTotals}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
+          miniPlayerTrack={miniPlayer.state.track} miniPlayerIsPlaying={miniPlayer.state.isPlaying}
+          onToggleMiniPlayer={miniPlayer.actions.toggle}
           onClose={closeSettings} onOpenUsage={openUsage}
           actions={{ ...settings.actions, savePricingOverrides: usage.actions.savePricingOverrides, refreshPricing: usage.actions.refreshPricing }}
         />
@@ -316,6 +331,7 @@ function App() {
       )}
 
       <Toast message={toast} />
+      <audio {...miniPlayer.audioProps} style={{ display: 'none' }} />
     </div>
   );
 }

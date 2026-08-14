@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownNarrowWide, ArrowUpNarrowWide, Check, ChevronDown, ChevronUp, FileText, Info, Loader2, Maximize2,
-  MoreVertical, Music4, Plus, RotateCcw, Scissors, Star, Trash2, Upload, Video, Wand2, X, Zap,
+  MoreVertical, Music4, Pause, Play, Plus, RotateCcw, Scissors, Star, Trash2, Upload, Video, Wand2, X, Zap,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { pickReadableTextColor } from '../../lib/musicTagColors.js';
@@ -60,11 +60,11 @@ function TrackCard({
   L, projectId, projectTitle, track, index, allTags, onRate, onSelectMain, onToggleTag, onDelete,
   onReuseSettings, onExtend, onStem, onOpenDetail, extending, stemming,
   onDescribe, onTranscribe, onGenerateLyricsVideo, describing, transcribing, generatingVideo,
+  onPlayTrack, onToggleTrack, onSeekTrack, isCurrent, isPlaying, currentTimeMsGlobal,
 }) {
-  const audioRef = useRef(null);
   const actionsMenuRef = useRef(null);
-  const [playing, setPlaying] = useState(false);
-  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const playing = isCurrent && isPlaying;
+  const currentTimeMs = isCurrent ? currentTimeMsGlobal : 0;
   const [tagMenuOpen, setTagMenuOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
@@ -189,11 +189,33 @@ function TrackCard({
         </div>
       )}
 
-      <audio
-        ref={audioRef} className="mureka-track-audio" controls src={mediaUrl(`projects/${projectId}/${track.file_path}`)}
-        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-        onTimeUpdate={() => setCurrentTimeMs((audioRef.current?.currentTime || 0) * 1000)}
-      />
+      <div className="mureka-track-player">
+        <button
+          className="icon-btn" style={{ width: 30, height: 30, flexShrink: 0 }}
+          title={playing ? L.miniPlayer_pauseTitle : L.miniPlayer_playTitle}
+          onClick={() => (isCurrent ? onToggleTrack() : onPlayTrack({ projectId, trackId: track.track_id, filePath: track.file_path, title: cardTitle }))}
+        >
+          {playing ? <Pause size={13} /> : <Play size={13} />}
+        </button>
+        <div
+          className="mureka-track-progress"
+          style={{ cursor: track.duration_ms ? 'pointer' : 'default' }}
+          onClick={(e) => {
+            if (!track.duration_ms) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+            const targetMs = ratio * track.duration_ms;
+            if (isCurrent) onSeekTrack(targetMs);
+            else onPlayTrack({ projectId, trackId: track.track_id, filePath: track.file_path, title: cardTitle, startAtMs: targetMs });
+          }}
+        >
+          <div
+            className="mureka-track-progress-fill"
+            style={{ width: `${track.duration_ms ? Math.min(100, (currentTimeMs / track.duration_ms) * 100) : 0}%` }}
+          />
+        </div>
+        <span className="mureka-track-progress-time">{formatTrackDuration(currentTimeMs) || '0:00'} / {duration || '—'}</span>
+      </div>
 
       {playing && <KaraokeLyrics L={L} raw={track.raw} currentTimeMs={currentTimeMs} />}
 
@@ -290,7 +312,7 @@ export default function MurekaStage({
   L, project, isMobile, styleInput, lyricsInput, model, n, gender, referenceId, referenceAudio, referenceSources,
   tracks, generating, elapsedSeconds, jobStage, murekaError, uploadingReference, uploadingReferenceSource, trimmingReference,
   billing, extendingTrackIds, stemmingTrackIds, describingTrackIds, transcribingTrackIds, lyricsVideoTrackIds,
-  musicTags, actions,
+  musicTags, miniPlayerTrack, miniPlayerIsPlaying, miniPlayerCurrentTimeMs, actions,
 }) {
   const [referenceBrowserOpen, setReferenceBrowserOpen] = useState(true);
   const [trimmingSource, setTrimmingSource] = useState(null);
@@ -591,6 +613,9 @@ export default function MurekaStage({
               onReuseSettings={actions.reuseTrackSettings}
               onExtend={actions.extendTrack} onStem={actions.stemTrack}
               onOpenDetail={(t) => setDetailTrackId(t.track_id)}
+              onPlayTrack={actions.onPlayTrack} onToggleTrack={actions.onToggleTrack} onSeekTrack={actions.onSeekTrack}
+              isCurrent={miniPlayerTrack?.trackId === track.track_id}
+              isPlaying={miniPlayerIsPlaying} currentTimeMsGlobal={miniPlayerCurrentTimeMs}
               extending={(extendingTrackIds || []).includes(track.track_id)}
               stemming={(stemmingTrackIds || []).includes(track.track_id)}
               onDescribe={handleDescribe} onTranscribe={handleTranscribe} onGenerateLyricsVideo={handleGenerateLyricsVideo}
