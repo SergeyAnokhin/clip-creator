@@ -60,6 +60,43 @@ working on the lyrics builder or on the music-prompt provider
 real call to Google, OpenRouter or DeepSeek when the matching API key is
 configured), instead of inventing sample poems.
 
+**`app_data/projects/QA Fixture - Editor Timeline/`** (local-only,
+git-ignored like the rest of `app_data/` — created once per machine, not
+shipped in the repo) is a dedicated project for manually testing the Editor
+stage ([`frontend/src/components/workflow/EditorStage.jsx`](frontend/src/components/workflow/EditorStage.jsx)
+/ [`frontend/src/components/workflow/EditorTimeline.jsx`](frontend/src/components/workflow/EditorTimeline.jsx)
+/ [`backend/app/providers/editor.py`](backend/app/providers/editor.py)):
+dragging/trimming/splitting clips on the timeline, the duration-mismatch
+warning, and rendering. **Use this project for that testing instead of a real
+one** — the Editor stage autosaves `video_edit.clips` on every timeline edit,
+so poking at a real project mutates its data immediately (this happened once
+already and had to be repaired by hand). It has a real Mureka track and 6
+scenes with real (reused, cropped) video files, covering edge cases that are
+easy to regress and tedious to set up by hand through the UI (scene numbers
+are 1-based, as shown in the app):
+
+- Scene 3 has `aspect_ratio: "9:16"` while every other scene is `"16:9"` —
+  the mixed-aspect-ratio letterboxing case, where the render canvas must
+  stay the default `1920×1080` (it only switches to `1080×1920` when *every*
+  clip is `9:16`).
+- Scene 4's clip has `trim_end_ms: null` on a video with **known**
+  `duration_seconds` — the "trim to end of source" case, which should fall
+  back to that duration.
+- Scene 5's video is `model: "upload"` with `duration_seconds` /
+  `aspect_ratio` / `resolution` all `null` (an imported-by-hand clip, per
+  `docs/data-model.md`'s `Video` note that an uploaded clip is never probed),
+  also with `trim_end_ms: null` — unlike scene 4, the render must leave this
+  clip's end genuinely unbounded (ffmpeg runs to EOF) instead of collapsing
+  it to zero length.
+
+If it's ever missing, regenerate it the same way it was built: pick a few
+real `.mp4`s from any existing project, crop the horizontal ones to 16:9 with
+ffmpeg (the source footage is portrait), reuse one vertical clip and one
+upload-scenario clip as-is, copy one track's `.mp3`, and hand-write
+`config.json` following `docs/data-model.md`'s `Scene` / `Video` /
+`MurekaTrack` / `VideoEdit` shapes — do not recreate it by pointing the app
+at a real project and copying its data.
+
 ## Documentation
 
 | Doc | Covers |

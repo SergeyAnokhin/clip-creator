@@ -63,6 +63,10 @@ _REPLICATE_LAYERED_ID = 'qwen/qwen-image-layered'
 
 _POLL_INTERVAL = 2.0
 _JOB_TIMEOUT = 300.0
+# FAL's queue has been observed to run past 300s under load (2026-08-15, a
+# real decomposition timed out at 304.8s) while Replicate stayed well under
+# it - so FAL alone gets a longer ceiling rather than raising it for both.
+_FAL_JOB_TIMEOUT = _JOB_TIMEOUT * 2
 
 # The model's own documented range for `num_layers`.
 _MIN_LAYERS = 2
@@ -125,7 +129,7 @@ async def _generate_fal(
 
     payload = await fal_client.submit_poll_fetch(
         _FAL_BASE, model_id, body, api_key, debug_request,
-        usage_out=usage_out, poll_interval=_POLL_INTERVAL, job_timeout=_JOB_TIMEOUT,
+        usage_out=usage_out, poll_interval=_POLL_INTERVAL, job_timeout=_FAL_JOB_TIMEOUT,
     )
     images = payload.get('images') or []
     urls = [img.get('url') for img in images if img.get('url')]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeMagicLayer, moveLayerInList, normalizeMagicLayers } from './posterLayers.js';
+import { bestMagicLayerGroup, makeMagicLayer, moveLayerInList, normalizeMagicLayers } from './posterLayers.js';
 
 describe('makeMagicLayer', () => {
   it('carries its own source, unlike the constructor’s fixed image slots', () => {
@@ -48,6 +48,34 @@ describe('normalizeMagicLayers', () => {
       crop: { x: 1, y: 2, width: 3, height: 4 },
       src: { group_id: 'mg_2', index: 0, file_path: 'magic/mg_2/L0.png', is_background: true },
     });
+  });
+});
+
+describe('bestMagicLayerGroup', () => {
+  const groups = [
+    { source_path: 'images/a.png', layers: [1, 2, 3] },
+    { source_path: 'images/b.png', layers: [1, 2] },
+    { source_path: 'images/a.png', layers: [1, 2, 3, 4] },
+    { source_path: 'images/a.png', layers: [1, 2] },
+  ];
+
+  it('returns null when the source has no group', () => {
+    expect(bestMagicLayerGroup(groups, 'images/none.png')).toBeNull();
+    expect(bestMagicLayerGroup([], 'images/a.png')).toBeNull();
+    expect(bestMagicLayerGroup(undefined, 'images/a.png')).toBeNull();
+  });
+
+  it('picks the group with the most layers among matching source_path', () => {
+    expect(bestMagicLayerGroup(groups, 'images/a.png')).toBe(groups[2]);
+    expect(bestMagicLayerGroup(groups, 'images/b.png')).toBe(groups[1]);
+  });
+
+  it('breaks a tie by recency (last match wins)', () => {
+    const tied = [
+      { source_path: 'images/a.png', layers: [1, 2, 3] },
+      { source_path: 'images/a.png', layers: [1, 2, 3] },
+    ];
+    expect(bestMagicLayerGroup(tied, 'images/a.png')).toBe(tied[1]);
   });
 });
 

@@ -3,6 +3,8 @@ import { Check, Eraser, Loader2, Star, Trash2 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { formatCost } from '../../lib/pricing.js';
 import MagicLayersButton from './MagicLayersButton.jsx';
+import MagicLayersPreviewModal from './MagicLayersPreviewModal.jsx';
+import { bestMagicLayerGroup } from '../../lib/posterLayers.js';
 
 const BG_REMOVE_METHODS = ['local', 'fal', 'replicate'];
 
@@ -23,6 +25,7 @@ export default function TitleCardGallery({
   // picked right when the button is pressed rather than only in Settings).
   // A single index, not a Set, since only one menu can be open at a time.
   const [methodMenuIdx, setMethodMenuIdx] = useState(null);
+  const [previewGroup, setPreviewGroup] = useState(null);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -48,9 +51,7 @@ export default function TitleCardGallery({
       {variants.map((variant, i) => {
         const [w, h] = (variant.aspect_ratio || '1:1').split(':').map(Number);
         const removingBg = removingBgIds?.has(variant.variant_id);
-        const magicLayerCount = magicLayerGroups
-          .filter((g) => g.source_path === variant.file_path)
-          .reduce((max, g) => Math.max(max, g.layers?.length || 0), 0);
+        const magicGroup = bestMagicLayerGroup(magicLayerGroups, variant.file_path);
         return (
           <div className="titlecard-gallery-item" key={variant.variant_id || i}>
             <div
@@ -107,8 +108,13 @@ export default function TitleCardGallery({
                   })}
                 />
               )}
-              {magicLayerCount > 0 && (
-                <span className="magic-layer-badge" title={L.magic_ready}>{`✨ ${magicLayerCount}`}</span>
+              {magicGroup && (
+                <button
+                  className="magic-layer-badge" title={L.magic_ready}
+                  onClick={(e) => { e.stopPropagation(); setPreviewGroup(magicGroup); }}
+                >
+                  {`✨ ${magicGroup.layers.length}`}
+                </button>
               )}
             </div>
             <div className="titlecard-gallery-caption">
@@ -120,6 +126,12 @@ export default function TitleCardGallery({
           </div>
         );
       })}
+      {previewGroup && (
+        <MagicLayersPreviewModal
+          L={L} projectId={projectId} group={previewGroup}
+          onClose={() => setPreviewGroup(null)}
+        />
+      )}
     </div>
   );
 }

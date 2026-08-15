@@ -143,6 +143,19 @@ export function normalizeMagicLayers(raw) {
     }));
 }
 
+/** Picks which `MagicLayerGroup` a ✨N badge (ImageCarousel.jsx,
+ * TitleCardGallery.jsx) refers to when a source has been decomposed more
+ * than once: the one with the most layers, ties broken by recency (groups
+ * are appended chronologically by useMagicLayers' `decompose`, so the last
+ * match wins). Returns `null` when the source has no group yet. */
+export function bestMagicLayerGroup(groups, sourcePath) {
+  const relevant = (groups || []).filter((g) => g.source_path === sourcePath);
+  return relevant.reduce((best, g) => {
+    if (!best) return g;
+    return (g.layers?.length || 0) >= (best.layers?.length || 0) ? g : best;
+  }, null);
+}
+
 /** Moves the layer at `index` one step towards the back (`-1`) or the front
  * (`+1`) of the magic-layer block. Out-of-range moves return the list
  * unchanged, so the caller can wire the buttons unconditionally. */

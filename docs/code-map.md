@@ -99,7 +99,7 @@ Two tests use a real local `ffmpeg` and `skipif` it isn't on `PATH`
 | `lyricsTiming.js` | Mureka `lyrics_sections` → karaoke line list, plus manual anchor re-timing. Handles untimed/partially-timed responses |
 | `timeline.js` | Editor-stage timeline math: clip offsets, `findActiveClip`, `clampTrim`, plus the direct-manipulation helpers (`moveClip`, `dropIndexForStart`, `applyEdgeTrim`, `splitClipsAt`) |
 | `editorDefaults.js` | `buildDefaultClips`, `defaultMurekaTrackId` — the Editor stage's first-open seed |
-| `posterLayers.js` | Poster constructor's pure helpers: layer/effect factories (incl. `makeMagicLayer`), stored-poster normalization, `moveLayerInList`, center-snap and zoom-clamp math, `FONT_OPTIONS` |
+| `posterLayers.js` | Poster constructor's pure helpers: layer/effect factories (incl. `makeMagicLayer`), stored-poster normalization, `moveLayerInList`, `bestMagicLayerGroup` (also used by the `✨N` badge outside the constructor), center-snap and zoom-clamp math, `FONT_OPTIONS` |
 | `pricing.js` | Cost formatting/estimation for `text`/`image`/`video` kinds |
 | `musicTagColors.js` | Tag palette — mirrors `routers/settings.py`'s `MUSIC_TAG_COLORS`, **keep in sync** |
 | `videoModelLimits.js` | Hand-curated per-model duration/resolution limits. Informational only, never enforced |
@@ -166,6 +166,7 @@ hooks return `{ state, actions }`.
 | `PosterConstructor.jsx` | The poster editor modal: Konva stage, layer state, undo/redo, zoom, templates, save |
 | `PosterCanvasLayers.jsx` | The overlay node types it renders (image, magic layer, glass panel, text) |
 | `MagicLayersButton.jsx` | The ✨ button + its method/layer-count popup, shared by all three magic-layer entry points |
+| `MagicLayersPreviewModal.jsx` | The `✨N` badge's drag-to-test sandbox for one already-decomposed group — nothing is saved |
 | `PosterPanels.jsx` | Its side-panel widgets (effects, layer toolbar, glass/text panels, picker rows) |
 | `PosterGallery.jsx` | Saved posters; select-main, delete, reopen for editing |
 | `VideoStage.jsx` | Animation stage — **one scene at a time**; motion prompt, image pick, wishes, generation, batch export/import |

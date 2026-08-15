@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Crop, Star, Trash2, Upload } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import MagicLayersButton from './MagicLayersButton.jsx';
+import MagicLayersPreviewModal from './MagicLayersPreviewModal.jsx';
+import { bestMagicLayerGroup } from '../../lib/posterLayers.js';
 
 /** Single-image "hero" preview for a scene's `images` array - fills its
  * container edge-to-edge (`.scene-image-panel`, a padding-less sibling block
@@ -34,15 +36,12 @@ export default function ImageCarousel({
 }) {
   const [broken, setBroken] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [previewGroup, setPreviewGroup] = useState(null);
   const total = images.length;
   const image = total ? images[Math.min(currentIndex, total - 1)] : null;
   const showImage = Boolean(image?.file_path) && !broken;
   const canDrop = Boolean(onDropFile || onDropUrl);
-  const magicLayerCount = image?.file_path
-    ? magicLayerGroups
-      .filter((g) => g.source_path === image.file_path)
-      .reduce((max, g) => Math.max(max, g.layers?.length || 0), 0)
-    : 0;
+  const magicGroup = image?.file_path ? bestMagicLayerGroup(magicLayerGroups, image.file_path) : null;
 
   function go(delta) {
     if (total < 2) return;
@@ -138,8 +137,13 @@ export default function ImageCarousel({
             })}
           />
         )}
-        {showImage && magicLayerCount > 0 && (
-          <span className="magic-layer-badge" title={L.magic_ready}>{`✨ ${magicLayerCount}`}</span>
+        {showImage && magicGroup && (
+          <button
+            className="magic-layer-badge" title={L.magic_ready}
+            onClick={(e) => { e.stopPropagation(); setPreviewGroup(magicGroup); }}
+          >
+            {`✨ ${magicGroup.layers.length}`}
+          </button>
         )}
         {showImage && showStars && (
           <div className="image-carousel-stars" onClick={(e) => e.stopPropagation()}>
@@ -151,6 +155,12 @@ export default function ImageCarousel({
           </div>
         )}
       </div>
+      {previewGroup && (
+        <MagicLayersPreviewModal
+          L={L} projectId={projectId} group={previewGroup}
+          onClose={() => setPreviewGroup(null)}
+        />
+      )}
     </div>
   );
 }

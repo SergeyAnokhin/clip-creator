@@ -1791,7 +1791,106 @@
   font-size: 10.5px;
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
-  pointer-events: none;
+  border: none;
+  cursor: pointer;
+}
+
+.magic-layer-badge:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ---------- Magic-layers preview sandbox (MagicLayersPreviewModal.jsx) ---------- */
+
+.magic-preview-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+}
+
+.magic-preview-subtitle {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  margin-right: auto;
+  margin-left: 12px;
+}
+
+.magic-preview-body {
+  display: flex;
+  gap: 14px;
+  min-height: 0;
+}
+
+.magic-preview-stage {
+  flex: 1;
+  min-width: 0;
+}
+
+.magic-preview-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  max-height: 66vh;
+}
+
+.magic-preview-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin-bottom: 4px;
+}
+
+.magic-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.magic-preview-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.magic-preview-row.is-selected {
+  border-color: var(--accent);
+  background: rgba(255, 157, 92, 0.08);
+}
+
+.magic-preview-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 5px;
+  flex-shrink: 0;
+  background: repeating-conic-gradient(#2a2a2a 0% 25%, #363636 0% 50%) 50% / 8px 8px;
+}
+
+.magic-preview-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.magic-preview-row-label {
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.magic-preview-row-offset {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .titlecard-gallery-caption {

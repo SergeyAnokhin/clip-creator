@@ -422,7 +422,8 @@ layer never leaves a hole. Backend seam is
 [`providers/magic_layers.py`](../backend/app/providers/magic_layers.py) +
 [`routers/magic_layers.py`](../backend/app/routers/magic_layers.py); frontend is
 `hooks/useMagicLayers.js`, the shared `MagicLayersButton.jsx` (the ✨ button and
-its method popup) and the poster constructor's `magic` layer kind. Data shape in
+its method popup), `MagicLayersPreviewModal.jsx` (the test sandbox, see below)
+and the poster constructor's `magic` layer kind. Data shape in
 [data-model.md](data-model.md).
 
 ```
@@ -438,6 +439,10 @@ POST /magic-layers ──► job ──► Qwen-Image-Layered (fal | replicate)
         ▼
 project.magic_layer_groups[] + magic/{group_id}/L{n}.png
         │
+        ├─ ✨N badge (Images stage / Title Card gallery)
+        │      ▼
+        │  MagicLayersPreviewModal — drag-to-test sandbox, nothing persisted
+        │
         ▼  "Применить" in the poster constructor
 N draggable magic layers (bottom-to-top), the flat original hidden underneath
 ```
@@ -449,6 +454,11 @@ N draggable magic layers (bottom-to-top), the flat original hidden underneath
 - **Async job + poll**, not a synchronous route: a decomposition takes 15-30s.
   Same in-memory `_jobs` dict / `start_job` / `get_job` shape as `title_card.py`;
   the group is written to disk and persisted before the job flips to `completed`.
+  The poll deadline differs per host: **300s for Replicate**, **600s for FAL**
+  (`_JOB_TIMEOUT` / `_FAL_JOB_TIMEOUT` in `magic_layers.py`) — FAL's queue was
+  observed to run past 300s under load (2026-08-15: a real decomposition timed
+  out at 304.8s while the Replicate retry of the same image finished in 20s),
+  so only its ceiling was raised rather than both.
 - **The model guarantees neither ordering nor resolution**, and `_postprocess`
   (a pure, separately tested function) compensates for both: the background is
   detected as the layer with the largest opaque area rather than trusting index
@@ -464,6 +474,18 @@ N draggable magic layers (bottom-to-top), the flat original hidden underneath
   decomposition is reusable by every poster. All three entry points — the Images
   stage carousel, the Title Card gallery, and the constructor's own panel —
   address a group by its `source_path`.
+- **Testing a split before committing to a poster**: once a group exists, the
+  Images stage carousel and the Title Card gallery show a clickable `✨N`
+  badge (`.magic-layer-badge`, previously just a static counter) over the
+  source image. Clicking it opens `MagicLayersPreviewModal.jsx` — a Konva
+  `Stage` sandbox where every layer can be dragged, hidden/shown, and reset,
+  with a live `x, y` offset readout per layer. It deliberately shares nothing
+  with `OverlayImage`/`MagicLayerNode` (no crop, effects, or Transformer) and
+  never writes anywhere — closing it discards every offset, so it is purely a
+  "did this separate cleanly, with no holes or bleed" check before spending a
+  poster slot on the group. `posterLayers.js`'s `bestMagicLayerGroup` picks
+  which group the badge/modal shows when one source has been decomposed more
+  than once (most layers, ties broken by recency).
 - **In the constructor**, magic layers are their own layer kind rendered as one
   ordered block right after the background (bg → **magic** → glass → title card →
   logo → text), reordered within the block by ↑/↓. Everything else — drag,
