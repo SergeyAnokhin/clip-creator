@@ -174,7 +174,7 @@ hooks return `{ state, actions }`.
 | `ExportStage.jsx` | Picks what goes in the final zip and downloads it |
 | `EditorStage.jsx` | NLE-style layout: program monitor + track/render side panel on top, `EditorTimeline.jsx` docked under them |
 | `EditorPreview.jsx` | Program monitor: muted `<video>` synced to a hidden `<audio>`, plus the transport row. Approximate, not the real render |
-| `EditorTimeline.jsx` | The timeline proper: ruler, clip blocks drawn to scale, playhead, zoom. Drag = reorder, edge drag = trim, ruler drag = scrub, razor = split |
+| `EditorTimeline.jsx` | The timeline proper: ruler, clip blocks drawn to scale, playhead, zoom. Drag = reorder, edge drag = trim, ruler drag = scrub, razor = split. Desktop-oriented by design: layout adapts down to mobile/tablet widths, but the drag/trim gestures themselves are mouse-only — no touch adaptation (clips are keyboard-operable via Tab/arrows/Enter as a mouse alternative, not a touch one) |
 | `TimelineAudioTrack.jsx` | The timeline's audio row — decoded waveform `<canvas>` on the same px/ms scale |
 | `TimelineClipInspector.jsx` | Selected clip's exact values: video variant, trim, speed, remove |
 | `ModelPicker.jsx` | `<select>` over a favorites list → `"{provider}:{id}"` composite |

@@ -92,7 +92,11 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    means "reorder", not "move to this exact time". The in-browser preview never
    touches ffmpeg (a `<video>`+`<audio>` pair synced off a
    `requestAnimationFrame` playhead approximates the cut); only the server-side
-   render is pixel-accurate.
+   render is pixel-accurate. This stage is desktop-oriented by design: the
+   layout itself adapts down to mobile/tablet widths, but the direct-manipulation
+   gestures (drag, edge-trim) are mouse-only and intentionally not adapted for
+   touch — a keyboard alternative (Tab to a clip, arrow keys between clips,
+   Enter/Space to select) covers non-mouse desktop use instead.
 
 Scenes and Images are two stages because they are two independent AI calls with
 independent model choices — you can reroll a scene's images without re-running

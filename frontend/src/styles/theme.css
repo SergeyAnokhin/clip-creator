@@ -3106,6 +3106,12 @@
   z-index: 5;
 }
 
+.tl-clip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+  z-index: 4;
+}
+
 .tl-clip-label {
   position: relative;
   z-index: 1;

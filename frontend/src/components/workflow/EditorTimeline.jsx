@@ -56,6 +56,7 @@ export default function EditorTimeline({
   const contentRef = useRef(null);
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
+  const clipNodesRef = useRef({});
   const pendingScrollRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(900);
   const [zoomPxPerMs, setZoomPxPerMs] = useState(null); // null = fit the whole timeline
@@ -144,6 +145,14 @@ export default function EditorTimeline({
     setDrag({ mode: 'move', index, startX: e.clientX, startMs: clip.startMs });
   }
 
+  function onClipKeyDown(e, clip) {
+    if (e.code === 'Enter' || e.code === 'Space') {
+      e.preventDefault();
+      e.stopPropagation();
+      actions.selectClip(clip.clip_id);
+    }
+  }
+
   function startTrimDrag(e, clip, edge) {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -215,6 +224,18 @@ export default function EditorTimeline({
   }, [playheadMs, isPlaying, scale, drag]);
 
   function onKeyDown(e) {
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      if (!clips.length) return;
+      e.preventDefault();
+      const currentIndex = clips.findIndex((c) => c.clip_id === selectedClipId);
+      const nextIndex = e.code === 'ArrowLeft'
+        ? Math.max(0, (currentIndex === -1 ? clips.length : currentIndex) - 1)
+        : Math.min(clips.length - 1, currentIndex + 1);
+      const nextClip = clips[nextIndex];
+      actions.selectClip(nextClip.clip_id);
+      clipNodesRef.current[nextClip.clip_id]?.focus();
+      return;
+    }
     if (e.target !== e.currentTarget) return;
     if (e.code === 'Space') {
       e.preventDefault();
@@ -275,6 +296,7 @@ export default function EditorTimeline({
               return (
                 <div
                   key={clip.clip_id}
+                  ref={(el) => { if (el) clipNodesRef.current[clip.clip_id] = el; else delete clipNodesRef.current[clip.clip_id]; }}
                   className={`tl-clip${clip.clip_id === selectedClipId ? ' is-selected' : ''}${isDragging ? ' is-dragging' : ''}`}
                   style={{
                     left: clip.startMs * scale + (isDragging ? dragDx : 0),
@@ -282,7 +304,10 @@ export default function EditorTimeline({
                     backgroundImage: thumb ? `url(${mediaUrl(`projects/${projectId}/${thumb}`)})` : undefined,
                   }}
                   onPointerDown={(e) => startClipDrag(e, clip, index)}
+                  onKeyDown={(e) => onClipKeyDown(e, clip)}
                   title={sceneLabel(scene, clip.scene_index)}
+                  role="button"
+                  tabIndex={0}
                 >
                   <span className="tl-clip-handle tl-clip-handle-start" onPointerDown={(e) => startTrimDrag(e, clip, 'start')} />
                   <span className="tl-clip-label">

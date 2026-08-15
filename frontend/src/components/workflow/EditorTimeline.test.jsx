@@ -177,6 +177,70 @@ describe('EditorTimeline gestures', () => {
   });
 });
 
+// Keyboard alternative to the pointer-only drag/trim gestures above - clips
+// are focusable and selectable without a mouse. This does not cover drag or
+// trim by keyboard, which remain mouse-only by design (see docs/code-map.md).
+describe('EditorTimeline keyboard clip navigation', () => {
+  it('selects a clip via Enter/Space on the clip itself, mirroring pointerdown selection', () => {
+    const { container, actions } = renderTimeline();
+    const clipB = container.querySelectorAll('.tl-clip')[1];
+    fireEvent.keyDown(clipB, { code: 'Enter' });
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_b');
+  });
+
+  it('stops Space on a focused clip from also bubbling into the play/pause shortcut', () => {
+    const { container, actions } = renderTimeline({ isPlaying: false });
+    const clipA = container.querySelectorAll('.tl-clip')[0];
+    fireEvent.keyDown(clipA, { code: 'Space' });
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_a');
+    expect(actions.play).not.toHaveBeenCalled();
+  });
+
+  it('arrow-right with nothing selected selects and focuses the first clip', () => {
+    const { container, actions } = renderTimeline();
+    const scroll = container.querySelector('.tl-scroll');
+    const [clipA] = container.querySelectorAll('.tl-clip');
+
+    fireEvent.keyDown(scroll, { code: 'ArrowRight' });
+
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_a');
+    expect(document.activeElement).toBe(clipA);
+  });
+
+  it('arrow-left with nothing selected selects and focuses the last clip', () => {
+    const { container, actions } = renderTimeline();
+    const scroll = container.querySelector('.tl-scroll');
+    const [, clipB] = container.querySelectorAll('.tl-clip');
+
+    fireEvent.keyDown(scroll, { code: 'ArrowLeft' });
+
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_b');
+    expect(document.activeElement).toBe(clipB);
+  });
+
+  it('arrow-right from a selected clip moves to its right-hand neighbor', () => {
+    const { container, actions } = renderTimeline({ selectedClipId: 'clip_a' });
+    const scroll = container.querySelector('.tl-scroll');
+    const [, clipB] = container.querySelectorAll('.tl-clip');
+
+    fireEvent.keyDown(scroll, { code: 'ArrowRight' });
+
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_b');
+    expect(document.activeElement).toBe(clipB);
+  });
+
+  it('clamps at the ends instead of wrapping past the first/last clip', () => {
+    const { container, actions } = renderTimeline({ selectedClipId: 'clip_a' });
+    const scroll = container.querySelector('.tl-scroll');
+    const [clipA] = container.querySelectorAll('.tl-clip');
+
+    fireEvent.keyDown(scroll, { code: 'ArrowLeft' });
+
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_a');
+    expect(document.activeElement).toBe(clipA);
+  });
+});
+
 // A zoomed-in timeline is one very wide DOM element - MAX_CONTENT_PX (see
 // EditorTimeline.jsx) exists specifically to keep that element and its
 // waveform <canvas> within the browser's own size limits when the project

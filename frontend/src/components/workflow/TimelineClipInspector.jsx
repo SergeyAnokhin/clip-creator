@@ -39,20 +39,22 @@ export default function TimelineClipInspector({ L, clip, scene, sourceDurationMs
         ))}
       </select>
 
-      <label className="tl-inspector-label">
+      <span className="tl-inspector-label">
         {L.editor_clipTrimLabel}
         <input
           type="number" step="0.1" min={0} {...(sourceDurationMs > 0 ? { max: (sourceDurationMs / 1000).toFixed(1) } : {})}
           className="field tl-inspector-num" value={(clip.trimStartMs / 1000).toFixed(1)}
+          aria-label={L.editor_clipTrimStartLabel}
           onChange={(e) => commitTrim(Number(e.target.value) * 1000, clip.trimEndMs)}
         />
         →
         <input
           type="number" step="0.1" min={0} {...(sourceDurationMs > 0 ? { max: (sourceDurationMs / 1000).toFixed(1) } : {})}
           className="field tl-inspector-num" value={(clip.trimEndMs / 1000).toFixed(1)}
+          aria-label={L.editor_clipTrimEndLabel}
           onChange={(e) => commitTrim(clip.trimStartMs, Number(e.target.value) * 1000)}
         />
-      </label>
+      </span>
 
       <label className="tl-inspector-label">
         {L.editor_clipSpeedLabel}
