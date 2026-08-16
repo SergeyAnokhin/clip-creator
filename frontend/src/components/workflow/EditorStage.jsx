@@ -1,12 +1,30 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Clapperboard, Download, Loader2, Pause, Play, SkipBack, Trash2, Wand2,
 } from 'lucide-react';
 import EditorPreview from './EditorPreview.jsx';
 import EditorTimeline from './EditorTimeline.jsx';
+import KeyboardShortcutsModal from './KeyboardShortcutsModal.jsx';
 import { mediaUrl } from '../../api/client.js';
 
 const DURATION_MISMATCH_THRESHOLD_MS = 1000;
+const SIDE_WIDTH_STORAGE_KEY = 'editorSideWidthPx';
+const DEFAULT_SIDE_WIDTH = 320;
+const MIN_SIDE_WIDTH = 240;
+const MAX_SIDE_WIDTH = 560;
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function loadStoredSideWidth() {
+  try {
+    const stored = Number(localStorage.getItem(SIDE_WIDTH_STORAGE_KEY));
+    return Number.isFinite(stored) && stored > 0 ? clamp(stored, MIN_SIDE_WIDTH, MAX_SIDE_WIDTH) : DEFAULT_SIDE_WIDTH;
+  } catch {
+    return DEFAULT_SIDE_WIDTH;
+  }
+}
 
 function formatSeconds(ms) {
   return (ms / 1000).toFixed(1);
@@ -33,10 +51,44 @@ function formatTime(ms) {
  * layout only. */
 export default function EditorStage({
   L, project, isMobile, videoEdit, clips, totalDurationMs, selectedTrack, tracks,
-  playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds, selectedClipId,
+  playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds, selectedClipIds,
   videoRef, audioRef, actions,
 }) {
   const [toolsSlot, setToolsSlot] = useState(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [sideWidthPx, setSideWidthPx] = useState(loadStoredSideWidth);
+  const [resizeDrag, setResizeDrag] = useState(null);
+
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    function onKeyDown(e) {
+      if (e.key === 'Escape') setIsFullscreen(false);
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    if (!resizeDrag) return undefined;
+    function onMove(e) {
+      setSideWidthPx(clamp(resizeDrag.startWidth - (e.clientX - resizeDrag.startX), MIN_SIDE_WIDTH, MAX_SIDE_WIDTH));
+    }
+    function onUp() {
+      setResizeDrag(null);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [resizeDrag]);
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDE_WIDTH_STORAGE_KEY, String(sideWidthPx)); } catch { /* ignore */ }
+  }, [sideWidthPx]);
+
   const scenes = project.scenes || [];
   const renders = [...(videoEdit.renders || [])].reverse();
   const mismatchMs = selectedTrack ? totalDurationMs - selectedTrack.duration_ms : 0;
@@ -45,11 +97,24 @@ export default function EditorStage({
   const timelineMs = Math.max(totalDurationMs, selectedTrack?.duration_ms || 0);
 
   return (
-    <div className={`editor-stage${isMobile ? ' is-mobile' : ''}`}>
+    <div className={`editor-stage${isMobile ? ' is-mobile' : ''}${isFullscreen ? ' editor-fullscreen' : ''}`}>
       <div className={`editor-layout${isMobile ? ' is-mobile' : ''}`}>
-        <EditorPreview videoRef={videoRef} audioRef={audioRef} projectId={project.id} selectedTrack={selectedTrack} />
+        <EditorPreview
+          L={L} videoRef={videoRef} audioRef={audioRef} projectId={project.id} selectedTrack={selectedTrack}
+          isFullscreen={isFullscreen} onToggleFullscreen={() => setIsFullscreen((v) => !v)}
+        />
 
-        <div className="editor-side">
+        {!isMobile && (
+          <div
+            className={`editor-resizer${resizeDrag ? ' is-dragging' : ''}`}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              setResizeDrag({ startX: e.clientX, startWidth: sideWidthPx });
+            }}
+          />
+        )}
+
+        <div className="editor-side" style={{ '--editor-side-w': `${sideWidthPx}px` }}>
           <div className="editor-side-scroll">
             <div className="editor-side-block editor-side-title">
               <div className="stage-heading-title">{L.editorStageTitle}</div>
@@ -133,8 +198,11 @@ export default function EditorStage({
       <EditorTimeline
         L={L} projectId={project.id} scenes={scenes} clips={clips} totalDurationMs={totalDurationMs}
         selectedTrack={selectedTrack} playheadMs={playheadMs} isPlaying={isPlaying}
-        selectedClipId={selectedClipId} actions={actions} toolsSlotNode={toolsSlot}
+        selectedClipIds={selectedClipIds} actions={actions} toolsSlotNode={toolsSlot}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
       />
+
+      {shortcutsOpen && <KeyboardShortcutsModal L={L} onClose={() => setShortcutsOpen(false)} />}
     </div>
   );
 }

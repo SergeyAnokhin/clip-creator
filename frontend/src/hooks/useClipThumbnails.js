@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { mediaUrl } from '../api/client.js';
 
 const MAX_THUMBS = 6;
-const MIN_SLOT_PX = 44;
+// Exported so TimelineClipBlock.jsx can decide when a block is wide enough to
+// expect frames at all, instead of showing a loading pulse on a sliver too
+// narrow for even one thumbnail slot.
+export const MIN_SLOT_PX = 44;
 const THUMB_W = 160;
 const THUMB_H = 90;
 
@@ -62,7 +65,10 @@ function seekTo(video, seconds) {
 async function extractFrames(src, timestampsMs) {
   const { video, canvas } = workerNodes();
   const ctx = canvas.getContext('2d');
-  await loadVideo(video, src);
+  // The shared decoder already has this exact source loaded (e.g. a trim
+  // edit on the same clip only changed the timestamps to sample) - skip the
+  // reload/loadedmetadata round-trip and seek straight away.
+  if (video.currentSrc !== src) await loadVideo(video, src);
   const frames = [];
   for (const ms of timestampsMs) {
     // eslint-disable-next-line no-await-in-loop -- frames must be captured in order, one seek at a time, on the one shared <video>

@@ -30,12 +30,13 @@ function renderTimeline(overrides = {}) {
   const clips = overrides.clips || computeTimelineClips(RAW_CLIPS, SOURCE_DURATIONS);
   const actions = {
     seek: vi.fn(), selectClip: vi.fn(), reorderClip: vi.fn(), setClipTrim: vi.fn(),
-    splitAtPlayhead: vi.fn(), removeClip: vi.fn(), play: vi.fn(), pause: vi.fn(),
+    splitAtPlayhead: vi.fn(), removeClips: vi.fn(), play: vi.fn(), pause: vi.fn(),
+    setSelection: vi.fn(), selectAll: vi.fn(), duplicateClips: vi.fn(), copyClips: vi.fn(), pasteClips: vi.fn(),
     ...overrides.actions,
   };
   const props = {
     L, projectId: 'p1', scenes: SCENES, totalDurationMs: getTotalDurationMs(RAW_CLIPS, SOURCE_DURATIONS),
-    selectedTrack: null, playheadMs: 0, isPlaying: false, selectedClipId: null,
+    selectedTrack: null, playheadMs: 0, isPlaying: false, selectedClipIds: new Set(),
     ...overrides, clips, actions,
   };
   const utils = render(<EditorTimeline {...props} />);
@@ -138,11 +139,11 @@ describe('EditorTimeline gestures', () => {
     expect(actions.splitAtPlayhead).toHaveBeenCalledTimes(1);
   });
 
-  it('removes the selected clip on Delete', () => {
-    const { container, actions } = renderTimeline({ selectedClipId: 'clip_a' });
+  it('removes the selected clip(s) on Delete', () => {
+    const { container, actions } = renderTimeline({ selectedClipIds: new Set(['clip_a']) });
     const scroll = container.querySelector('.tl-scroll');
     fireEvent.keyDown(scroll, { code: 'Delete' });
-    expect(actions.removeClip).toHaveBeenCalledWith('clip_a');
+    expect(actions.removeClips).toHaveBeenCalledWith(['clip_a']);
   });
 
   it('toggles play/pause on Space', () => {
@@ -219,7 +220,7 @@ describe('EditorTimeline keyboard clip navigation', () => {
   });
 
   it('arrow-right from a selected clip moves to its right-hand neighbor', () => {
-    const { container, actions } = renderTimeline({ selectedClipId: 'clip_a' });
+    const { container, actions } = renderTimeline({ selectedClipIds: new Set(['clip_a']) });
     const scroll = container.querySelector('.tl-scroll');
     const [, clipB] = container.querySelectorAll('.tl-clip');
 
@@ -230,7 +231,7 @@ describe('EditorTimeline keyboard clip navigation', () => {
   });
 
   it('clamps at the ends instead of wrapping past the first/last clip', () => {
-    const { container, actions } = renderTimeline({ selectedClipId: 'clip_a' });
+    const { container, actions } = renderTimeline({ selectedClipIds: new Set(['clip_a']) });
     const scroll = container.querySelector('.tl-scroll');
     const [clipA] = container.querySelectorAll('.tl-clip');
 
@@ -238,6 +239,67 @@ describe('EditorTimeline keyboard clip navigation', () => {
 
     expect(actions.selectClip).toHaveBeenCalledWith('clip_a');
     expect(document.activeElement).toBe(clipA);
+  });
+});
+
+describe('EditorTimeline multi-select', () => {
+  it('ctrl+click adds a clip to the selection instead of dragging it', () => {
+    const { container, actions } = renderTimeline();
+    const clipB = container.querySelectorAll('.tl-clip')[1];
+
+    fireEvent.pointerDown(clipB, { clientX: 600, button: 0, ctrlKey: true });
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_b', { additive: true, range: false });
+
+    fireEvent(window, new PointerEvent('pointermove', { clientX: 700, bubbles: true }));
+    fireEvent(window, new PointerEvent('pointerup', { clientX: 700, bubbles: true }));
+    expect(actions.reorderClip).not.toHaveBeenCalled();
+  });
+
+  it('shift+click range-selects instead of dragging', () => {
+    const { container, actions } = renderTimeline();
+    const clipB = container.querySelectorAll('.tl-clip')[1];
+
+    fireEvent.pointerDown(clipB, { clientX: 600, button: 0, shiftKey: true });
+    expect(actions.selectClip).toHaveBeenCalledWith('clip_b', { additive: false, range: true });
+  });
+
+  it('marquee-selects every clip a shift-dragged rectangle overlaps', () => {
+    const { container, actions } = renderTimeline();
+    const content = container.querySelector('.tl-content');
+
+    fireEvent.pointerDown(content, { clientX: 100, button: 0, shiftKey: true });
+    fireEvent(window, new PointerEvent('pointermove', { clientX: 500, bubbles: true }));
+    fireEvent(window, new PointerEvent('pointerup', { clientX: 500, bubbles: true }));
+
+    // Rectangle spans ~1111-5556ms, overlapping both clip_a (0-5000) and
+    // clip_b (5000-10000) - and it must take the marquee path, not scrub.
+    expect(actions.setSelection).toHaveBeenCalledWith(['clip_a', 'clip_b']);
+    expect(actions.seek).not.toHaveBeenCalled();
+    expect(actions.selectClip).not.toHaveBeenCalled();
+  });
+
+  it('selects every clip on Ctrl+A', () => {
+    const { container, actions } = renderTimeline();
+    const scroll = container.querySelector('.tl-scroll');
+    fireEvent.keyDown(scroll, { code: 'KeyA', ctrlKey: true });
+    expect(actions.selectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('duplicates the selection on Ctrl+D', () => {
+    const { container, actions } = renderTimeline({ selectedClipIds: new Set(['clip_a', 'clip_b']) });
+    const scroll = container.querySelector('.tl-scroll');
+    fireEvent.keyDown(scroll, { code: 'KeyD', ctrlKey: true });
+    expect(actions.duplicateClips).toHaveBeenCalledTimes(1);
+    expect(actions.duplicateClips.mock.calls[0][0].sort()).toEqual(['clip_a', 'clip_b']);
+  });
+
+  it('copies then pastes the selection on Ctrl+C / Ctrl+V', () => {
+    const { container, actions } = renderTimeline({ selectedClipIds: new Set(['clip_a']) });
+    const scroll = container.querySelector('.tl-scroll');
+    fireEvent.keyDown(scroll, { code: 'KeyC', ctrlKey: true });
+    expect(actions.copyClips).toHaveBeenCalledWith(['clip_a']);
+    fireEvent.keyDown(scroll, { code: 'KeyV', ctrlKey: true });
+    expect(actions.pasteClips).toHaveBeenCalledTimes(1);
   });
 });
 

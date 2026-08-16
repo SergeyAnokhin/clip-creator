@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, Plus, Scissors, ZoomIn, ZoomOut } from 'lucide-react';
+import { Keyboard, Maximize2, Plus, Scissors, ZoomIn, ZoomOut } from 'lucide-react';
 import { applyEdgeTrim, dropIndexForStart } from '../../lib/timeline.js';
 import TimelineAudioTrack from './TimelineAudioTrack.jsx';
 import TimelineClipInspector from './TimelineClipInspector.jsx';
@@ -17,6 +17,11 @@ const MIN_TICK_GAP_PX = 66;
 const ZOOM_FACTOR = 1.6;
 const VIDEO_TRACK_H = 66;
 const AUDIO_TRACK_H = 42;
+// Mirrors .tl-ruler's CSS height and .tl-track's margin-top - only needed so
+// the marquee-select rectangle can span "ruler + video row" without actually
+// measuring the DOM.
+const RULER_H = 20;
+const TRACK_GAP = 6;
 
 function formatTimecode(ms) {
   const total = Math.max(0, Math.round(ms / 1000));
@@ -42,7 +47,7 @@ function rulerStepMs(scale) {
  * horizontal drag means "change the order", not "move to this exact time". */
 export default function EditorTimeline({
   L, projectId, scenes, clips, totalDurationMs, selectedTrack, playheadMs, isPlaying,
-  selectedClipId, actions, toolsSlotNode,
+  selectedClipIds, actions, toolsSlotNode, onOpenShortcuts,
 }) {
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
@@ -63,7 +68,11 @@ export default function EditorTimeline({
   const contentWidth = contentDurationMs * scale;
   const stepMs = rulerStepMs(scale);
   const tickCount = Math.floor(contentDurationMs / stepMs) + 1;
-  const selectedClip = clips.find((c) => c.clip_id === selectedClipId) || null;
+  // The inspector only shows editable fields for an exact single selection -
+  // 0 or 2+ selected clips get their own summary states there instead.
+  const selectedClip = selectedClipIds.size === 1
+    ? clips.find((c) => selectedClipIds.has(c.clip_id)) || null
+    : null;
   const selectedScene = selectedClip ? scenes?.[selectedClip.scene_index] : null;
   const selectedSourceMs = selectedClip
     ? ((selectedScene?.videos || []).find((v) => v.video_id === selectedClip.video_id)?.duration_seconds || 0) * 1000
@@ -97,7 +106,7 @@ export default function EditorTimeline({
         return;
       }
       const dx = e.clientX - drag.startX;
-      if (drag.mode === 'move') {
+      if (drag.mode === 'move' || drag.mode === 'marquee') {
         setDragDx(dx);
         return;
       }
@@ -111,6 +120,14 @@ export default function EditorTimeline({
         const newStartMs = drag.startMs + (e.clientX - drag.startX) / scale;
         const toIndex = dropIndexForStart(clipsRef.current, drag.index, newStartMs);
         if (toIndex !== drag.index) actions.reorderClip(drag.index, toIndex);
+      } else if (drag.mode === 'marquee') {
+        const endMs = pointerToMs(e.clientX);
+        const fromMs = Math.min(drag.startMs, endMs);
+        const toMs = Math.max(drag.startMs, endMs);
+        const ids = clipsRef.current
+          .filter((c) => c.startMs < toMs && c.startMs + c.durationMs > fromMs)
+          .map((c) => c.clip_id);
+        actions.setSelection(ids);
       }
       setDrag(null);
       setDragDx(0);
@@ -130,9 +147,34 @@ export default function EditorTimeline({
     setDrag({ mode: 'scrub' });
   }
 
+  /** Dispatches a background pointerdown on `.tl-content` to either a scrub
+   * (the default - drag the ruler/track to move the playhead) or a marquee
+   * rectangle select. Since clips tile the video row edge to edge (no gaps
+   * by design - see the file header comment) there's rarely bare row space
+   * to start a marquee from, so it's also reachable by holding Shift/Ctrl
+   * anywhere in the content area, not just over genuinely empty track
+   * background (the freeze-tail pad, or an empty timeline). */
+  function startContentPointerDown(e) {
+    if (e.button !== 0) return;
+    const overTrackBg = e.target.closest('.tl-track') && !e.target.closest('.tl-track-audio');
+    if (overTrackBg || e.shiftKey || e.ctrlKey || e.metaKey) {
+      setDrag({ mode: 'marquee', startX: e.clientX, startMs: pointerToMs(e.clientX) });
+      setDragDx(0);
+      return;
+    }
+    actions.selectClip(null);
+    startScrub(e);
+  }
+
   function startClipDrag(e, clip, index) {
     if (e.button !== 0) return;
     e.stopPropagation();
+    // A modifier click builds/extends the selection - it must not also drag
+    // the one clip that happened to be under the pointer.
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      actions.selectClip(clip.clip_id, { additive: e.ctrlKey || e.metaKey, range: e.shiftKey });
+      return;
+    }
     actions.selectClip(clip.clip_id);
     setDrag({ mode: 'move', index, startX: e.clientX, startMs: clip.startMs });
   }
@@ -219,7 +261,16 @@ export default function EditorTimeline({
     if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
       if (!clips.length) return;
       e.preventDefault();
-      const currentIndex = clips.findIndex((c) => c.clip_id === selectedClipId);
+      // With a multi-selection, continue from its far edge in the arrow's
+      // direction (rightmost clip for ArrowRight, leftmost for ArrowLeft) -
+      // matches the single-select case exactly when only one is selected.
+      const selectedIndices = clips.reduce((acc, c, i) => {
+        if (selectedClipIds.has(c.clip_id)) acc.push(i);
+        return acc;
+      }, []);
+      const currentIndex = selectedIndices.length
+        ? (e.code === 'ArrowRight' ? Math.max(...selectedIndices) : Math.min(...selectedIndices))
+        : -1;
       const nextIndex = e.code === 'ArrowLeft'
         ? Math.max(0, (currentIndex === -1 ? clips.length : currentIndex) - 1)
         : Math.min(clips.length - 1, currentIndex + 1);
@@ -229,14 +280,27 @@ export default function EditorTimeline({
       return;
     }
     if (e.target !== e.currentTarget) return;
+    const withMod = e.ctrlKey || e.metaKey;
     if (e.code === 'Space') {
       e.preventDefault();
       (isPlaying ? actions.pause : actions.play)();
     } else if (e.code === 'KeyS') {
       actions.splitAtPlayhead();
-    } else if ((e.code === 'Delete' || e.code === 'Backspace') && selectedClipId) {
+    } else if (withMod && e.code === 'KeyA') {
       e.preventDefault();
-      actions.removeClip(selectedClipId);
+      actions.selectAll();
+    } else if (withMod && e.code === 'KeyD' && selectedClipIds.size) {
+      e.preventDefault();
+      actions.duplicateClips(Array.from(selectedClipIds));
+    } else if (withMod && e.code === 'KeyC' && selectedClipIds.size) {
+      e.preventDefault();
+      actions.copyClips(Array.from(selectedClipIds));
+    } else if (withMod && e.code === 'KeyV') {
+      e.preventDefault();
+      actions.pasteClips();
+    } else if ((e.code === 'Delete' || e.code === 'Backspace') && selectedClipIds.size) {
+      e.preventDefault();
+      actions.removeClips(Array.from(selectedClipIds));
     }
   }
 
@@ -262,11 +326,15 @@ export default function EditorTimeline({
         <button className="icon-btn" title={L.editor_toolZoomIn} onClick={() => applyZoom(scale * ZOOM_FACTOR)} disabled={scale >= maxScale}>
           <ZoomIn size={14} />
         </button>
+        <button className="icon-btn" title={L.editor_shortcutsButton} onClick={onOpenShortcuts}>
+          <Keyboard size={14} />
+        </button>
       </div>
       <span className="tl-hint">{L.editor_timelineHint}</span>
 
       <TimelineClipInspector
-        L={L} clip={selectedClip} scene={selectedScene} sourceDurationMs={selectedSourceMs} actions={actions}
+        L={L} clip={selectedClip} scene={selectedScene} sourceDurationMs={selectedSourceMs}
+        selectedCount={selectedClipIds.size} selectedClipIds={selectedClipIds} actions={actions}
       />
 
       {!!addableScenes.length && (
@@ -299,7 +367,7 @@ export default function EditorTimeline({
       <div className="tl-scroll" ref={scrollRef} role="application" aria-label={L.editor_timelineLabel} onKeyDown={onKeyDown} tabIndex={0}>
         <div
           className="tl-content" ref={contentRef} style={{ width: contentWidth }}
-          onPointerDown={(e) => { actions.selectClip(null); startScrub(e); }}
+          onPointerDown={startContentPointerDown}
         >
           <div className="tl-ruler">
             {Array.from({ length: tickCount }, (_, i) => (
@@ -321,7 +389,7 @@ export default function EditorTimeline({
                   clip={clip}
                   scene={scene}
                   projectId={projectId}
-                  selectedClipId={selectedClipId}
+                  selectedClipIds={selectedClipIds}
                   isDragging={isDragging}
                   left={clip.startMs * scale + (isDragging ? dragDx : 0)}
                   width={width}
@@ -352,6 +420,20 @@ export default function EditorTimeline({
           </div>
 
           <div className="tl-playhead" style={{ left: playheadMs * scale }}><span /></div>
+
+          {drag?.mode === 'marquee' && (() => {
+            const startPx = drag.startMs * scale;
+            const currentPx = startPx + dragDx;
+            return (
+              <div
+                className="tl-marquee"
+                style={{
+                  left: Math.min(startPx, currentPx), width: Math.abs(currentPx - startPx),
+                  top: 0, height: RULER_H + TRACK_GAP + VIDEO_TRACK_H,
+                }}
+              />
+            );
+          })()}
         </div>
       </div>
     </div>

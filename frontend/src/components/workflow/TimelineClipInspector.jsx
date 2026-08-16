@@ -1,12 +1,31 @@
-import { Trash2 } from 'lucide-react';
+import { Copy, Trash2 } from 'lucide-react';
 import { clampTrim } from '../../lib/timeline.js';
 
 /** Properties strip for the clip currently selected on the timeline - the
  * numeric counterpart to the direct-manipulation gestures in
  * EditorTimeline.jsx (drag = reorder, edge drag = trim). Everything here is
  * exact-value editing that a drag can't do well: which generated video
- * variant the clip uses, the trim window to a tenth of a second, and speed. */
-export default function TimelineClipInspector({ L, clip, scene, sourceDurationMs, actions }) {
+ * variant the clip uses, the trim window to a tenth of a second, and speed.
+ * A multi-selection can't sensibly show these fields for N heterogeneous
+ * clips at once, so it falls back to a summary with just duplicate/remove. */
+export default function TimelineClipInspector({
+  L, clip, scene, sourceDurationMs, selectedCount, selectedClipIds, actions,
+}) {
+  if (selectedCount > 1) {
+    const ids = Array.from(selectedClipIds);
+    return (
+      <div className="tl-inspector tl-inspector-multi">
+        <span className="tl-inspector-title">{L.editor_clipsSelected.replace('{n}', selectedCount)}</span>
+        <button className="icon-btn" title={L.editor_clipsSelectedDuplicate} onClick={() => actions.duplicateClips(ids)}>
+          <Copy size={14} />
+        </button>
+        <button className="icon-btn icon-btn-danger" title={L.editor_clipsSelectedRemove} onClick={() => actions.removeClips(ids)}>
+          <Trash2 size={14} />
+        </button>
+      </div>
+    );
+  }
+
   if (!clip) {
     return <div className="tl-inspector tl-inspector-empty">{L.editor_clipSelectHint}</div>;
   }
@@ -67,7 +86,7 @@ export default function TimelineClipInspector({ L, clip, scene, sourceDurationMs
 
       {!sourceDurationMs && <span className="tl-inspector-warn">⚠ {L.editor_unknownDuration}</span>}
 
-      <button className="icon-btn icon-btn-danger tl-inspector-remove" title={L.editor_clipRemove} onClick={() => actions.removeClip(clip.clip_id)}>
+      <button className="icon-btn icon-btn-danger tl-inspector-remove" title={L.editor_clipRemove} onClick={() => actions.removeClips([clip.clip_id])}>
         <Trash2 size={14} />
       </button>
     </div>

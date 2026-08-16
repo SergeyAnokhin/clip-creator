@@ -48,7 +48,10 @@ export default function WorkflowScreen({
           onCloseMobile={onCloseSidebarMobile}
         />
 
-        <div className="workflow-main" style={{ padding: isMobile ? '18px 14px' : '28px 32px' }}>
+        <div
+          className="workflow-main"
+          style={{ padding: activeStage === 'editor' ? 6 : (isMobile ? '18px 14px' : '28px 32px') }}
+        >
           {/* The Editor stage is a video editor - it needs the full width for
               its timeline, unlike every other stage's reading-width column. */}
           <div className={`workflow-main-inner${activeStage === 'editor' ? ' is-wide' : ''}`}>

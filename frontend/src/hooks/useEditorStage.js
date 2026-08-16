@@ -51,7 +51,7 @@ function buildSourceDurations(scenes) {
 export function useEditorStage({ activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L }) {
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [selectedClipId, setSelectedClipId] = useState(null);
+  const [selectedClipIds, setSelectedClipIds] = useState(() => new Set());
   const [renderLoading, setRenderLoading] = useState(false);
   const [renderError, setRenderError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -59,6 +59,13 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   const audioRef = useRef(null);
   const rafRef = useRef(null);
   const activeClipIndexRef = useRef(-1);
+  // Shift+click range-select anchors off the last plain/modifier click, not
+  // off whatever the render order of the Set happens to be.
+  const selectionAnchorRef = useRef(null);
+  // Copy/paste is in-memory and same-project only (not the OS clipboard) -
+  // no permission prompt, and "paste" only ever means "append a copy of
+  // these clips to this timeline".
+  const clipboardRef = useRef([]);
 
   useEffect(() => {
     if (renderLoading) {
@@ -73,7 +80,8 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     setPlayheadMs(0);
     setIsPlaying(false);
     setRenderError(null);
-    setSelectedClipId(null);
+    setSelectedClipIds(new Set());
+    selectionAnchorRef.current = null;
     activeClipIndexRef.current = -1;
     // Loose check on purpose: a project's `video_edit` can be persisted as
     // `null` (not just absent) - e.g. `updateProject((p) => ({ ...p,
@@ -142,10 +150,84 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       clips: splitClipsAt(edit.clips, sourceDurationsById, playheadMs, () => randomId('clip')),
     }));
   }
-  function removeClip(clipId) {
+  function removeClips(clipIds) {
     invalidatePreviewClip();
-    setSelectedClipId((current) => (current === clipId ? null : current));
-    patchVideoEdit((edit) => ({ ...edit, clips: edit.clips.filter((c) => c.clip_id !== clipId) }));
+    const idSet = new Set(clipIds);
+    setSelectedClipIds((current) => {
+      const next = new Set(current);
+      idSet.forEach((id) => next.delete(id));
+      return next;
+    });
+    patchVideoEdit((edit) => ({ ...edit, clips: edit.clips.filter((c) => !idSet.has(c.clip_id)) }));
+  }
+
+  /** Plain click replaces the selection; Ctrl/Cmd+click toggles one clip in
+   * or out of it; Shift+click extends from the last plain/modifier click
+   * (`selectionAnchorRef`) to the clicked clip, by timeline order. `null`
+   * (background click) always clears, regardless of modifiers. */
+  function selectClip(clipId, opts = {}) {
+    const { additive, range } = opts;
+    if (clipId == null) {
+      setSelectedClipIds(new Set());
+      selectionAnchorRef.current = null;
+      return;
+    }
+    if (range && selectionAnchorRef.current) {
+      const ids = timelineClips.map((c) => c.clip_id);
+      const anchorIndex = ids.indexOf(selectionAnchorRef.current);
+      const targetIndex = ids.indexOf(clipId);
+      if (anchorIndex !== -1 && targetIndex !== -1) {
+        const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+        setSelectedClipIds(new Set(ids.slice(from, to + 1)));
+        return;
+      }
+    }
+    if (additive) {
+      setSelectedClipIds((current) => {
+        const next = new Set(current);
+        if (next.has(clipId)) next.delete(clipId); else next.add(clipId);
+        return next;
+      });
+      selectionAnchorRef.current = clipId;
+      return;
+    }
+    setSelectedClipIds(new Set([clipId]));
+    selectionAnchorRef.current = clipId;
+  }
+  /** Marquee-drag release - replaces the selection wholesale with whatever
+   * fell inside the rectangle (also used for select-all). */
+  function setSelection(clipIds) {
+    setSelectedClipIds(new Set(clipIds));
+  }
+  function selectAll() {
+    setSelectedClipIds(new Set(timelineClips.map((c) => c.clip_id)));
+  }
+  function duplicateClips(clipIds) {
+    const idSet = new Set(clipIds);
+    const idMap = new Map();
+    clips.forEach((c) => { if (idSet.has(c.clip_id)) idMap.set(c.clip_id, randomId('clip')); });
+    if (!idMap.size) return;
+    invalidatePreviewClip();
+    patchVideoEdit((edit) => {
+      const next = [];
+      edit.clips.forEach((c) => {
+        next.push(c);
+        if (idMap.has(c.clip_id)) next.push({ ...c, clip_id: idMap.get(c.clip_id) });
+      });
+      return { ...edit, clips: next };
+    });
+    setSelectedClipIds(new Set(idMap.values()));
+  }
+  function copyClips(clipIds) {
+    const idSet = new Set(clipIds);
+    clipboardRef.current = clips.filter((c) => idSet.has(c.clip_id)).map((c) => ({ ...c }));
+  }
+  function pasteClips() {
+    if (!clipboardRef.current.length) return;
+    invalidatePreviewClip();
+    const pasted = clipboardRef.current.map((c) => ({ ...c, clip_id: randomId('clip') }));
+    patchVideoEdit((edit) => ({ ...edit, clips: [...edit.clips, ...pasted] }));
+    setSelectedClipIds(new Set(pasted.map((c) => c.clip_id)));
   }
   function addSceneClip(sceneIndex, videoId) {
     invalidatePreviewClip();
@@ -297,12 +379,13 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     state: {
       videoEdit, clips: timelineClips, totalDurationMs, selectedTrack, tracks,
       playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds,
-      selectedClipId, videoRef, audioRef,
+      selectedClipIds, videoRef, audioRef,
     },
     resetForProject,
     actions: {
-      reorderClip, splitAtPlayhead, removeClip, addSceneClip, changeClipVideo,
-      setClipTrim, setClipSpeed, setMurekaTrackId, selectClip: setSelectedClipId,
+      reorderClip, splitAtPlayhead, removeClips, addSceneClip, changeClipVideo,
+      setClipTrim, setClipSpeed, setMurekaTrackId, selectClip, setSelection, selectAll,
+      duplicateClips, copyClips, pasteClips,
       play, pause, seek, startRender, deleteRender, downloadRender,
     },
   };

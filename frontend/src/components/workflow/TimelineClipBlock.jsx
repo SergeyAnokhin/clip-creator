@@ -1,5 +1,5 @@
 import { mediaUrl } from '../../api/client.js';
-import { useClipThumbnails } from '../../hooks/useClipThumbnails.js';
+import { MIN_SLOT_PX, useClipThumbnails } from '../../hooks/useClipThumbnails.js';
 import { sceneLabel } from '../../lib/editorClipLabel.js';
 
 function sceneThumb(scene) {
@@ -15,7 +15,7 @@ function sceneThumb(scene) {
  * real frames are still decoding. Pulled out of EditorTimeline.jsx's
  * `clips.map(...)` because a hook can't be called from inside a loop. */
 export default function TimelineClipBlock({
-  clip, scene, projectId, selectedClipId, isDragging, left, width,
+  clip, scene, projectId, selectedClipIds, isDragging, left, width,
   onBlockPointerDown, onTrimStartPointerDown, onTrimEndPointerDown, onKeyDown, nodeRef,
 }) {
   const video = (scene?.videos || []).find((v) => v.video_id === clip.video_id);
@@ -23,11 +23,12 @@ export default function TimelineClipBlock({
     projectId, video, trimStartMs: clip.trimStartMs, trimEndMs: clip.trimEndMs, widthPx: width,
   });
   const staticThumb = sceneThumb(scene);
+  const isLoading = !frames.length && width >= MIN_SLOT_PX;
 
   return (
     <div
       ref={nodeRef}
-      className={`tl-clip${clip.clip_id === selectedClipId ? ' is-selected' : ''}${isDragging ? ' is-dragging' : ''}`}
+      className={`tl-clip${selectedClipIds.has(clip.clip_id) ? ' is-selected' : ''}${isDragging ? ' is-dragging' : ''}${isLoading ? ' is-loading' : ''}`}
       style={{
         left,
         width,
