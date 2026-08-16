@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MIN_CLIP_MS, UNKNOWN_DURATION_FALLBACK_MS, applyEdgeTrim, clampTrim, computeClipDurationMs,
-  computeTimelineClips, dropIndexForStart, findActiveClip, getTotalDurationMs, moveClip,
+  MAX_SPEED, MIN_CLIP_MS, MIN_SPEED, UNKNOWN_DURATION_FALLBACK_MS, applyEdgeSpeed, applyEdgeTrim, clampTrim,
+  computeClipDurationMs, computeTimelineClips, dropIndexForStart, findActiveClip, getTotalDurationMs, moveClip,
   resolveTrimEndMs, splitClipsAt,
 } from './timeline.js';
 
@@ -204,6 +204,36 @@ describe('applyEdgeTrim', () => {
   it('leaves the end edge unbounded above when the source duration is unknown', () => {
     const imported = { trim_start_ms: 0, trim_end_ms: 5000, speed: 1 };
     expect(applyEdgeTrim(imported, 0, 'end', 3000).trimEndMs).toBe(8000);
+  });
+});
+
+describe('applyEdgeSpeed', () => {
+  // window = 4000-1000 = 3000ms, speed 1 -> 3000ms on the output timeline.
+  const clip = { trim_start_ms: 1000, trim_end_ms: 4000, speed: 1 };
+
+  it('slows the clip down when the end edge is dragged outward (longer output)', () => {
+    // new duration 3000+1000=4000ms -> speed 3000/4000
+    expect(applyEdgeSpeed(clip, 5000, 'end', 1000).speed).toBe(0.75);
+  });
+
+  it('speeds the clip up when the end edge is dragged inward (shorter output)', () => {
+    // new duration 3000-2000=1000ms -> speed 3000/1000
+    expect(applyEdgeSpeed(clip, 5000, 'end', -2000).speed).toBe(3);
+  });
+
+  it('the start edge reads the opposite sign of the same delta as the end edge', () => {
+    expect(applyEdgeSpeed(clip, 5000, 'start', -1000).speed).toBe(applyEdgeSpeed(clip, 5000, 'end', 1000).speed);
+  });
+
+  it('leaves the trim window itself untouched - only speed changes', () => {
+    const result = applyEdgeSpeed(clip, 5000, 'end', 1000);
+    expect(result).not.toHaveProperty('trimStartMs');
+    expect(result).not.toHaveProperty('trimEndMs');
+  });
+
+  it('clamps to MIN_SPEED/MAX_SPEED', () => {
+    expect(applyEdgeSpeed(clip, 5000, 'end', 999999).speed).toBe(MIN_SPEED);
+    expect(applyEdgeSpeed(clip, 5000, 'end', -2900).speed).toBe(MAX_SPEED);
   });
 });
 

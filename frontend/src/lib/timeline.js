@@ -3,9 +3,22 @@
  * unit tested without mounting React or touching <video>/<audio> elements.
  *
  * An `EditorClip` is `{clip_id, scene_index, video_id, trim_start_ms,
- * trim_end_ms, speed}` (`trim_end_ms: null` means "to the end of the
- * source clip"). All functions here work in the *output* timeline's
- * millisecond coordinate space (post-speed), not the source clip's own.
+ * trim_end_ms, speed, transition_in?, fade_in?, fade_out?}` (`trim_end_ms:
+ * null` means "to the end of the source clip"). All functions here work in
+ * the *output* timeline's millisecond coordinate space (post-speed), not the
+ * source clip's own.
+ *
+ * `transition_in` (`{type, duration_ms}` | absent = a hard cut) and
+ * `fade_in`/`fade_out` (`{color, duration_ms}` | absent = no fade) are
+ * resolved into a real ffmpeg `xfade`/`fade` filter at render time
+ * (`providers/editor.py`) - deliberately **not** modeled in this file's
+ * layout math. A transition overlaps its two clips' actual frames, which
+ * genuinely shortens the real output vs. the naive sum of clip durations
+ * this file computes, but the timeline already has an established, accepted
+ * tolerance for the real render differing slightly from this approximate
+ * layout (duration-mismatch warnings, the render's own `tpad` freeze-pad) -
+ * a transition's overlap is just another source of that same gap, not a
+ * reason to rework `computeTimelineClips` into a non-back-to-back layout.
  */
 
 // A manually uploaded/imported video (`video.save_uploaded_video`/
@@ -129,6 +142,48 @@ export function dropIndexForStart(timelineClips, fromIndex, newStartMs) {
     if (clip.startMs + clip.durationMs / 2 < draggedCentre) index += 1;
   });
   return index;
+}
+
+// Bounds for `speed` - mirrors the numeric field in TimelineClipInspector.jsx
+// and applies equally to the Ctrl+drag gesture in applyEdgeSpeed below.
+export const MIN_SPEED = 0.25;
+export const MAX_SPEED = 4;
+
+// `transition_in.type` - a deliberately small, curated set (not ffmpeg
+// xfade's full catalogue of wipes/slides/etc.), mirrors
+// `providers/editor.py`'s `_TRANSITION_XFADE_NAME`. 'none' means "no
+// transition_in object at all" on the clip, listed here only so the
+// inspector has a "remove transition" option in the same button row as the
+// real types.
+export const TRANSITION_TYPES = ['none', 'dissolve', 'fadeblack', 'fadewhite'];
+export const DEFAULT_TRANSITION_MS = 500;
+export const MIN_TRANSITION_MS = 50;
+
+// `fade_in`/`fade_out.color` - a plain ffmpeg `fade` filter within the
+// clip's own duration, no effect on neighbours.
+export const FADE_COLORS = ['black', 'white'];
+export const DEFAULT_FADE_MS = 500;
+
+/** New `speed` after Ctrl+dragging one edge of a clip by `deltaOutputMs` on
+ * the output timeline - the CapCut-style "speed ramp" gesture. Unlike
+ * `applyEdgeTrim`, the trim window itself never moves: only `speed` changes,
+ * so the same source frames stretch or compress to fill more or less of the
+ * output timeline (every later clip then re-flows against the new duration
+ * via `computeTimelineClips`'s back-to-back layout - no separate "magnet"
+ * logic needed). Dragging the end edge outward (positive delta) slows the
+ * clip down; dragging the start edge outward (negative delta, since it moves
+ * the boundary earlier) does the same - both read as "make the clip take up
+ * more of the timeline". */
+export function applyEdgeSpeed(clip, sourceDurationMs, edge, deltaOutputMs) {
+  const trimStartMs = clip.trim_start_ms || 0;
+  const trimEndMs = resolveTrimEndMs(clip, sourceDurationMs);
+  const windowMs = Math.max(1, trimEndMs - trimStartMs);
+  const oldSpeed = clip.speed || 1;
+  const oldDurationMs = windowMs / oldSpeed;
+  const sign = edge === 'end' ? 1 : -1;
+  const newDurationMs = Math.max(MIN_CLIP_MS, oldDurationMs + sign * deltaOutputMs);
+  const speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, windowMs / newDurationMs));
+  return { speed: Math.round(speed * 100) / 100 };
 }
 
 /** New `{trimStartMs, trimEndMs}` after dragging one edge of a clip by

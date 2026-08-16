@@ -133,6 +133,46 @@ uploaded/imported clip), where the render leaves the end genuinely unbounded
 frontend, which can't probe the file, lays such a clip out with a fixed 5s
 stand-in (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) purely for display.
 
+An **overlay** entry in `overlays[]` is `{overlay_id, kind: 'title_card'|'logo',
+source_id, start_ms, duration_ms, position, width_pct, opacity}` — a static
+title-card variant or global logo image shown over the video for
+`[start_ms, start_ms+duration_ms)` on the output timeline (same millisecond
+axis as a clip's own `startMs`/`durationMs`). Unlike clips, overlays don't tile
+back to back: they float freely, can overlap each other, or leave gaps, and
+live on their own lane above the video track. `kind: 'title_card'` resolves
+`source_id` against this same project's `title_card.variants[].variant_id`;
+`kind: 'logo'` resolves it against the *global* `settings.logos[].id`
+(`docs/architecture.md`'s Settings section). `position` is one of a 9-point
+grid (`top-left` … `bottom-right`, `center`); `width_pct` scales the overlay to
+that fraction of the render canvas's width (aspect preserved); `opacity`
+(0-1) multiplies whatever alpha the source image already carries. Array order
+is z-order, later entries painted on top (mirrors `Poster.layers`'s
+convention). Editing an overlay's timing/position/size only ever patches its
+own object — no cascading layout the way clip trim/speed can shift every
+later clip. Real placement/scale on the canvas is *not* interactively
+draggable in the preview (unlike the Poster constructor's Konva canvas) — v1
+scope is the 9-point grid plus numeric fields, see `providers/editor.py`'s
+`_OVERLAY_XY_EXPR`.
+
+An `EditorClip` can also carry `transition_in` (`{type: 'dissolve'|'fadeblack'|
+'fadewhite', duration_ms}`, absent = a hard cut) and `fade_in`/`fade_out`
+(`{color: 'black'|'white', duration_ms}`, absent = no fade). `transition_in`
+describes the transition *into* this clip *from* the previous one (meaningless
+on the first clip) - it renders as a real ffmpeg `xfade`, so the two clips'
+actual frames overlap and blend for `duration_ms`, making the combined output
+that much *shorter* than the naive sum of both clips' own durations.
+`build_render_plan` accounts for that when sizing the tail freeze-pad, but the
+frontend timeline's own layout (`lib/timeline.js`) does **not** model the
+overlap - a transition marker sits on the boundary between two clips (not a
+resizable block, since it has no dedicated timeline space of its own), and the
+overlap is treated as just another source of the render-vs-timeline
+duration-mismatch tolerance this stage already has (see `renders[]`/`tpad`
+below). `fade_in`/`fade_out` are a plain ffmpeg `fade` filter applied to that
+one clip only, entirely within its own duration - no interaction with
+neighbours or the timeline layout at all. Both are clamped at render time to
+never exceed the content they'd apply to (see `providers/editor.py`'s
+`_resolve_fade` / the transition-duration clamp in `build_render_plan`).
+
 `renders[]` is server-managed and append-only: `{render_id, file_path,
 created_at, duration_ms, clip_count, mureka_track_id}`. Output canvas is a fixed
 1920×1080 (or 1080×1920 if every clip's `aspect_ratio` is `9:16`); clips are
@@ -140,7 +180,9 @@ scaled and letterboxed into it, never cropped. If the clips run **shorter** than
 the audio the last clip is frozen (ffmpeg `tpad`) to fill the remainder; if
 **longer**, the render is hard-capped at the audio's length (`-t`), silently
 truncating the tail. The UI shows a non-blocking duration-mismatch warning for
-both, computed client-side.
+both, computed client-side. Overlays composite on top of the concatenated
+clips via ffmpeg's `overlay` filter, each gated to its own window with
+`enable='between(t,…)'` — see `providers/editor.py::build_ffmpeg_command`.
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` —
 `text_block` is one free-text field the user edits directly (not separate
@@ -462,7 +504,9 @@ resending everything.
   keep both in sync**), never hand-picked, so two tags never collide visually;
   `GET /api/settings` backfills a `color` onto tags predating the field.
 - **`logos`** — `[{id, name, file_path}]`, the global cross-project logo library
-  for the Poster constructor (files under `app_data/logos/`, own endpoints).
+  for the Poster constructor (files under `app_data/logos/`, own endpoints) -
+  also the source pool for `kind: 'logo'` Editor-stage overlays (see
+  `VideoEdit.overlays[]` above).
 - **`poster_templates`** — `[{id, name, layers{logo_id, logo[], glass, text[]},
   created_at}]`, reusable poster layouts, global like `logos` but no files, so
   plain array CRUD through the partial-merge `PUT`. `layers` deliberately omits

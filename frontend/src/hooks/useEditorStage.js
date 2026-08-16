@@ -2,14 +2,25 @@ import { useEffect, useRef, useState } from 'react';
 import { api, mediaUrl } from '../api/client.js';
 import { buildDefaultClips, defaultMurekaTrackId } from '../lib/editorDefaults.js';
 import {
+  DEFAULT_OVERLAY_DURATION_MS, DEFAULT_OVERLAY_POSITION, DEFAULT_OVERLAY_WIDTH_PCT,
+} from '../lib/overlays.js';
+import {
   computeTimelineClips, findActiveClip, getTotalDurationMs, moveClip, splitClipsAt,
 } from '../lib/timeline.js';
 
-const EMPTY_VIDEO_EDIT = { mureka_track_id: null, clips: [], renders: [] };
+const EMPTY_VIDEO_EDIT = { mureka_track_id: null, clips: [], overlays: [], renders: [] };
 // Only re-seek the preview <video> once the drift from where it should be
 // exceeds this - avoids constantly reseeking (which stutters playback) for
 // the normal small amount of clock drift between rAF ticks.
 const DRIFT_THRESHOLD_MS = 250;
+// Undo/redo history depth (oldest snapshots drop off past this) - mirrors
+// PosterConstructor.jsx's MAX_HISTORY.
+const MAX_HISTORY = 50;
+// Rapid edits within this window (a drag's continuous pointermove calls, or
+// a fast run of keystrokes in a number field) coalesce into the one history
+// entry from before the gesture started, instead of one entry per tick -
+// same coalescing PosterConstructor.jsx's commit() does.
+const HISTORY_COALESCE_MS = 400;
 
 function randomId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -52,9 +63,14 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipIds, setSelectedClipIds] = useState(() => new Set());
+  const [selectedOverlayId, setSelectedOverlayId] = useState(null);
+  const [selectedTransitionClipId, setSelectedTransitionClipId] = useState(null);
   const [renderLoading, setRenderLoading] = useState(false);
   const [renderError, setRenderError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [past, setPast] = useState([]);
+  const [future, setFuture] = useState([]);
+  const lastCommitAtRef = useRef(0);
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const rafRef = useRef(null);
@@ -81,6 +97,11 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     setIsPlaying(false);
     setRenderError(null);
     setSelectedClipIds(new Set());
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
+    setPast([]);
+    setFuture([]);
+    lastCommitAtRef.current = 0;
     selectionAnchorRef.current = null;
     activeClipIndexRef.current = -1;
     // Loose check on purpose: a project's `video_edit` can be persisted as
@@ -91,12 +112,13 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     if (project?.video_edit == null) {
       const clips = buildDefaultClips(project?.scenes);
       const mureka_track_id = defaultMurekaTrackId(project?.mureka?.tracks);
-      updateProject((p) => ({ ...p, video_edit: { mureka_track_id, clips, renders: [] } }));
+      updateProject((p) => ({ ...p, video_edit: { mureka_track_id, clips, overlays: [], renders: [] } }));
     }
   }
 
   const videoEdit = activeProject?.video_edit || EMPTY_VIDEO_EDIT;
   const clips = videoEdit.clips || [];
+  const overlays = videoEdit.overlays || [];
   const scenes = activeProject?.scenes || [];
   const sourceDurationsById = buildSourceDurations(scenes);
   const timelineClips = computeTimelineClips(clips, sourceDurationsById);
@@ -136,16 +158,65 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     activeClipIndexRef.current = -1;
   }
 
+  /** Undo/redo history: a single choke point every `video_edit`-mutating
+   * action below routes through instead of `patchVideoEdit` directly.
+   * Snapshots the pre-mutation `{clips, mureka_track_id}` into `past`
+   * (clearing `future` - a fresh edit invalidates any redo branch) before
+   * applying `mutator`, unless the previous commit was under
+   * HISTORY_COALESCE_MS ago, in which case it's coalesced into that same
+   * snapshot instead of pushing a new one - what keeps a single edge-drag
+   * (which calls this on every pointermove) or number-field edit from
+   * flooding the history with one entry per pixel/keystroke. Mirrors
+   * PosterConstructor.jsx's `commit()`. Renders aren't part of the document
+   * here on purpose - they're an append-only log of past exports, not an
+   * edit decision to undo. */
+  function currentDoc() {
+    return { clips: videoEdit.clips, overlays: videoEdit.overlays, mureka_track_id: videoEdit.mureka_track_id };
+  }
+  function commitVideoEdit(mutator, opts) {
+    const now = Date.now();
+    if (now - lastCommitAtRef.current > HISTORY_COALESCE_MS) {
+      setPast((p) => [...p, currentDoc()].slice(-MAX_HISTORY));
+      setFuture([]);
+    }
+    lastCommitAtRef.current = now;
+    patchVideoEdit(mutator, opts);
+  }
+  function undo() {
+    if (!past.length) return;
+    const prev = past[past.length - 1];
+    setFuture((f) => [currentDoc(), ...f]);
+    setPast((p) => p.slice(0, -1));
+    invalidatePreviewClip();
+    setSelectedClipIds(new Set());
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
+    lastCommitAtRef.current = 0;
+    patchVideoEdit((edit) => ({ ...edit, clips: prev.clips, overlays: prev.overlays, mureka_track_id: prev.mureka_track_id }));
+  }
+  function redo() {
+    if (!future.length) return;
+    const next = future[0];
+    setPast((p) => [...p, currentDoc()]);
+    setFuture((f) => f.slice(1));
+    invalidatePreviewClip();
+    setSelectedClipIds(new Set());
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
+    lastCommitAtRef.current = 0;
+    patchVideoEdit((edit) => ({ ...edit, clips: next.clips, overlays: next.overlays, mureka_track_id: next.mureka_track_id }));
+  }
+
   /** Drag-and-drop reorder on the timeline - array indices, not clip ids,
    * because that is what `lib/timeline.js`'s drop-slot math returns. */
   function reorderClip(fromIndex, toIndex) {
     invalidatePreviewClip();
-    patchVideoEdit((edit) => ({ ...edit, clips: moveClip(edit.clips, fromIndex, toIndex) }));
+    commitVideoEdit((edit) => ({ ...edit, clips: moveClip(edit.clips, fromIndex, toIndex) }));
   }
   /** Razor tool: cuts the clip under the playhead in two. */
   function splitAtPlayhead() {
     invalidatePreviewClip();
-    patchVideoEdit((edit) => ({
+    commitVideoEdit((edit) => ({
       ...edit,
       clips: splitClipsAt(edit.clips, sourceDurationsById, playheadMs, () => randomId('clip')),
     }));
@@ -158,7 +229,8 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       idSet.forEach((id) => next.delete(id));
       return next;
     });
-    patchVideoEdit((edit) => ({ ...edit, clips: edit.clips.filter((c) => !idSet.has(c.clip_id)) }));
+    if (selectedTransitionClipId && idSet.has(selectedTransitionClipId)) setSelectedTransitionClipId(null);
+    commitVideoEdit((edit) => ({ ...edit, clips: edit.clips.filter((c) => !idSet.has(c.clip_id)) }));
   }
 
   /** Plain click replaces the selection; Ctrl/Cmd+click toggles one clip in
@@ -167,6 +239,8 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
    * (background click) always clears, regardless of modifiers. */
   function selectClip(clipId, opts = {}) {
     const { additive, range } = opts;
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
     if (clipId == null) {
       setSelectedClipIds(new Set());
       selectionAnchorRef.current = null;
@@ -197,10 +271,32 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   /** Marquee-drag release - replaces the selection wholesale with whatever
    * fell inside the rectangle (also used for select-all). */
   function setSelection(clipIds) {
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
     setSelectedClipIds(new Set(clipIds));
   }
   function selectAll() {
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
     setSelectedClipIds(new Set(timelineClips.map((c) => c.clip_id)));
+  }
+  /** Single-select for the overlay lane (no marquee/multi-select - overlays
+   * are few enough per project that it hasn't been worth the extra
+   * complexity `selectedClipIds` carries for clips). Picking an overlay
+   * clears the clip/transition selection and vice versa - the inspector
+   * only ever shows one of the three. */
+  function selectOverlay(overlayId) {
+    setSelectedClipIds(new Set());
+    setSelectedTransitionClipId(null);
+    setSelectedOverlayId(overlayId);
+  }
+  /** Single-select for the boundary between two clips - `clipId` is the
+   * *later* clip, since that's where `transition_in` actually lives (see
+   * setClipTransition below). */
+  function selectTransition(clipId) {
+    setSelectedClipIds(new Set());
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(clipId);
   }
   function duplicateClips(clipIds) {
     const idSet = new Set(clipIds);
@@ -208,7 +304,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     clips.forEach((c) => { if (idSet.has(c.clip_id)) idMap.set(c.clip_id, randomId('clip')); });
     if (!idMap.size) return;
     invalidatePreviewClip();
-    patchVideoEdit((edit) => {
+    commitVideoEdit((edit) => {
       const next = [];
       edit.clips.forEach((c) => {
         next.push(c);
@@ -226,12 +322,12 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     if (!clipboardRef.current.length) return;
     invalidatePreviewClip();
     const pasted = clipboardRef.current.map((c) => ({ ...c, clip_id: randomId('clip') }));
-    patchVideoEdit((edit) => ({ ...edit, clips: [...edit.clips, ...pasted] }));
+    commitVideoEdit((edit) => ({ ...edit, clips: [...edit.clips, ...pasted] }));
     setSelectedClipIds(new Set(pasted.map((c) => c.clip_id)));
   }
   function addSceneClip(sceneIndex, videoId) {
     invalidatePreviewClip();
-    patchVideoEdit((edit) => ({
+    commitVideoEdit((edit) => ({
       ...edit,
       clips: [...edit.clips, {
         clip_id: randomId('clip'), scene_index: sceneIndex, video_id: videoId,
@@ -241,25 +337,115 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   }
   function changeClipVideo(clipId, videoId) {
     invalidatePreviewClip();
-    patchVideoEdit((edit) => ({
+    commitVideoEdit((edit) => ({
       ...edit,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, video_id: videoId, trim_start_ms: 0, trim_end_ms: null } : c)),
     }));
   }
   function setClipTrim(clipId, trimStartMs, trimEndMs) {
-    patchVideoEdit((edit) => ({
+    commitVideoEdit((edit) => ({
       ...edit,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, trim_start_ms: trimStartMs, trim_end_ms: trimEndMs } : c)),
     }), { immediate: false });
   }
   function setClipSpeed(clipId, speed) {
-    patchVideoEdit((edit) => ({
+    commitVideoEdit((edit) => ({
       ...edit,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, speed } : c)),
+    }), { immediate: false });
+  }
+  /** Reverts one clip's trim window and speed back to "the whole source clip,
+   * at 1x" - the same shape a freshly added clip starts in (see
+   * addSceneClip above). */
+  function resetClip(clipId) {
+    invalidatePreviewClip();
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, trim_start_ms: 0, trim_end_ms: null, speed: 1.0 } : c)),
     }));
   }
   function setMurekaTrackId(trackId) {
-    patchVideoEdit((edit) => ({ ...edit, mureka_track_id: trackId }));
+    commitVideoEdit((edit) => ({ ...edit, mureka_track_id: trackId }));
+  }
+
+  // ---------- transitions & fades ----------
+  /** The transition *into* `clipId` from whichever clip precedes it -
+   * `type: 'none'` (or no clip preceding it) clears it back to a hard cut.
+   * Real crossfade blending happens only at render time
+   * (`providers/editor.py`'s `xfade` chain) - this is just the EDL. */
+  function setClipTransition(clipId, type, durationMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (
+        c.clip_id === clipId
+          ? { ...c, transition_in: type === 'none' ? null : { type, duration_ms: durationMs } }
+          : c
+      )),
+    }));
+  }
+  function setClipFadeIn(clipId, color, durationMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (
+        c.clip_id === clipId ? { ...c, fade_in: durationMs > 0 ? { color, duration_ms: durationMs } : null } : c
+      )),
+    }), { immediate: false });
+  }
+  function setClipFadeOut(clipId, color, durationMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (
+        c.clip_id === clipId ? { ...c, fade_out: durationMs > 0 ? { color, duration_ms: durationMs } : null } : c
+      )),
+    }), { immediate: false });
+  }
+
+  // ---------- overlay lane (title-card / logo images over the video) ----------
+  /** Drops a new overlay at the playhead, `DEFAULT_OVERLAY_DURATION_MS` long
+   * - `kind`/`sourceId` picks the image (a title-card variant or a global
+   * logo), resolved to an actual file only at render time
+   * (`providers/editor.py`). */
+  function addOverlay(kind, sourceId) {
+    const overlay = {
+      overlay_id: randomId('ovl'), kind, source_id: sourceId,
+      start_ms: Math.round(playheadMs), duration_ms: DEFAULT_OVERLAY_DURATION_MS,
+      position: DEFAULT_OVERLAY_POSITION, width_pct: DEFAULT_OVERLAY_WIDTH_PCT, opacity: 1,
+    };
+    commitVideoEdit((edit) => ({ ...edit, overlays: [...(edit.overlays || []), overlay] }));
+    setSelectedOverlayId(overlay.overlay_id);
+  }
+  function setOverlayTiming(overlayId, startMs, durationMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (
+        o.overlay_id === overlayId ? { ...o, start_ms: startMs, duration_ms: durationMs } : o
+      )),
+    }), { immediate: false });
+  }
+  function setOverlayPosition(overlayId, position) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, position } : o)),
+    }));
+  }
+  function setOverlayWidthPct(overlayId, widthPct) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, width_pct: widthPct } : o)),
+    }), { immediate: false });
+  }
+  function setOverlayOpacity(overlayId, opacity) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, opacity } : o)),
+    }), { immediate: false });
+  }
+  function removeOverlay(overlayId) {
+    if (selectedOverlayId === overlayId) setSelectedOverlayId(null);
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).filter((o) => o.overlay_id !== overlayId),
+    }));
   }
 
   // ---------- preview engine ----------
@@ -377,15 +563,19 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
 
   return {
     state: {
-      videoEdit, clips: timelineClips, totalDurationMs, selectedTrack, tracks,
+      videoEdit, clips: timelineClips, overlays, totalDurationMs, selectedTrack, tracks,
       playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds,
-      selectedClipIds, videoRef, audioRef,
+      selectedClipIds, selectedOverlayId, selectedTransitionClipId,
+      videoRef, audioRef, canUndo: past.length > 0, canRedo: future.length > 0,
     },
     resetForProject,
     actions: {
       reorderClip, splitAtPlayhead, removeClips, addSceneClip, changeClipVideo,
-      setClipTrim, setClipSpeed, setMurekaTrackId, selectClip, setSelection, selectAll,
-      duplicateClips, copyClips, pasteClips,
+      setClipTrim, setClipSpeed, resetClip, setMurekaTrackId, selectClip, setSelection, selectAll,
+      duplicateClips, copyClips, pasteClips, undo, redo,
+      addOverlay, setOverlayTiming, setOverlayPosition, setOverlayWidthPct, setOverlayOpacity,
+      removeOverlay, selectOverlay,
+      setClipTransition, setClipFadeIn, setClipFadeOut, selectTransition,
       play, pause, seek, startRender, deleteRender, downloadRender,
     },
   };

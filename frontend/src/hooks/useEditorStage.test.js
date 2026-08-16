@@ -164,6 +164,202 @@ describe('useEditorStage clip mutations', () => {
   });
 });
 
+describe('useEditorStage history (undo/redo)', () => {
+  it('undo/redo step through history; edits more than the coalescing window apart become separate steps', async () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.removeClips(['clip_a']); });
+    // Past HISTORY_COALESCE_MS (400ms) - the next edit must record its own
+    // history entry rather than folding into this one.
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    act(() => { result.current.actions.removeClips(['clip_b']); });
+
+    expect(project.video_edit.clips.map((c) => c.clip_id)).toEqual(['clip_c']);
+
+    act(() => { result.current.actions.undo(); });
+    expect(project.video_edit.clips.map((c) => c.clip_id)).toEqual(['clip_b', 'clip_c']);
+    expect(result.current.state.canRedo).toBe(true);
+
+    act(() => { result.current.actions.undo(); });
+    expect(project.video_edit.clips.map((c) => c.clip_id)).toEqual(['clip_a', 'clip_b', 'clip_c']);
+    expect(result.current.state.canUndo).toBe(false);
+
+    act(() => { result.current.actions.redo(); });
+    expect(project.video_edit.clips.map((c) => c.clip_id)).toEqual(['clip_b', 'clip_c']);
+  });
+
+  it('rapid edits within the coalescing window collapse into a single undo step', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.removeClips(['clip_a']); });
+    act(() => { result.current.actions.removeClips(['clip_b']); });
+    expect(project.video_edit.clips.map((c) => c.clip_id)).toEqual(['clip_c']);
+
+    act(() => { result.current.actions.undo(); });
+    expect(project.video_edit.clips.map((c) => c.clip_id)).toEqual(['clip_a', 'clip_b', 'clip_c']);
+    expect(result.current.state.canUndo).toBe(false);
+  });
+
+  it('a fresh edit after undo clears the redo branch', () => {
+    const { result } = setupMultiClip();
+    act(() => { result.current.actions.removeClips(['clip_a']); });
+    act(() => { result.current.actions.undo(); });
+    expect(result.current.state.canRedo).toBe(true);
+
+    act(() => { result.current.actions.removeClips(['clip_b']); });
+    expect(result.current.state.canRedo).toBe(false);
+  });
+});
+
+describe('useEditorStage resetClip', () => {
+  it("reverts a clip's trim and speed back to the full source at 1x", () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.setClipSpeed('clip_a', 2); });
+    act(() => { result.current.actions.setClipTrim('clip_a', 500, 3000); });
+
+    act(() => { result.current.actions.resetClip('clip_a'); });
+
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_a')).toMatchObject({
+      trim_start_ms: 0, trim_end_ms: null, speed: 1.0,
+    });
+  });
+});
+
+describe('useEditorStage overlays', () => {
+  it('addOverlay drops a new overlay at the playhead with sane defaults, and selects it', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.seek(1500); });
+
+    act(() => { result.current.actions.addOverlay('logo', 'logo_1'); });
+
+    expect(project.video_edit.overlays).toHaveLength(1);
+    const overlay = project.video_edit.overlays[0];
+    expect(overlay).toMatchObject({ kind: 'logo', source_id: 'logo_1', start_ms: 1500 });
+    expect(overlay.duration_ms).toBeGreaterThan(0);
+    expect(result.current.state.selectedOverlayId).toBe(overlay.overlay_id);
+    // Picking an overlay clears any clip selection - the inspector shows one or the other.
+    expect(result.current.state.selectedClipIds).toEqual(new Set());
+  });
+
+  it('setOverlayTiming/setOverlayPosition/setOverlayWidthPct/setOverlayOpacity patch just that overlay', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('title_card', 'tcv_1'); });
+    const id = project.video_edit.overlays[0].overlay_id;
+
+    act(() => { result.current.actions.setOverlayTiming(id, 2000, 4000); });
+    act(() => { result.current.actions.setOverlayPosition(id, 'top-left'); });
+    act(() => { result.current.actions.setOverlayWidthPct(id, 35); });
+    act(() => { result.current.actions.setOverlayOpacity(id, 0.5); });
+
+    expect(project.video_edit.overlays[0]).toMatchObject({
+      start_ms: 2000, duration_ms: 4000, position: 'top-left', width_pct: 35, opacity: 0.5,
+    });
+  });
+
+  it('selectOverlay clears the clip selection; selecting a clip clears the overlay selection', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('logo', 'logo_1'); });
+    const overlayId = project.video_edit.overlays[0].overlay_id;
+
+    act(() => { result.current.actions.selectClip('clip_a'); });
+    expect(result.current.state.selectedOverlayId).toBeNull();
+
+    act(() => { result.current.actions.selectOverlay(overlayId); });
+    expect(result.current.state.selectedClipIds).toEqual(new Set());
+    expect(result.current.state.selectedOverlayId).toBe(overlayId);
+  });
+
+  it('removeOverlay drops it and clears the selection if it was selected', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('logo', 'logo_1'); });
+    const overlayId = project.video_edit.overlays[0].overlay_id;
+
+    act(() => { result.current.actions.removeOverlay(overlayId); });
+
+    expect(project.video_edit.overlays).toEqual([]);
+    expect(result.current.state.selectedOverlayId).toBeNull();
+  });
+
+  it('undo/redo cover overlay edits too, not just clips', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('logo', 'logo_1'); });
+
+    act(() => { result.current.actions.undo(); });
+    // The fixture project never had an `overlays` key at all before this
+    // edit - undo restores that exact prior shape (absent, not `[]`).
+    expect(project.video_edit.overlays || []).toEqual([]);
+
+    act(() => { result.current.actions.redo(); });
+    expect(project.video_edit.overlays).toHaveLength(1);
+  });
+});
+
+describe('useEditorStage transitions & fades', () => {
+  it('setClipTransition sets transition_in on just that clip', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.setClipTransition('clip_b', 'dissolve', 750); });
+
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_b').transition_in).toEqual({
+      type: 'dissolve', duration_ms: 750,
+    });
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_a').transition_in).toBeUndefined();
+  });
+
+  it("setClipTransition('none', ...) clears it back to a hard cut", () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.setClipTransition('clip_b', 'fadeblack', 500); });
+
+    act(() => { result.current.actions.setClipTransition('clip_b', 'none', 0); });
+
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_b').transition_in).toBeNull();
+  });
+
+  it('setClipFadeIn/setClipFadeOut set the fields, and a 0 duration clears them', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.setClipFadeIn('clip_a', 'black', 500); });
+    act(() => { result.current.actions.setClipFadeOut('clip_a', 'white', 750); });
+
+    let clip = project.video_edit.clips.find((c) => c.clip_id === 'clip_a');
+    expect(clip.fade_in).toEqual({ color: 'black', duration_ms: 500 });
+    expect(clip.fade_out).toEqual({ color: 'white', duration_ms: 750 });
+
+    act(() => { result.current.actions.setClipFadeIn('clip_a', 'black', 0); });
+    clip = project.video_edit.clips.find((c) => c.clip_id === 'clip_a');
+    expect(clip.fade_in).toBeNull();
+  });
+
+  it('selectTransition clears clip/overlay selection; selecting a clip clears the transition selection', () => {
+    const { result } = setupMultiClip();
+
+    act(() => { result.current.actions.selectClip('clip_a'); });
+    act(() => { result.current.actions.selectTransition('clip_b'); });
+    expect(result.current.state.selectedClipIds).toEqual(new Set());
+    expect(result.current.state.selectedTransitionClipId).toBe('clip_b');
+
+    act(() => { result.current.actions.selectClip('clip_a'); });
+    expect(result.current.state.selectedTransitionClipId).toBeNull();
+  });
+
+  it('removeClips clears the transition selection if the selected boundary was removed', () => {
+    const { result } = setupMultiClip();
+    act(() => { result.current.actions.selectTransition('clip_b'); });
+
+    act(() => { result.current.actions.removeClips(['clip_b']); });
+
+    expect(result.current.state.selectedTransitionClipId).toBeNull();
+  });
+
+  it('undo restores a cleared transition_in', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.setClipTransition('clip_b', 'dissolve', 500); });
+
+    act(() => { result.current.actions.undo(); });
+
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_b').transition_in).toBeUndefined();
+  });
+});
+
 describe('useEditorStage preview engine', () => {
   it('plays every clip on transition, not just the one active when play() was pressed', () => {
     const { result, videoEl, audioEl } = setup();

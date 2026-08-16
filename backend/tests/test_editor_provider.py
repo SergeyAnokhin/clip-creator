@@ -27,10 +27,27 @@ def _track(track_id='trk_1', duration_ms=8000):
     return {'track_id': track_id, 'file_path': 'music/trk_1.mp3', 'duration_ms': duration_ms}
 
 
-def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, speed=1.0):
-    return {
+def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, speed=1.0,
+          transition_in=None, fade_in=None, fade_out=None):
+    clip = {
         'scene_index': scene_index, 'video_id': video_id,
         'trim_start_ms': trim_start_ms, 'trim_end_ms': trim_end_ms, 'speed': speed,
+    }
+    if transition_in is not None:
+        clip['transition_in'] = transition_in
+    if fade_in is not None:
+        clip['fade_in'] = fade_in
+    if fade_out is not None:
+        clip['fade_out'] = fade_out
+    return clip
+
+
+def _overlay(kind='logo', source_id='logo_1', start_ms=0, duration_ms=2000, position='bottom-right',
+             width_pct=20, opacity=1.0):
+    return {
+        'overlay_id': 'ov_1', 'kind': kind, 'source_id': source_id,
+        'start_ms': start_ms, 'duration_ms': duration_ms,
+        'position': position, 'width_pct': width_pct, 'opacity': opacity,
     }
 
 
@@ -153,6 +170,265 @@ def test_build_render_plan_rejects_bad_trim_range():
         editor.build_render_plan(project, video_edit)
 
 
+# ---------- build_render_plan overlays ----------
+
+def test_build_render_plan_resolves_logo_overlay():
+    project = _project(_video(), _track())
+    settings = {'logos': [{'id': 'logo_1', 'name': 'L', 'file_path': 'logos/logo_1.png'}]}
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_overlay()]}
+
+    plan = editor.build_render_plan(project, video_edit, settings)
+
+    assert len(plan['overlays']) == 1
+    ov = plan['overlays'][0]
+    # A logo lives in the global cross-project library (under the data
+    # root), not under any one project's own directory - the plan must carry
+    # an *absolute* path so `build_ffmpeg_command` (which only ever joins
+    # against `project_dir`) still resolves it correctly.
+    assert Path(ov['file_path']).is_absolute()
+    assert ov['file_path'].endswith('logo_1.png')
+    assert ov['start_s'] == 0.0
+    assert ov['duration_s'] == 2.0
+    assert ov['position'] == 'bottom-right'
+    assert ov['width_pct'] == 20
+
+
+def test_build_render_plan_resolves_title_card_overlay():
+    project = _project(_video(), _track())
+    project['title_card'] = {'variants': [{'variant_id': 'tcv_1', 'file_path': 'titlecard/tcv_1.png'}]}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [_overlay(kind='title_card', source_id='tcv_1')],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    # Project-relative, same convention as a clip's own file_path.
+    assert plan['overlays'][0]['file_path'] == 'titlecard/tcv_1.png'
+
+
+def test_build_render_plan_rejects_unknown_logo():
+    project = _project(_video(), _track())
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_overlay(source_id='nope')]}
+    with pytest.raises(editor.RenderPlanError, match='логотип'):
+        editor.build_render_plan(project, video_edit, {'logos': []})
+
+
+def test_build_render_plan_rejects_unknown_title_card_variant():
+    project = _project(_video(), _track())
+    project['title_card'] = {'variants': []}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [_overlay(kind='title_card', source_id='nope')],
+    }
+    with pytest.raises(editor.RenderPlanError, match='заголовка'):
+        editor.build_render_plan(project, video_edit, {})
+
+
+def test_build_render_plan_rejects_zero_duration_overlay():
+    project = _project(_video(), _track())
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_overlay(duration_ms=0)]}
+    with pytest.raises(editor.RenderPlanError, match='длительность'):
+        editor.build_render_plan(project, video_edit, {'logos': [{'id': 'logo_1', 'file_path': 'logos/l.png'}]})
+
+
+def test_build_render_plan_defaults_unknown_position_and_clamps_bounds():
+    project = _project(_video(), _track())
+    settings = {'logos': [{'id': 'logo_1', 'file_path': 'logos/l.png'}]}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [_overlay(position='nowhere', width_pct=500, opacity=5)],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, settings)
+
+    ov = plan['overlays'][0]
+    assert ov['position'] == 'bottom-right'
+    assert ov['width_pct'] == 100.0
+    assert ov['opacity'] == 1.0
+
+
+# ---------- build_render_plan transitions & fades ----------
+
+def _two_clip_project(duration_a=4, duration_b=4, track_duration_ms=8000):
+    return {
+        'id': 'poem-a',
+        'scenes': [{'videos': [_video('vid_a', duration_a)]}, {'videos': [_video('vid_b', duration_b)]}],
+        'mureka': {'tracks': [_track(duration_ms=track_duration_ms)]},
+    }
+
+
+def test_build_render_plan_resolves_transition_and_shortens_padding_estimate():
+    project = _two_clip_project(duration_a=4, duration_b=4, track_duration_ms=8000)
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='vid_a'),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'dissolve', 'duration_ms': 1000}),
+        ],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert plan['clips'][0]['transition_in'] is None
+    assert plan['clips'][1]['transition_in'] == {'type': 'fade', 'duration_s': 1.0}
+    # 4s + 4s of content, 1s of it overlapped by the transition -> 7s of real
+    # output against an 8s track, so 1s of tail padding is needed (0 would be
+    # wrong - that's what you'd get if the overlap weren't subtracted).
+    assert plan['clips'][1]['tpad_s'] == pytest.approx(1.0)
+
+
+def test_build_render_plan_clamps_transition_duration_to_the_shorter_neighbour():
+    project = _two_clip_project(duration_a=2, duration_b=10, track_duration_ms=12000)
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='vid_a'),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'fadeblack', 'duration_ms': 5000}),
+        ],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert plan['clips'][1]['transition_in']['duration_s'] == pytest.approx(2.0)  # clamped to the 2s clip
+
+
+def test_build_render_plan_ignores_unknown_transition_type():
+    project = _two_clip_project()
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='vid_a'),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'wipeleft', 'duration_ms': 500}),
+        ],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert plan['clips'][1]['transition_in'] is None
+
+
+def test_build_render_plan_resolves_fade_in_and_out():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(fade_in={'color': 'black', 'duration_ms': 500}, fade_out={'color': 'white', 'duration_ms': 750})],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    clip = plan['clips'][0]
+    assert clip['fade_in'] == {'color': 'black', 'duration_s': 0.5}
+    assert clip['fade_out'] == {'color': 'white', 'duration_s': 0.75}
+
+
+def test_build_render_plan_clamps_fade_duration_and_defaults_a_bad_color():
+    project = _project(_video(duration_seconds=2), _track(duration_ms=8000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip(fade_in={'color': 'purple', 'duration_ms': 9000})]}
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    fade_in = plan['clips'][0]['fade_in']
+    assert fade_in['duration_s'] == pytest.approx(2.0)  # can't fade longer than the clip itself
+    assert fade_in['color'] == 'black'
+
+
+# ---------- build_ffmpeg_command transitions & fades ----------
+
+def test_build_ffmpeg_command_no_xfade_when_no_transitions():
+    project = _two_clip_project()
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(scene_index=0, video_id='vid_a'), _clip(scene_index=1, video_id='vid_b')],
+    }
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    joined = ' '.join(cmd)
+
+    assert 'xfade=' not in joined
+    assert 'concat=n=2:v=1:a=0[vout]' in joined
+
+
+def test_build_ffmpeg_command_transition_chain_shape():
+    project = _two_clip_project(duration_a=4, duration_b=4, track_duration_ms=8000)
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='vid_a'),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'fadeblack', 'duration_ms': 1000}),
+        ],
+    }
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    assert 'concat=' not in filter_complex
+    # offset = clip A's own 4s duration minus the 1s transition.
+    assert '[v0][v1]xfade=transition=fadeblack:duration=1.000:offset=3.000[vout]' in filter_complex
+
+
+def test_build_ffmpeg_command_mixes_transitions_and_hard_cuts():
+    project = {
+        'id': 'poem-a',
+        'scenes': [{'videos': [_video('a', 4)]}, {'videos': [_video('b', 4)]}, {'videos': [_video('c', 4)]}],
+        'mureka': {'tracks': [_track(duration_ms=12000)]},
+    }
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='a'),
+            _clip(scene_index=1, video_id='b', transition_in={'type': 'dissolve', 'duration_ms': 1000}),
+            _clip(scene_index=2, video_id='c'),  # a plain hard cut into this one
+        ],
+    }
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    assert '[v0][v1]xfade=transition=fade:duration=1.000:offset=3.000[vjoin1]' in filter_complex
+    assert '[vjoin1][v2]concat=n=2:v=1:a=0[vout]' in filter_complex
+
+
+def test_build_ffmpeg_command_falls_back_to_a_cut_when_a_neighbour_is_unbounded():
+    project = _two_clip_project()
+    project['scenes'][0]['videos'][0]['duration_seconds'] = None  # unbounded first clip
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='vid_a', trim_end_ms=None),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'dissolve', 'duration_ms': 1000}),
+        ],
+    }
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    assert 'xfade=' not in filter_complex
+    assert 'concat=n=2:v=1:a=0[vout]' in filter_complex
+
+
+def test_build_ffmpeg_command_fade_in_and_out_shape():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(fade_in={'color': 'black', 'duration_ms': 500}, fade_out={'color': 'white', 'duration_ms': 750})],
+    }
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    assert 'fade=t=in:st=0:d=0.500:color=black' in filter_complex
+    # content is 4s, fade-out is 0.75s in from the end - not from the tpad
+    # freeze-tail this clip also gets (4s clip against an 8s track).
+    assert 'fade=t=out:st=3.250:d=0.750:color=white' in filter_complex
+    assert 'tpad=stop_mode=clone:stop_duration=4.000' in filter_complex
+
+
 # ---------- build_ffmpeg_command ----------
 
 def test_build_ffmpeg_command_shape():
@@ -219,6 +495,71 @@ def test_build_ffmpeg_command_multi_clip_concat_and_input_order():
     assert '[2:a]apad[aout]' in joined
 
 
+# ---------- build_ffmpeg_command overlays ----------
+
+def test_build_ffmpeg_command_no_overlay_chain_when_none_present():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()]}
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    joined = ' '.join(cmd)
+
+    # Unchanged from before overlays existed - concat feeds [vout] directly.
+    assert 'concat=n=1:v=1:a=0[vout]' in joined
+    assert 'vbase' not in joined
+    assert '-loop' not in cmd
+
+
+def test_build_ffmpeg_command_overlay_chain_shape():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    settings = {'logos': [{'id': 'logo_1', 'file_path': 'logos/logo_1.png'}]}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [_overlay(start_ms=500, duration_ms=1500, position='top-left', width_pct=25, opacity=0.5)],
+    }
+    plan = editor.build_render_plan(project, video_edit, settings)
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    joined = ' '.join(cmd)
+
+    # The overlay image is its own looped still-image input, added after
+    # every clip and the audio track: [..., '-loop', '1', '-i', overlay_path].
+    overlay_input_idx = cmd.index(str(Path(plan['overlays'][0]['file_path'])))
+    assert cmd[overlay_input_idx - 3] == '-loop'
+    assert cmd[overlay_input_idx - 2] == '1'
+    assert cmd[overlay_input_idx - 1] == '-i'
+    # concat now feeds an intermediate label, not [vout] directly.
+    assert 'concat=n=1:v=1:a=0[vbase]' in joined
+    assert "scale=480:-2,format=rgba,colorchannelmixer=aa=0.500" in joined  # 25% of 1920
+    assert "enable='between(t,0.500,2.000)'" in joined
+    assert '[vout]' in joined  # the (only) overlay stage is the one that produces it
+    assert '-map' in cmd and '[vout]' in cmd and '[aout]' in cmd
+
+
+def test_build_ffmpeg_command_chains_multiple_overlays_in_order():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    settings = {'logos': [{'id': 'logo_1', 'file_path': 'logos/a.png'}, {'id': 'logo_2', 'file_path': 'logos/b.png'}]}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [
+            _overlay(source_id='logo_1', position='top-left'),
+            _overlay(source_id='logo_2', position='bottom-right'),
+        ],
+    }
+    plan = editor.build_render_plan(project, video_edit, settings)
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    # First overlay composites onto an intermediate label, the second (last)
+    # one is the one that finally produces [vout].
+    assert filter_complex.count('overlay=x=') == 2
+    assert '[vbase][ovl0]overlay=' in filter_complex
+    assert '[vov0][ovl1]overlay=' in filter_complex
+    assert filter_complex.endswith('[vout]')
+
+
 # ---------- render_to_file ----------
 
 def test_render_to_file_missing_ffmpeg_raises(tmp_path, monkeypatch):
@@ -246,7 +587,7 @@ def test_start_render_job_success(tmp_path, monkeypatch):
         'video_edit': {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'renders': []},
     })
 
-    async def fake_render_to_file(project, video_edit, project_dir, dest_path):
+    async def fake_render_to_file(project, video_edit, project_dir, dest_path, settings=None):
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(b'rendered')
         return {'duration_ms': 8000, 'clip_count': 1}
@@ -342,3 +683,122 @@ def test_render_to_file_real_ffmpeg_produces_output(tmp_path):
     assert dest.is_file()
     assert dest.stat().st_size > 0
     assert result['clip_count'] == 2
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_render_to_file_real_ffmpeg_with_overlay(tmp_path, monkeypatch):
+    """The overlay filter graph (scale/format/colorchannelmixer/overlay with
+    `enable='between(...)'`, chained after concat) is exactly the kind of
+    thing that can look right as a string and still fail ffmpeg's own
+    parser - only a real run proves the syntax is valid."""
+    data_root = tmp_path / 'data'
+    monkeypatch.setenv('APP_DATA_DIR', str(data_root))
+    project_dir = data_root / 'projects' / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True)
+    logos_dir = data_root / 'logos'
+    logos_dir.mkdir(parents=True)
+
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=2', str(videos_dir / 'a.mp4')],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', str(music_dir / 'trk_1.mp3')],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=blue@0.5:s=20x20', '-frames:v', '1', str(logos_dir / 'logo.png')],
+        check=True, capture_output=True,
+    )
+
+    project = {'id': 'poem-a', 'scenes': [{'videos': [_video('a', 2)]}], 'mureka': {'tracks': [_track(duration_ms=2000)]}}
+    settings = {'logos': [{'id': 'logo_1', 'file_path': 'logos/logo.png'}]}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip(scene_index=0, video_id='a')],
+        'overlays': [_overlay(start_ms=0, duration_ms=1000, position='top-right', width_pct=15, opacity=0.7)],
+    }
+    dest = project_dir / 'editor' / 'out.mp4'
+
+    result = asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest, settings))
+
+    assert dest.is_file()
+    assert dest.stat().st_size > 0
+    assert result['clip_count'] == 1
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_render_to_file_real_ffmpeg_with_transition(tmp_path):
+    """The pairwise xfade/concat chain (`build_ffmpeg_command`'s
+    `has_transitions` branch) is new filter-graph plumbing distinct from the
+    plain single-`concat` path every other test exercises - only a real run
+    proves ffmpeg actually accepts it."""
+    project_dir = tmp_path / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True)
+
+    for name, color in (('a.mp4', 'red'), ('b.mp4', 'blue')):
+        subprocess.run(
+            ['ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c={color}:s=64x64:d=2', str(videos_dir / name)],
+            check=True, capture_output=True,
+        )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3.5', str(music_dir / 'trk_1.mp3')],
+        check=True, capture_output=True,
+    )
+
+    project = {
+        'id': 'poem-a', 'scenes': [{'videos': [_video('a', 2)]}, {'videos': [_video('b', 2)]}],
+        'mureka': {'tracks': [_track(duration_ms=3500)]},
+    }
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='a'),
+            _clip(scene_index=1, video_id='b', transition_in={'type': 'dissolve', 'duration_ms': 500}),
+        ],
+    }
+    dest = project_dir / 'editor' / 'out.mp4'
+
+    result = asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest))
+
+    assert dest.is_file()
+    assert dest.stat().st_size > 0
+    assert result['clip_count'] == 2
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_render_to_file_real_ffmpeg_with_fade_in_out(tmp_path):
+    project_dir = tmp_path / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True)
+
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=green:s=64x64:d=3', str(videos_dir / 'a.mp4')],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', str(music_dir / 'trk_1.mp3')],
+        check=True, capture_output=True,
+    )
+
+    project = {'id': 'poem-a', 'scenes': [{'videos': [_video('a', 3)]}], 'mureka': {'tracks': [_track(duration_ms=3000)]}}
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(
+            scene_index=0, video_id='a',
+            fade_in={'color': 'black', 'duration_ms': 500}, fade_out={'color': 'white', 'duration_ms': 500},
+        )],
+    }
+    dest = project_dir / 'editor' / 'out.mp4'
+
+    result = asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest))
+
+    assert dest.is_file()
+    assert dest.stat().st_size > 0

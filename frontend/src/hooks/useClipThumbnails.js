@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react';
 import { mediaUrl } from '../api/client.js';
 
-const MAX_THUMBS = 6;
+// Raising this gets each thumbnail slot closer to its native ~160px capture
+// width as a block gets wider (avoids CSS `cover` blowing up one frame far
+// past its source resolution, which is what actually read as "the image
+// looks deformed/blurry when I stretch a clip a lot" - `cover` itself never
+// distorts the aspect ratio, it just crops, so an under-provisioned frame
+// count was the real cause). Bounded rather than uncapped: every extraction
+// is a real seek+decode serialized through the one shared <video> (see
+// `enqueue` above), so a much higher ceiling would mean a long visible
+// trickle of frames arriving one by one on an extreme zoom.
+const MAX_THUMBS = 24;
 // Exported so TimelineClipBlock.jsx can decide when a block is wide enough to
 // expect frames at all, instead of showing a loading pulse on a sliver too
 // narrow for even one thumbnail slot.

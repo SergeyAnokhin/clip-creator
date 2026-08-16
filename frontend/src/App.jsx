@@ -272,6 +272,7 @@ function App() {
 
   const editorState = {
     ...editorStage.state,
+    logos: settings.logos,
     actions: { ...editorStage.actions },
   };
 

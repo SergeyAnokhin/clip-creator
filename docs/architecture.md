@@ -94,11 +94,57 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    more frames as the block gets wider), not scene text — extraction runs
    through one shared hidden `<video>`, serialized and cached, so many clips
    don't fight over decoders. Editing is direct manipulation — drag a block
-   to reorder, drag its edges to trim, drag the ruler to scrub, the razor
-   button (or `S`) to split the clip under the playhead, ctrl+wheel / the
-   toolbar to zoom. Still reorder/trim/split/speed only; no filters or
-   transitions, though `project.video_edit` is shaped to grow them. **The
-   timeline has no gaps**: clips are always concatenated back to back, so a
+   to reorder, drag its edges to trim, **Ctrl/Cmd+drag an edge instead ramps
+   `speed`** (the trim window stays put; only how fast it plays back changes
+   - see `applyEdgeSpeed` in `lib/timeline.js`), drag the ruler to scrub, the
+   razor button (or `S`) to split the clip under the playhead, ctrl+wheel /
+   the toolbar to zoom. The clip inspector strip below the toolbar mirrors
+   both gestures as exact-value fields and adds a reset button (back to "full
+   source clip, 1x") per clip. `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every
+   `video_edit` edit (`useEditorStage.js`'s `past`/`future` history, coalescing
+   rapid edits - a drag's continuous pointermoves, a fast run of keystrokes -
+   into one step the same way `PosterConstructor.jsx`'s `commit()` does;
+   renders aren't part of the undoable document, only clip order/trim/speed/
+   transitions/fades, overlays, and the picked track). Above the clip row sits
+   a second, shorter lane for **overlays** - title-card variants / global logos
+   placed over the video for their own `[start_ms, start_ms+duration_ms)`
+   window, added from a collapsible picker (`PickerRow`/`PickerThumb`, reused
+   from `PosterPanels.jsx`) that lists the project's title-card variants and
+   `settings.logos[]`. Unlike clips, overlays don't tile back to back - drag
+   moves one in time, drag an edge resizes it, and they can overlap or leave
+   gaps; picking one is mutually exclusive with clip selection (own
+   `selectedOverlayId`, not part of `selectedClipIds`), and its inspector
+   (`TimelineOverlayInspector.jsx`) is a 9-point position grid plus
+   width%/opacity sliders rather than draggable canvas placement - a real
+   Konva-style overlay editor was scoped out of v1 (see the plan's rationale).
+   The program monitor draws whichever overlay(s) are active at the playhead
+   as plain absolutely-positioned `<img>`s (approximate, like the rest of this
+   preview); the real render composites them for real with ffmpeg's `overlay`
+   filter, each gated to its own window via `enable='between(t,…)'`
+   (`providers/editor.py::build_ffmpeg_command`).
+
+   Every boundary between two clips carries a small `TimelineTransitionMarker`
+   (a `+` that fills in once a transition is set) - click to open
+   `TimelineTransitionInspector.jsx`: a small curated type row (cut / dissolve
+   / through black / flash-white) plus a duration field. It's a property of
+   the *later* clip (`transition_in`), not a resizable timeline block - it
+   renders as a real ffmpeg `xfade` crossfade at render time, which genuinely
+   overlaps (and thus shortens) the two clips' combined duration, but the
+   timeline's own layout doesn't model that overlap (see
+   `docs/data-model.md`'s `EditorClip` section for why that's an accepted
+   approximation, not a bug). The marker is hidden when either neighbouring
+   clip block renders narrower than ~28px - at that width the 16px marker
+   would otherwise sit on top of the clip itself and block clicking it
+   (confirmed by hand while building this), same "too narrow to interact with"
+   precedent `useClipThumbnails.js`'s `MIN_SLOT_PX` already uses.
+   `TimelineClipInspector.jsx` additionally has a **fade in**/**fade out** row
+   per clip (`fade_in`/`fade_out` - a plain ffmpeg `fade`, colour is
+   black/white, entirely within that one clip's own duration, no effect on
+   neighbours).
+
+   Reorder/trim/split/speed/overlays/transitions/fades - no video-in-video
+   yet. **The timeline has no gaps**: clips are always
+   concatenated back to back, so a
    horizontal drag means "reorder", not "move to this exact time". The
    in-browser preview never touches ffmpeg (a `<video>`+`<audio>` pair synced
    off a `requestAnimationFrame` playhead approximates the cut — see

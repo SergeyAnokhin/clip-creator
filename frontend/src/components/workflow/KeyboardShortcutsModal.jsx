@@ -24,6 +24,29 @@ const GROUPS = [
       { keys: ['Ctrl', 'D'], labelKey: 'editor_kbd_duplicate' },
       { keys: ['Ctrl', 'C'], labelKey: 'editor_kbd_copy' },
       { keys: ['Ctrl', 'V'], labelKey: 'editor_kbd_paste' },
+      { keys: ['Ctrl', 'Edge drag'], labelKey: 'editor_kbd_ctrlEdge' },
+    ],
+  },
+  {
+    titleKey: 'editor_shortcutsGroupHistory',
+    items: [
+      { keys: ['Ctrl', 'Z'], labelKey: 'editor_kbd_undo' },
+      { keys: ['Ctrl', 'Y'], labelKey: 'editor_kbd_redo' },
+    ],
+  },
+  {
+    titleKey: 'editor_shortcutsGroupOverlays',
+    items: [
+      { keys: ['Drag'], labelKey: 'editor_kbd_overlayMove' },
+      { keys: ['Edge drag'], labelKey: 'editor_kbd_overlayResize' },
+      { keys: ['Delete'], labelKey: 'editor_kbd_overlayDelete' },
+    ],
+  },
+  {
+    titleKey: 'editor_shortcutsGroupTransitions',
+    items: [
+      { keys: ['Click'], labelKey: 'editor_kbd_transitionEdit' },
+      { keys: ['Delete'], labelKey: 'editor_kbd_transitionDelete' },
     ],
   },
 ];

@@ -11,12 +11,38 @@ other rating/`is_selected`/`karaoke_sync` edit elsewhere in this app) - this
 module never decides the EDL, only renders whatever `video_edit` currently
 holds and appends the result to `renders[]`.
 
-v1 deliberately supports only reorder/trim/speed against a single audio
-track - no filters, transitions, or overlays (kept out on purpose, not an
-oversight - `EditorClip`/`build_ffmpeg_command` can grow those fields later
-without a schema rewrite). AI-generated clips are silent by convention in
-this app, so the render is always muted-video + Mureka-audio, never a mix of
-both.
+v1 supports reorder/trim/speed against a single audio track, static-image
+overlays (title card variants / logos) on their own free-floating lane, a
+crossfade/black/white transition at any clip boundary, and a per-clip
+fade-in/fade-out (black or white) - no video-in-video yet. AI-generated clips
+are silent by convention in this app, so the render is always muted-video +
+Mureka-audio, never a mix of both.
+
+`EditorClip.transition_in` (`{type: 'dissolve'|'fadeblack'|'fadewhite',
+duration_ms}`, absent/`None` = a hard cut) describes the transition *into*
+this clip *from* the previous one - meaningless on the first clip. It renders
+as a real ffmpeg `xfade` (the two clips' actual frames overlap and blend for
+`duration_ms`), which means the combined output is that much *shorter* than
+the naive sum of both clips' own durations - `build_render_plan` accounts for
+that when sizing the tail freeze-pad, but the frontend timeline's own layout
+does **not** model the overlap (clip blocks stay back-to-back, a transition
+is a marker at the boundary, not a resizable block) - the render already has
+an established, documented "the real render may differ slightly from the
+approximate timeline" tolerance (duration-mismatch warnings, `tpad`), and a
+transition's overlap is just another source of that same, already-accepted
+approximation. `EditorClip.fade_in`/`fade_out` (`{color: 'black'|'white',
+duration_ms}`, absent/`None` = no fade) are a plain ffmpeg `fade` filter
+applied to that one clip only, entirely within its own duration - no
+interaction with neighbours or the timeline layout at all.
+
+An overlay entry in `video_edit['overlays']` is `{overlay_id, kind:
+'title_card'|'logo', source_id, start_ms, duration_ms, position, width_pct,
+opacity}` - `start_ms`/`duration_ms` are output-timeline coordinates (same
+space as a clip's `startMs`/`durationMs` on the frontend), `position` is one
+of the 9 `_OVERLAY_XY_EXPR` grid keys, `width_pct` scales the overlay to that
+fraction of the canvas width (aspect preserved), `opacity` is 0-1 on top of
+whatever alpha the source image already carries. Array order is z-order,
+later entries painted on top - mirrors `Poster.layers`' array convention.
 
 ffmpeg is invoked the same way `mureka.py`'s reference-audio trimmer does:
 `subprocess.run` inside `asyncio.to_thread`, not
@@ -42,6 +68,33 @@ from .. import console_log, storage
 _DEFAULT_CANVAS = (1920, 1080)
 _PORTRAIT_CANVAS = (1080, 1920)
 _FPS = 30
+
+# The 9-point placement grid an overlay can sit at, each resolved (given the
+# canvas's own edge margins in px) to an ffmpeg `overlay=x=…:y=…` expression
+# in terms of that filter's own `main_w`/`main_h`/`overlay_w`/`overlay_h`
+# variables - doubles as the validation set for `position`.
+_OVERLAY_XY_EXPR = {
+    'top-left': lambda mx, my: (f'{mx}', f'{my}'),
+    'top-center': lambda mx, my: ('(main_w-overlay_w)/2', f'{my}'),
+    'top-right': lambda mx, my: (f'main_w-overlay_w-{mx}', f'{my}'),
+    'center-left': lambda mx, my: (f'{mx}', '(main_h-overlay_h)/2'),
+    'center': lambda mx, my: ('(main_w-overlay_w)/2', '(main_h-overlay_h)/2'),
+    'center-right': lambda mx, my: (f'main_w-overlay_w-{mx}', '(main_h-overlay_h)/2'),
+    'bottom-left': lambda mx, my: (f'{mx}', f'main_h-overlay_h-{my}'),
+    'bottom-center': lambda mx, my: ('(main_w-overlay_w)/2', f'main_h-overlay_h-{my}'),
+    'bottom-right': lambda mx, my: (f'main_w-overlay_w-{mx}', f'main_h-overlay_h-{my}'),
+}
+_OVERLAY_MARGIN_PCT = 0.03
+_OVERLAY_DEFAULT_WIDTH_PCT = 20.0
+
+# User-facing transition `type` -> ffmpeg `xfade` filter's own transition
+# name. A deliberately small, curated set (not xfade's full catalogue of
+# wipes/slides/etc.) - "dissolve" is a plain crossfade, "fadeblack"/
+# "fadewhite" blend through a solid colour (the "переход через чёрный" /
+# "вспышка" the feature was asked for).
+_TRANSITION_XFADE_NAME = {'dissolve': 'fade', 'fadeblack': 'fadeblack', 'fadewhite': 'fadewhite'}
+_TRANSITION_MIN_S = 0.05
+_FADE_COLORS = {'black', 'white'}
 
 _jobs: dict[str, dict] = {}
 
@@ -74,7 +127,74 @@ def _resolve_track(project: dict, track_id: str) -> dict:
     return track
 
 
-def build_render_plan(project: dict, video_edit: dict) -> dict:
+def _resolve_overlay_source(project: dict, settings: dict, overlay: dict) -> str:
+    """The overlay image's `file_path` - project-relative for a title card
+    variant (joined against `project_dir` in `build_ffmpeg_command`, same
+    convention as a clip's own `file_path`), or an *absolute* path for a logo
+    (the global cross-project library lives under the data root, not any
+    project's own directory). `project_dir / file_path` silently prefers an
+    absolute right-hand operand (pathlib), so `build_ffmpeg_command` never has
+    to special-case which base a given overlay resolves against - it just
+    always joins against `project_dir`."""
+    kind = overlay.get('kind')
+    source_id = overlay.get('source_id')
+    if kind == 'title_card':
+        variants = (project.get('title_card') or {}).get('variants') or []
+        variant = next((v for v in variants if v.get('variant_id') == source_id), None)
+        if variant is None:
+            raise RenderPlanError(f'Оверлей: вариант заголовка {source_id} не найден')
+        return variant['file_path']
+    if kind == 'logo':
+        logos = settings.get('logos') or []
+        logo = next((item for item in logos if item.get('id') == source_id), None)
+        if logo is None:
+            raise RenderPlanError(f'Оверлей: логотип {source_id} не найден')
+        return str(storage.get_data_root() / logo['file_path'])
+    raise RenderPlanError(f'Оверлей: неизвестный тип {kind!r}')
+
+
+def _resolve_overlays(project: dict, settings: dict, video_edit: dict) -> list[dict]:
+    resolved = []
+    for overlay in video_edit.get('overlays') or []:
+        file_path = _resolve_overlay_source(project, settings, overlay)
+        duration_ms = overlay.get('duration_ms') or 0
+        if duration_ms <= 0:
+            raise RenderPlanError('Оверлей: некорректная длительность')
+        start_ms = max(0, overlay.get('start_ms') or 0)
+        position = overlay.get('position')
+        if position not in _OVERLAY_XY_EXPR:
+            position = 'bottom-right'
+        width_pct = min(100.0, max(1.0, overlay.get('width_pct') or _OVERLAY_DEFAULT_WIDTH_PCT))
+        opacity = overlay.get('opacity')
+        opacity = 1.0 if opacity is None else min(1.0, max(0.0, opacity))
+        resolved.append({
+            'file_path': file_path,
+            'start_s': start_ms / 1000,
+            'duration_s': duration_ms / 1000,
+            'position': position,
+            'width_pct': width_pct,
+            'opacity': opacity,
+        })
+    return resolved
+
+
+def _resolve_fade(raw: dict | None, max_ms: float) -> dict | None:
+    """`{color, duration_s}` for a `fade_in`/`fade_out` spec, or `None` if
+    it's absent/zero-duration. `duration_ms` is clamped to `max_ms` (the
+    clip's own resolved content length) - fading longer than the clip itself
+    doesn't mean anything."""
+    if not raw:
+        return None
+    duration_ms = min(raw.get('duration_ms') or 0, max_ms)
+    if duration_ms <= 0:
+        return None
+    color = raw.get('color')
+    if color not in _FADE_COLORS:
+        color = 'black'
+    return {'color': color, 'duration_s': duration_ms / 1000}
+
+
+def build_render_plan(project: dict, video_edit: dict, settings: dict | None = None) -> dict:
     """Pure resolution of an EDL against the project's actual scenes/tracks
     into everything `build_ffmpeg_command` needs - no ffmpeg, no disk I/O
     beyond what the caller already loaded into `project`/`video_edit`."""
@@ -90,6 +210,7 @@ def build_render_plan(project: dict, video_edit: dict) -> dict:
         raise RenderPlanError('У выбранного аудиотрека неизвестна длительность')
 
     resolved_clips = []
+    effective_ms_list = []
     total_ms = 0.0
     all_portrait = True
     for clip in clips:
@@ -123,6 +244,7 @@ def build_render_plan(project: dict, video_edit: dict) -> dict:
         # mismatch case (the global `-t` cap on the final command still
         # keeps the overall output correct regardless).
         effective_ms = (trim_end_ms - trim_start_ms) / speed if trim_end_ms is not None else 0.0
+        effective_ms_list.append(effective_ms)
         total_ms += effective_ms
         resolved_clips.append({
             'file_path': video['file_path'],
@@ -130,7 +252,30 @@ def build_render_plan(project: dict, video_edit: dict) -> dict:
             'trim_end_s': trim_end_ms / 1000 if trim_end_ms is not None else None,
             'speed': speed,
             'tpad_s': 0.0,
+            'transition_in': None,
+            'fade_in': _resolve_fade(clip.get('fade_in'), effective_ms),
+            'fade_out': _resolve_fade(clip.get('fade_out'), effective_ms),
         })
+
+    # A transition eats into (overlaps) both the clip before it and this one
+    # - not extra time - so it has to come back out of `total_ms` before the
+    # tail freeze-pad is sized, or the estimate runs long by the sum of every
+    # transition's own duration.
+    total_transition_ms = 0.0
+    for i in range(1, len(clips)):
+        raw = clips[i].get('transition_in')
+        xfade_name = _TRANSITION_XFADE_NAME.get((raw or {}).get('type'))
+        if not xfade_name:
+            continue
+        # Clamped to whichever neighbour has less content to spare - a
+        # transition can never outlast the clip it's blending into or out of.
+        max_ms = min(effective_ms_list[i - 1], effective_ms_list[i])
+        duration_ms = min(raw.get('duration_ms') or 0, max_ms)
+        if duration_ms / 1000 < _TRANSITION_MIN_S:
+            continue
+        resolved_clips[i]['transition_in'] = {'type': xfade_name, 'duration_s': duration_ms / 1000}
+        total_transition_ms += duration_ms
+    total_ms -= total_transition_ms
 
     pad_s = max(0.0, audio_duration_s - total_ms / 1000)
     if pad_s > 0:
@@ -139,6 +284,7 @@ def build_render_plan(project: dict, video_edit: dict) -> dict:
     width, height = _PORTRAIT_CANVAS if all_portrait else _DEFAULT_CANVAS
     return {
         'clips': resolved_clips,
+        'overlays': _resolve_overlays(project, settings or {}, video_edit),
         'audio_file_path': track['file_path'],
         'audio_duration_s': audio_duration_s,
         'target_width': width,
@@ -154,6 +300,7 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
     `-map {i}:a` on a video input, since an AI-generated clip can carry a
     silent embedded audio track that must never leak into the final mux."""
     clips = plan['clips']
+    overlays = plan.get('overlays') or []
     w, h = plan['target_width'], plan['target_height']
 
     cmd = ['ffmpeg', '-y']
@@ -161,9 +308,21 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
         cmd += ['-i', str(project_dir / clip['file_path'])]
     audio_index = len(clips)
     cmd += ['-i', str(project_dir / plan['audio_file_path'])]
+    overlay_base_index = audio_index + 1
+    for overlay in overlays:
+        # `-loop 1` turns the still image into an infinite stream, so the
+        # `overlay` filter below has frames for as long as its own
+        # `enable='between(...)'` window stays true - bounded by the whole
+        # command's final `-t`, not by the image input itself.
+        cmd += ['-loop', '1', '-i', str(project_dir / overlay['file_path'])]
 
     filter_parts = []
     labels = []
+    # A clip's own resolved output duration (content + tail freeze-pad, if
+    # any) - `None` when unbounded (unknown source length, no explicit trim
+    # end). Only needed for transition `offset` math below, but cheap enough
+    # to always compute.
+    clip_durations_s = []
     for i, clip in enumerate(clips):
         label = f'v{i}'
         # `trim_end_s: None` (unknown source duration, no explicit trim end
@@ -177,14 +336,83 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
             f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}"
         )
+        content_duration_s = None
+        if clip['trim_end_s'] is not None:
+            content_duration_s = (clip['trim_end_s'] - clip['trim_start_s']) / clip['speed']
+        if clip['fade_in']:
+            chain += f",fade=t=in:st=0:d={clip['fade_in']['duration_s']:.3f}:color={clip['fade_in']['color']}"
+        if clip['fade_out'] and content_duration_s is not None:
+            fade_out_st = max(0.0, content_duration_s - clip['fade_out']['duration_s'])
+            chain += f",fade=t=out:st={fade_out_st:.3f}:d={clip['fade_out']['duration_s']:.3f}:color={clip['fade_out']['color']}"
         if clip['tpad_s'] > 0:
             chain += f",tpad=stop_mode=clone:stop_duration={clip['tpad_s']:.3f}"
         chain += f"[{label}]"
         filter_parts.append(chain)
         labels.append(f'[{label}]')
+        clip_durations_s.append(None if content_duration_s is None else content_duration_s + clip['tpad_s'])
 
-    filter_parts.append(f"{''.join(labels)}concat=n={len(clips)}:v=1:a=0[vout]")
+    # With no overlays, the clip chain feeds `[vout]` directly (unchanged
+    # from before overlays existed); with overlays, it feeds an intermediate
+    # `[vbase]` that the overlay chain below composites onto, ending in
+    # `[vout]` itself.
+    concat_label = 'vbase' if overlays else 'vout'
+    has_transitions = any(clip['transition_in'] for clip in clips)
+    if not has_transitions:
+        # The common case, unchanged byte-for-byte from before transitions
+        # existed: one `concat` over every clip at once.
+        filter_parts.append(f"{''.join(labels)}concat=n={len(clips)}:v=1:a=0[{concat_label}]")
+    else:
+        # At least one boundary is a real crossfade - `xfade` only ever
+        # blends exactly two streams, so clips are chained pairwise instead,
+        # a hard `concat=n=2` at a boundary with no transition and an
+        # `xfade` at one with a resolved `transition_in`. `xfade`'s `offset`
+        # is "where in the *combined* stream so far to start blending", so
+        # `cumulative_s` tracks that running total - once any clip's own
+        # duration is unbounded, it (and every boundary after it) falls back
+        # to a hard cut rather than guessing at an offset.
+        current_label = '[v0]'
+        cumulative_s = clip_durations_s[0]
+        for i in range(1, len(clips)):
+            this_label = f'[v{i}]'
+            transition = clips[i]['transition_in']
+            out_label = f'[{concat_label}]' if i == len(clips) - 1 else f'[vjoin{i}]'
+            if transition and cumulative_s is not None and clip_durations_s[i] is not None:
+                offset_s = max(0.0, cumulative_s - transition['duration_s'])
+                filter_parts.append(
+                    f"{current_label}{this_label}xfade=transition={transition['type']}:"
+                    f"duration={transition['duration_s']:.3f}:offset={offset_s:.3f}{out_label}",
+                )
+                cumulative_s = cumulative_s + clip_durations_s[i] - transition['duration_s']
+            else:
+                filter_parts.append(f"{current_label}{this_label}concat=n=2:v=1:a=0{out_label}")
+                cumulative_s = (
+                    None if cumulative_s is None or clip_durations_s[i] is None
+                    else cumulative_s + clip_durations_s[i]
+                )
+            current_label = out_label
     filter_parts.append(f"[{audio_index}:a]apad[aout]")
+
+    if overlays:
+        margin_x = round(w * _OVERLAY_MARGIN_PCT)
+        margin_y = round(h * _OVERLAY_MARGIN_PCT)
+        cur = f'[{concat_label}]'
+        for i, overlay in enumerate(overlays):
+            idx = overlay_base_index + i
+            ow_px = max(1, round(w * overlay['width_pct'] / 100))
+            # `-2` (not `-1`) forces an even auto-height regardless of the
+            # source image's own aspect - odd dimensions here have been
+            # observed to trip up some ffmpeg builds' rgba scalers.
+            filter_parts.append(
+                f"[{idx}:v]scale={ow_px}:-2,format=rgba,colorchannelmixer=aa={overlay['opacity']:.3f}[ovl{i}]",
+            )
+            x_expr, y_expr = _OVERLAY_XY_EXPR[overlay['position']](margin_x, margin_y)
+            end_s = overlay['start_s'] + overlay['duration_s']
+            out_label = '[vout]' if i == len(overlays) - 1 else f'[vov{i}]'
+            filter_parts.append(
+                f"{cur}[ovl{i}]overlay=x={x_expr}:y={y_expr}:"
+                f"enable='between(t,{overlay['start_s']:.3f},{end_s:.3f})'{out_label}",
+            )
+            cur = out_label
 
     cmd += [
         '-filter_complex', ';'.join(filter_parts),
@@ -213,13 +441,15 @@ def _run_ffmpeg_render(cmd: list[str]) -> None:
         raise RuntimeError(f'ffmpeg не смог собрать видео (код {result.returncode}): {detail[-400:]}')
 
 
-async def render_to_file(project: dict, video_edit: dict, project_dir: Path, dest_path: Path) -> dict:
+async def render_to_file(
+    project: dict, video_edit: dict, project_dir: Path, dest_path: Path, settings: dict | None = None,
+) -> dict:
     if shutil.which('ffmpeg') is None:
         raise RuntimeError(
             'ffmpeg не найден в PATH - он нужен, чтобы собрать финальное видео. '
             'Установите ffmpeg (ffmpeg.org) и перезапустите backend.',
         )
-    plan = build_render_plan(project, video_edit)
+    plan = build_render_plan(project, video_edit, settings)
     cmd = build_ffmpeg_command(plan, project_dir, dest_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(_run_ffmpeg_render, cmd)
@@ -232,10 +462,11 @@ async def _run_render_job(job_id: str, slug: str) -> None:
         if project is None:
             raise RuntimeError('Проект не найден')
         video_edit = project.get('video_edit') or {}
+        settings = storage.load_settings()
         render_id = f'rnd_{uuid4().hex[:8]}'
         project_dir = storage.project_dir(slug)
         dest_path = project_dir / 'editor' / f'{render_id}.mp4'
-        result = await render_to_file(project, video_edit, project_dir, dest_path)
+        result = await render_to_file(project, video_edit, project_dir, dest_path, settings)
 
         render_entry = {
             'render_id': render_id,

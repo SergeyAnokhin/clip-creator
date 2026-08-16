@@ -50,9 +50,9 @@ function formatTime(ms) {
  * useEditorStage.js for the state/preview-engine design; this component is
  * layout only. */
 export default function EditorStage({
-  L, project, isMobile, videoEdit, clips, totalDurationMs, selectedTrack, tracks,
+  L, project, isMobile, videoEdit, clips, overlays, totalDurationMs, selectedTrack, tracks,
   playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds, selectedClipIds,
-  videoRef, audioRef, actions,
+  selectedOverlayId, selectedTransitionClipId, logos, videoRef, audioRef, canUndo, canRedo, actions,
 }) {
   const [toolsSlot, setToolsSlot] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -68,6 +68,28 @@ export default function EditorStage({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isFullscreen]);
+
+  // Ctrl/Cmd+Z / Ctrl/Cmd+Y (or +Shift+Z) undo/redo, global to the stage
+  // rather than tied to whatever has focus - mirrors PosterConstructor.jsx's
+  // identical listener. Only mounted while this stage is on screen (see
+  // WorkflowScreen.jsx), so it can't fight the poster editor's own binding.
+  useEffect(() => {
+    function onKeyDown(e) {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        actions.undo();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        actions.redo();
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [actions]);
 
   useEffect(() => {
     if (!resizeDrag) return undefined;
@@ -90,6 +112,7 @@ export default function EditorStage({
   }, [sideWidthPx]);
 
   const scenes = project.scenes || [];
+  const titleCardVariants = project.title_card?.variants || [];
   const renders = [...(videoEdit.renders || [])].reverse();
   const mismatchMs = selectedTrack ? totalDurationMs - selectedTrack.duration_ms : 0;
   const showMismatch = selectedTrack && Math.abs(mismatchMs) > DURATION_MISMATCH_THRESHOLD_MS;
@@ -101,6 +124,7 @@ export default function EditorStage({
       <div className={`editor-layout${isMobile ? ' is-mobile' : ''}`}>
         <EditorPreview
           L={L} videoRef={videoRef} audioRef={audioRef} projectId={project.id} selectedTrack={selectedTrack}
+          overlays={overlays} playheadMs={playheadMs} titleCardVariants={titleCardVariants} logos={logos}
           isFullscreen={isFullscreen} onToggleFullscreen={() => setIsFullscreen((v) => !v)}
         />
 
@@ -196,10 +220,13 @@ export default function EditorStage({
       </div>
 
       <EditorTimeline
-        L={L} projectId={project.id} scenes={scenes} clips={clips} totalDurationMs={totalDurationMs}
+        L={L} projectId={project.id} scenes={scenes} clips={clips} overlays={overlays} totalDurationMs={totalDurationMs}
         selectedTrack={selectedTrack} playheadMs={playheadMs} isPlaying={isPlaying}
-        selectedClipIds={selectedClipIds} actions={actions} toolsSlotNode={toolsSlot}
-        onOpenShortcuts={() => setShortcutsOpen(true)}
+        selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
+        selectedTransitionClipId={selectedTransitionClipId}
+        titleCardVariants={titleCardVariants} logos={logos}
+        actions={actions} toolsSlotNode={toolsSlot}
+        onOpenShortcuts={() => setShortcutsOpen(true)} canUndo={canUndo} canRedo={canRedo}
       />
 
       {shortcutsOpen && <KeyboardShortcutsModal L={L} onClose={() => setShortcutsOpen(false)} />}

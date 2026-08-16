@@ -1,5 +1,35 @@
-import { Copy, Trash2 } from 'lucide-react';
-import { clampTrim } from '../../lib/timeline.js';
+import { Copy, RotateCcw, Trash2 } from 'lucide-react';
+import { DEFAULT_FADE_MS, MAX_SPEED, MIN_SPEED, clampTrim } from '../../lib/timeline.js';
+
+/** One fade row (in or out): a duration field (0 = off) plus a black/white
+ * swatch pair that both picks the colour and - if the fade was off - turns
+ * it on at `DEFAULT_FADE_MS`. A top-level component (not nested inside
+ * TimelineClipInspector) so React doesn't see a "new" component type on
+ * every render, which would remount the `<input>` and drop its focus after
+ * every keystroke. */
+function FadeRow({ L, label, fade, onSet }) {
+  const color = fade?.color || 'black';
+  return (
+    <span className="tl-inspector-label tl-inspector-row">
+      <span className="tl-inspector-rowlabel">{label}</span>
+      <input
+        type="number" step="0.1" min={0}
+        className="field tl-inspector-num" value={fade ? (fade.duration_ms / 1000).toFixed(1) : '0'}
+        onChange={(e) => onSet(color, Math.max(0, Number(e.target.value)) * 1000)}
+      />
+      <button
+        type="button" className={`tl-fade-swatch tl-fade-swatch-black${color === 'black' ? ' is-selected' : ''}`}
+        title={L.editor_fadeColorBlack} aria-label={L.editor_fadeColorBlack}
+        onClick={() => onSet('black', fade?.duration_ms || DEFAULT_FADE_MS)}
+      />
+      <button
+        type="button" className={`tl-fade-swatch tl-fade-swatch-white${color === 'white' ? ' is-selected' : ''}`}
+        title={L.editor_fadeColorWhite} aria-label={L.editor_fadeColorWhite}
+        onClick={() => onSet('white', fade?.duration_ms || DEFAULT_FADE_MS)}
+      />
+    </span>
+  );
+}
 
 /** Properties strip for the clip currently selected on the timeline - the
  * numeric counterpart to the direct-manipulation gestures in
@@ -45,12 +75,14 @@ export default function TimelineClipInspector({
     }
   }
 
+  const isDefault = (clip.trim_start_ms || 0) === 0 && clip.trim_end_ms == null && (clip.speed || 1) === 1;
+
   return (
     <div className="tl-inspector">
       <span className="tl-inspector-title">{L.editor_clipInspectorTitle}</span>
 
       <select
-        className="field tl-inspector-field" value={clip.video_id}
+        className="field tl-inspector-field tl-inspector-row" value={clip.video_id}
         onChange={(e) => actions.changeClipVideo(clip.clip_id, e.target.value)}
       >
         {videos.map((v, i) => (
@@ -58,15 +90,15 @@ export default function TimelineClipInspector({
         ))}
       </select>
 
-      <span className="tl-inspector-label">
-        {L.editor_clipTrimLabel}
+      <span className="tl-inspector-label tl-inspector-row">
+        <span className="tl-inspector-rowlabel">{L.editor_clipTrimLabel}</span>
         <input
           type="number" step="0.1" min={0} {...(sourceDurationMs > 0 ? { max: (sourceDurationMs / 1000).toFixed(1) } : {})}
           className="field tl-inspector-num" value={(clip.trimStartMs / 1000).toFixed(1)}
           aria-label={L.editor_clipTrimStartLabel}
           onChange={(e) => commitTrim(Number(e.target.value) * 1000, clip.trimEndMs)}
         />
-        →
+        <span className="tl-inspector-arrow">→</span>
         <input
           type="number" step="0.1" min={0} {...(sourceDurationMs > 0 ? { max: (sourceDurationMs / 1000).toFixed(1) } : {})}
           className="field tl-inspector-num" value={(clip.trimEndMs / 1000).toFixed(1)}
@@ -75,20 +107,32 @@ export default function TimelineClipInspector({
         />
       </span>
 
-      <label className="tl-inspector-label">
-        {L.editor_clipSpeedLabel}
+      <label className="tl-inspector-label tl-inspector-row">
+        <span className="tl-inspector-rowlabel">{L.editor_clipSpeedLabel}</span>
         <input
-          type="number" step="0.25" min="0.25" max="4"
+          type="number" step="0.25" min={MIN_SPEED} max={MAX_SPEED}
           className="field tl-inspector-num" value={clip.speed || 1}
-          onChange={(e) => actions.setClipSpeed(clip.clip_id, Math.max(0.25, Number(e.target.value) || 1))}
-        />×
+          onChange={(e) => actions.setClipSpeed(clip.clip_id, Math.min(MAX_SPEED, Math.max(MIN_SPEED, Number(e.target.value) || 1)))}
+        />
+        <span className="tl-inspector-arrow">×</span>
       </label>
 
-      {!sourceDurationMs && <span className="tl-inspector-warn">⚠ {L.editor_unknownDuration}</span>}
+      <FadeRow L={L} label={L.editor_fadeInLabel} fade={clip.fade_in} onSet={(color, ms) => actions.setClipFadeIn(clip.clip_id, color, ms)} />
+      <FadeRow L={L} label={L.editor_fadeOutLabel} fade={clip.fade_out} onSet={(color, ms) => actions.setClipFadeOut(clip.clip_id, color, ms)} />
 
-      <button className="icon-btn icon-btn-danger tl-inspector-remove" title={L.editor_clipRemove} onClick={() => actions.removeClips([clip.clip_id])}>
-        <Trash2 size={14} />
-      </button>
+      {!sourceDurationMs && <span className="tl-inspector-warn tl-inspector-row">⚠ {L.editor_unknownDuration}</span>}
+
+      <div className="tl-inspector-actions">
+        <button
+          className="icon-btn" title={L.editor_clipReset} disabled={isDefault}
+          onClick={() => actions.resetClip(clip.clip_id)}
+        >
+          <RotateCcw size={14} />
+        </button>
+        <button className="icon-btn icon-btn-danger" title={L.editor_clipRemove} onClick={() => actions.removeClips([clip.clip_id])}>
+          <Trash2 size={14} />
+        </button>
+      </div>
     </div>
   );
 }
