@@ -1,11 +1,12 @@
 import { Link as LinkIcon, X } from 'lucide-react';
+import { focusOnMount, onBackdropClick } from '../../lib/a11y.js';
 
 export default function NewProjectModal({ L, url, rawText, loading, onUrlChange, onRawTextChange, onSubmit, onClose }) {
   const canSubmit = rawText.trim() || url.trim();
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card">
         <div className="modal-header">
           <span>{L.modalTitle}</span>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>
@@ -22,7 +23,7 @@ export default function NewProjectModal({ L, url, rawText, loading, onUrlChange,
           value={rawText}
           onChange={(e) => onRawTextChange(e.target.value)}
           placeholder={L.modalRawTextPlaceholder}
-          autoFocus
+          ref={focusOnMount}
         />
 
         <div style={{ fontSize: 11.5, color: 'var(--text-dim)', textAlign: 'center', margin: '2px 0 14px' }}>

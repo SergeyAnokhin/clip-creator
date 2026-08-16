@@ -1,11 +1,17 @@
 import { Calendar, FolderOpen, Image, Music2, Trash2 } from 'lucide-react';
 import { formatDate } from '../../lib/format.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 export default function ProjectCard({ project, L, lang, onOpen, onDelete }) {
   const scenesComplete = project.scenes_ready === project.scenes_total;
 
   return (
-    <div className="project-card" onClick={() => onOpen(project.id)}>
+    <div
+      className="project-card"
+      role="button" tabIndex={0}
+      onClick={() => onOpen(project.id)}
+      onKeyDown={onActivateKey(() => onOpen(project.id))}
+    >
       <div className="project-card-top">
         <div style={{ minWidth: 0 }}>
           <div className="project-card-title">{project.title}</div>

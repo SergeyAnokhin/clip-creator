@@ -6,6 +6,7 @@ import {
   applyManualAnchors, currentLineIndex, flattenLyricsLines, isBeyondKnownTiming, isTappableLine, lastKnownEnd,
 } from '../../lib/lyricsTiming.js';
 import JsonTreeView from '../common/JsonTreeView.jsx';
+import { onActivateKey, onBackdropClick } from '../../lib/a11y.js';
 
 /** `1:02.340` - line/word timestamps shown with millisecond precision (the
  * compact karaoke panel only needs whole lines, but this view is exactly
@@ -175,8 +176,8 @@ export default function MurekaTrackDetailModal({
   }
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card modal-card-lg mureka-detail-card" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card modal-card-lg mureka-detail-card">
         <div className="modal-header">
           <div className="mureka-detail-header-text">
             <div className="mureka-detail-header-title">
@@ -246,7 +247,9 @@ export default function MurekaTrackDetailModal({
                   key={item.key}
                   ref={item.i === activeIdx ? activeRowRef : undefined}
                   className={`mureka-detail-line${item.i === activeIdx ? ' is-current' : ''}${item.row.isSection ? ' is-instrumental' : ''}${item.row.static ? ' is-static' : ''}`}
+                  role="button" tabIndex={0}
                   onClick={() => seekTo(item.row.start)}
+                  onKeyDown={onActivateKey(() => seekTo(item.row.start))}
                 >
                   <span className="mureka-detail-line-time">{formatMs(item.row.start)}</span>
                   <span className="mureka-detail-line-text">

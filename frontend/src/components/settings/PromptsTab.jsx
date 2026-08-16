@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react';
 import { groupPresetsByService } from '../../lib/sunoPrompt.js';
 import { pickReadableTextColor } from '../../lib/musicTagColors.js';
 import BasePromptPresetEditor from './BasePromptPresetEditor.jsx';
+import { onActivateKey } from '../../lib/a11y.js';
 
 // Settings > "Prompts": the two tag lists (Suno special tags, Mureka music
 // tags), the read-only Suno/Mureka preset list, the user-managed preset
@@ -88,7 +89,9 @@ export default function PromptsTab({
                 className="settings-row-name"
                 style={{ width: 'auto', flex: 1, cursor: 'pointer' }}
                 title={L.settings_clickToEdit}
+                role="button" tabIndex={0}
                 onClick={() => startEditTag(i)}
+                onKeyDown={onActivateKey(() => startEditTag(i))}
               >
                 {tag}
               </span>
@@ -134,7 +137,9 @@ export default function PromptsTab({
                   border: 'none',
                 }}
                 title={L.settings_clickToEdit}
+                role="button" tabIndex={0}
                 onClick={() => startEditMusicTag(tag)}
+                onKeyDown={onActivateKey(() => startEditMusicTag(tag))}
               >
                 {tag.label}
               </span>
@@ -254,7 +259,9 @@ export default function PromptsTab({
                 className="settings-row-name"
                 style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
                 title={L.settings_clickToEdit}
+                role="button" tabIndex={0}
                 onClick={() => startEditExample(i)}
+                onKeyDown={onActivateKey(() => startEditExample(i))}
               >
                 {example}
               </span>

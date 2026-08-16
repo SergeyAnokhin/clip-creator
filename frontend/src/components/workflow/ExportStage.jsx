@@ -1,5 +1,6 @@
 import { Check, Download, Film, Music4, Type as TypeIcon } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** Export stage - the last step: a single "download the finished project"
  * button plus the two picks it depends on. Videos need no picker here -
@@ -58,7 +59,9 @@ export default function ExportStage({ L, project, actions }) {
                     <div
                       className={`titlecard-gallery-frame${marked ? ' is-main' : ''}`}
                       style={{ aspectRatio: `${w || 1} / ${h || 1}`, cursor: 'pointer' }}
+                      role="button" tabIndex={0} aria-pressed={marked} aria-label={L.export_toggleTitleCard}
                       onClick={() => actions.toggleTitleCardExport(i)}
+                      onKeyDown={onActivateKey(() => actions.toggleTitleCardExport(i))}
                     >
                       <img src={mediaUrl(`projects/${project.id}/${variant.file_path}`)} alt="" />
                       <button

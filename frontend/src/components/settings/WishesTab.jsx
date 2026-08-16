@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Mic, MicOff, Pencil, Trash2 } from 'lucide-react';
 import { sortByUseCount } from '../../lib/wishes.js';
+import { focusOnMount } from '../../lib/a11y.js';
 import { useFieldVoice } from '../../hooks/useVoice.js';
 
 // Settings > "Wishes": the three separate wish libraries (music/lyrics,
@@ -86,7 +87,7 @@ export default function WishesTab({ L, lang, showToast, wishLibrary, sceneWishLi
                     value={editWishTitle}
                     onChange={(e) => setEditWishTitle(e.target.value)}
                     placeholder={L.settings_wishLibraryTitleLabel}
-                    autoFocus
+                    ref={focusOnMount}
                   />
                   {wishVoice.isSupported && (
                     <button
@@ -176,7 +177,7 @@ export default function WishesTab({ L, lang, showToast, wishLibrary, sceneWishLi
                     value={editSceneWishTitle}
                     onChange={(e) => setEditSceneWishTitle(e.target.value)}
                     placeholder={L.settings_wishLibraryTitleLabel}
-                    autoFocus
+                    ref={focusOnMount}
                   />
                 </div>
                 <textarea
@@ -234,7 +235,7 @@ export default function WishesTab({ L, lang, showToast, wishLibrary, sceneWishLi
                     value={editVideoWishTitle}
                     onChange={(e) => setEditVideoWishTitle(e.target.value)}
                     placeholder={L.settings_wishLibraryTitleLabel}
-                    autoFocus
+                    ref={focusOnMount}
                   />
                 </div>
                 <textarea

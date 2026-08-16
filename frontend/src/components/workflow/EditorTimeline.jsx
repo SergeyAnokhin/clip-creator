@@ -273,7 +273,13 @@ export default function EditorTimeline({
         </button>
       </div>
 
-      <div className="tl-scroll" ref={scrollRef} onKeyDown={onKeyDown} tabIndex={0}>
+      {/* The scroll box is the timeline's own keyboard surface (arrows move
+          between clips, Space/S/Delete act on them), so it has to be
+          focusable and listen for keys while staying a container rather than
+          a control - the two rules below assume that combination is a
+          mistake. */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions */}
+      <div className="tl-scroll" ref={scrollRef} role="application" aria-label={L.editor_timelineLabel} onKeyDown={onKeyDown} tabIndex={0}>
         <div
           className="tl-content" ref={contentRef} style={{ width: contentWidth }}
           onPointerDown={(e) => { actions.selectClip(null); startScrub(e); }}

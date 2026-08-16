@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Pause, Play, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 // Mureka's reference-upload hard-requires audio >= this long (confirmed
 // live against the real API, 2026-08: "The audio duration should be at
@@ -177,8 +178,8 @@ export default function ReferenceAudioTrimmer({ L, projectId, source, uploading,
   const canConfirm = !uploading && duration > 0 && !tooShort && (selEnd - selStart) >= MIN_SELECTION_S - 0.05;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card modal-card-lg" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card modal-card-lg" style={{ maxWidth: 720 }}>
         <div className="modal-header">
           <span>{L.mureka_trimTitle}</span>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>

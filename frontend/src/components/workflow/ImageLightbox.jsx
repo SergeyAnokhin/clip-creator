@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { formatCost } from '../../lib/pricing.js';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 /** Click-to-enlarge modal for a scene's `images` array, plus (when the
  * current image carries them - see images.py's `_run_job`) a row of
@@ -53,8 +54,8 @@ export default function ImageLightbox({ L, projectId, images, initialIndex = 0, 
   const hasMeta = image.model || image.cost != null || image.aspect_ratio || image.base_prompt || naturalSize;
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card modal-card-lg" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card modal-card-lg">
         <div className="modal-header">
           <span />
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>

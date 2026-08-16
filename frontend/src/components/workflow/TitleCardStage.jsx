@@ -7,6 +7,7 @@ import PosterGallery from './PosterGallery.jsx';
 import PosterConstructor from './PosterConstructor.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
 import { sortByUseCount } from '../../lib/wishes.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 const ASPECT_RATIOS = ['1:1', '16:9', '9:16'];
 
@@ -27,7 +28,9 @@ function DebugPanel({ L, lastDebug }) {
       <div
         className="suno-panel-title"
         style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -73,7 +76,9 @@ function BasePromptPanel({ L, basePrompt, presets, presetNameDraft, actions }) {
       <div
         className="suno-panel-title"
         style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -153,6 +158,8 @@ function ReferencePicker({ L, projectId, candidates, onPick, onUpload, onClose }
           {candidates.map((path) => (
             <button
               key={path}
+              title={L.pickImageTitle}
+              aria-label={L.pickImageTitle}
               style={{
                 padding: 0, border: 'none', background: 'rgba(255,255,255,0.04)', cursor: 'pointer',
                 width: 84, height: 84, flexShrink: 0,

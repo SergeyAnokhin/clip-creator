@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { pickReadableTextColor } from '../../lib/musicTagColors.js';
+import { onActivateKey } from '../../lib/a11y.js';
 import JsonTreeView from '../common/JsonTreeView.jsx';
 import CopyButton from './CopyButton.jsx';
 import KaraokeLyrics from './KaraokeLyrics.jsx';
@@ -197,8 +198,13 @@ function TrackCard({
         >
           {playing ? <Pause size={13} /> : <Play size={13} />}
         </button>
+        {/* Click-to-seek is a pointer-only convenience on top of the play
+            button next to it (the handler reads `clientX`, so there is no
+            meaningful keyboard equivalent) - hence `role="presentation"`
+            rather than a fake button role. */}
         <div
           className="mureka-track-progress"
+          role="presentation"
           style={{ cursor: track.duration_ms ? 'pointer' : 'default' }}
           onClick={(e) => {
             if (!track.duration_ms) return;
@@ -233,7 +239,9 @@ function TrackCard({
             <span
               key={tag.id} className="chip mureka-tag-badge"
               style={{ background: tag.color, color: pickReadableTextColor(tag.color) }}
+              role="button" tabIndex={0}
               onClick={() => onToggleTag(track.track_id, tag.id)}
+              onKeyDown={onActivateKey(() => onToggleTag(track.track_id, tag.id))}
               title={L.mureka_removeTagTitle}
             >
               {tag.label} <X size={10} />

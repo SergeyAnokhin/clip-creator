@@ -5,6 +5,7 @@ import {
 import { TYPE_COLORS } from '../../i18n/dict.js';
 import TypeMenu from './TypeMenu.jsx';
 import TagMenu from './TagMenu.jsx';
+import { focusOnMount, onActivateKey } from '../../lib/a11y.js';
 
 export default function BlockCard({
   block, L, isEditing, draftContent, editingLineIndex, lineDraft, typeMenuOpen, cloneMenuOpen, tagMenuOpen, specialTags,
@@ -44,7 +45,12 @@ export default function BlockCard({
   }
 
   return (
-    <div className={`block-card${isInterlude ? ' block-card-tag' : ''}${anyMenuOpen ? ' block-card-menu-open' : ''}`} style={{ '--stripe': stripe }} tabIndex={0} onKeyDown={handleKeyDown}>
+    // The card is a focusable group, not a control: it takes focus only so
+    // the 1-9 "insert special tag" shortcuts above have somewhere to land,
+    // and every action inside it is a real button. That is exactly the shape
+    // the two rules below forbid, hence the local exception.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions
+    <div className={`block-card${isInterlude ? ' block-card-tag' : ''}${anyMenuOpen ? ' block-card-menu-open' : ''}`} style={{ '--stripe': stripe }} role="group" aria-label={chipLabel} tabIndex={0} onKeyDown={handleKeyDown}>
       <div className={`block-move${isInterlude ? ' block-move-compact' : ''}`}>
         {!isInterlude && <button title={L.moveToStart} onClick={onMoveToStart}><ChevronsUp size={13} /></button>}
         <button onClick={onMoveUp}><ChevronUp size={13} /></button>
@@ -108,7 +114,7 @@ export default function BlockCard({
               value={draftContent}
               onChange={(e) => onDraftChange(e.target.value)}
               rows={Math.max(draftContent.split('\n').length, 2)}
-              autoFocus
+              ref={focusOnMount}
             />
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button className="btn btn-gradient" style={{ padding: '6px 16px' }} onClick={onSaveEdit}>{L.save}</button>
@@ -151,13 +157,20 @@ export default function BlockCard({
                     type="text"
                     className="block-line-input"
                     value={lineDraft}
-                    autoFocus
+                    ref={focusOnMount}
                     onChange={(e) => onLineDraftChange(e.target.value)}
                     onKeyDown={handleLineInputKeyDown}
                     onBlur={onSaveLineEdit}
                   />
                 ) : (
-                  <p className="block-line" onClick={() => onStartLineEdit(i, line)}>{line || ' '}</p>
+                  <span
+                    className="block-line"
+                    role="button" tabIndex={0}
+                    onClick={() => onStartLineEdit(i, line)}
+                    onKeyDown={onActivateKey(() => onStartLineEdit(i, line))}
+                  >
+                    {line || ' '}
+                  </span>
                 )}
                 <button
                   type="button"

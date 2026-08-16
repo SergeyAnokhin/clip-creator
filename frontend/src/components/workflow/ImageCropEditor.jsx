@@ -4,6 +4,7 @@ import { Image as KonvaImage, Layer, Rect, Stage, Transformer } from 'react-konv
 import { Crop, Loader2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import { mediaUrl } from '../../api/client.js';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 const OUTPAINT_MAX_CANVAS_SIDE = 2560;
 const MIN_ZOOM = 0.15;
@@ -119,8 +120,8 @@ export default function ImageCropEditor({ L, projectId, image, defaultQuality, o
   }
 
   return createPortal(
-    <div className="modal-backdrop" onClick={saving ? undefined : onClose}>
-      <div className="modal-card modal-card-lg crop-editor-card" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={saving ? undefined : onBackdropClick(onClose)}>
+      <div className="modal-card modal-card-lg crop-editor-card">
         <div className="modal-header">
           <span className="crop-editor-title"><Crop size={15} /> {L.imageCrop_title}</span>
           <div className="crop-editor-zoom">

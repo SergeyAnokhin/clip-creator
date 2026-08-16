@@ -30,13 +30,20 @@ export default function ImagesStage({
         <div className="scene-prompt-label">{L.referenceImagesLabel}</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {(project.reference_images || []).map((path) => (
-            <div key={path} style={{ position: 'relative', width: 64, height: 64, cursor: 'pointer' }}>
-              <img
-                src={mediaUrl(`projects/${project.id}/${path}`)}
-                alt=""
-                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }}
+            <div key={path} style={{ position: 'relative', width: 64, height: 64 }}>
+              <button
+                type="button"
+                title={L.expandImageTitle}
+                aria-label={L.expandImageTitle}
+                style={{ width: '100%', height: '100%', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
                 onClick={() => setLightboxImage(path)}
-              />
+              >
+                <img
+                  src={mediaUrl(`projects/${project.id}/${path}`)}
+                  alt=""
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8, display: 'block' }}
+                />
+              </button>
               <button
                 className="icon-btn"
                 style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20 }}

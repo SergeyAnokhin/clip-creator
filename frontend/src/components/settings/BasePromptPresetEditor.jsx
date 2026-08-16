@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Trash2 } from 'lucide-react';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** Named-prompt-snippet list editor (name + prompt text, add/rename/delete) -
  * used twice on the "Музыкальные промпты" settings tab (Suno and Mureka user
@@ -46,7 +47,9 @@ export default function BasePromptPresetEditor({ L, title, hint, presets, onSave
               className="settings-row-name"
               style={{ width: 'auto', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
               title={L.settings_clickToEdit}
+              role="button" tabIndex={0}
               onClick={() => startEdit(preset)}
+              onKeyDown={onActivateKey(() => startEdit(preset))}
             >
               {preset.name}
             </span>

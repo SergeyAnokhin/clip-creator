@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronsDown, ChevronsUp, Copy } from 'lucide-react';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** How deep a node starts *expanded* - beyond this, nodes render collapsed
  * (VSCode-style `{n}`/`[n]` summary) so a large raw payload (e.g. Mureka's
@@ -58,7 +59,19 @@ function JsonNode({ keyLabel, value, depth, forceEpoch }) {
 
   return (
     <div className="json-tree-node">
-      <div className={`json-tree-row${isEmpty ? '' : ' json-tree-toggle'}`} onClick={() => !isEmpty && setCollapsed((c) => !c)}>
+      {/* Only a non-empty node is a real toggle - the interactive props are
+          spread in as a group so an empty node stays a plain, unfocusable
+          row instead of announcing itself as a button that does nothing. */}
+      <div
+        className={`json-tree-row${isEmpty ? '' : ' json-tree-toggle'}`}
+        {...(isEmpty ? {} : {
+          role: 'button',
+          tabIndex: 0,
+          'aria-expanded': !collapsed,
+          onClick: () => setCollapsed((c) => !c),
+          onKeyDown: onActivateKey(() => setCollapsed((c) => !c)),
+        })}
+      >
         {!isEmpty && <span className="json-tree-arrow">{collapsed ? '▶' : '▼'}</span>}
         {keyLabel != null && <><span className="json-tree-key">{keyLabel}</span><span className="json-tree-punct">: </span></>}
         <span className="json-tree-punct">{open}</span>

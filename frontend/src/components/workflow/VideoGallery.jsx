@@ -137,7 +137,7 @@ function VideoTile({ L, projectId, video, onDelete, onSelectMain, onRate }) {
         <button className="image-thumb-delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
           <Trash2 size={11} />
         </button>
-        <div className="image-carousel-stars" onClick={(e) => e.stopPropagation()}>
+        <div className="image-carousel-stars" role="presentation" onClick={(e) => e.stopPropagation()}>
           {[1, 2, 3, 4, 5].map((n) => (
             <button key={n} onClick={() => onRate(n)}>
               <Star size={12} color={n <= video.rating ? '#ff9d5c' : 'rgba(255,255,255,0.35)'} />

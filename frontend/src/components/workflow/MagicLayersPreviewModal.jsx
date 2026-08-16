@@ -4,6 +4,7 @@ import { Layer, Image as KonvaImage, Stage } from 'react-konva';
 import { Eye, EyeOff, RotateCcw, Sparkles, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
+import { onActivateKey, onBackdropClick } from '../../lib/a11y.js';
 
 /** One layer's image on the preview `Stage`. A thin `useHtmlImage` +
  * `KonvaImage` wrapper (same reason `MagicLayerNode` exists in
@@ -87,8 +88,8 @@ export default function MagicLayersPreviewModal({ L, projectId, group, onClose }
   }
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card modal-card-lg magic-preview-card" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card modal-card-lg magic-preview-card">
         <div className="modal-header">
           <span className="crop-editor-title"><Sparkles size={15} /> {L.magic_previewTitle}</span>
           <span className="magic-preview-subtitle">{canvasW}×{canvasH} · {group.num_layers} {L.magic_layersCount.toLowerCase()}</span>
@@ -129,7 +130,9 @@ export default function MagicLayersPreviewModal({ L, projectId, group, onClose }
                 <div
                   key={layer.index}
                   className={`magic-preview-row${selected === layer.index ? ' is-selected' : ''}`}
+                  role="button" tabIndex={0} aria-pressed={selected === layer.index} aria-label={label}
                   onClick={() => setSelected(layer.index)}
+                  onKeyDown={onActivateKey(() => setSelected(layer.index))}
                 >
                   <img
                     src={mediaUrl(`projects/${projectId}/${layer.file_path}`)}

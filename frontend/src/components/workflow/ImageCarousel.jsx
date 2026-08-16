@@ -4,6 +4,7 @@ import { mediaUrl } from '../../api/client.js';
 import MagicLayersButton from './MagicLayersButton.jsx';
 import MagicLayersPreviewModal from './MagicLayersPreviewModal.jsx';
 import { bestMagicLayerGroup } from '../../lib/posterLayers.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** Single-image "hero" preview for a scene's `images` array - fills its
  * container edge-to-edge (`.scene-image-panel`, a padding-less sibling block
@@ -65,7 +66,13 @@ export default function ImageCarousel({
     <div className="image-carousel is-fill">
       <div
         className={`image-carousel-frame${image?.is_selected ? ' is-main' : ''}${dragOver ? ' is-drag-over' : ''}`}
-        onClick={showImage ? () => onExpand(currentIndex) : undefined}
+        {...(showImage ? {
+          role: 'button',
+          tabIndex: 0,
+          'aria-label': L.expandImageTitle,
+          onClick: () => onExpand(currentIndex),
+          onKeyDown: onActivateKey(() => onExpand(currentIndex)),
+        } : {})}
         onDragOver={canDrop ? (e) => { e.preventDefault(); setDragOver(true); } : undefined}
         onDragLeave={canDrop ? () => setDragOver(false) : undefined}
         onDrop={handleDrop}
@@ -146,7 +153,7 @@ export default function ImageCarousel({
           </button>
         )}
         {showImage && showStars && (
-          <div className="image-carousel-stars" onClick={(e) => e.stopPropagation()}>
+          <div className="image-carousel-stars" role="presentation" onClick={(e) => e.stopPropagation()}>
             {[1, 2, 3, 4, 5].map((n) => (
               <button key={n} onClick={() => onRate(n)}>
                 <Star size={13} color={n <= image.rating ? '#ff9d5c' : 'rgba(255,255,255,0.35)'} />

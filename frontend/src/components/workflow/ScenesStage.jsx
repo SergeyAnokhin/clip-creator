@@ -4,6 +4,7 @@ import SceneTextCard from './SceneTextCard.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import { formatCost, formatTokens } from '../../lib/pricing.js';
 import { sortByUseCount } from '../../lib/wishes.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** `12с` / `1м 05с` (or the EN `12s` / `1m 05s`) - shared unit labels with
  * SunoStage.jsx's own formatDuration, reused here rather than duplicated
@@ -25,7 +26,9 @@ function BasePromptPanel({ L, sceneMode, basePromptNarrative, basePromptAbstract
       <div
         className="suno-panel-title"
         style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -82,7 +85,9 @@ function DebugPanel({ L, lastDebug }) {
       <div
         className="suno-panel-title"
         style={{ marginBottom: (open || hasUsage) ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}

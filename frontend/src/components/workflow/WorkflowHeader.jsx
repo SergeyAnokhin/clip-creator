@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, Menu, Settings } from 'lucide-react';
 import UsagePill from '../UsagePill.jsx';
 import MiniPlayerWidget from '../MiniPlayerWidget.jsx';
+import { focusOnMount, onActivateKey } from '../../lib/a11y.js';
 
 /** Click-to-edit span: shows plain text, swaps to an input on click, commits
  * on blur/Enter (Escape reverts). Used for the project title and author in
@@ -24,7 +25,7 @@ function EditableField({ value, placeholder, onCommit }) {
   if (editing) {
     return (
       <input
-        autoFocus
+        ref={focusOnMount}
         className="workflow-title-input"
         value={draft}
         placeholder={placeholder}
@@ -38,7 +39,13 @@ function EditableField({ value, placeholder, onCommit }) {
     );
   }
   return (
-    <span className="workflow-title-editable" onClick={startEdit} title={placeholder}>
+    <span
+      className="workflow-title-editable"
+      role="button" tabIndex={0}
+      onClick={startEdit}
+      onKeyDown={onActivateKey(startEdit)}
+      title={placeholder}
+    >
       {value || placeholder}
     </span>
   );

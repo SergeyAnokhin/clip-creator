@@ -5,6 +5,7 @@ import { formatCost } from '../../lib/pricing.js';
 import MagicLayersButton from './MagicLayersButton.jsx';
 import MagicLayersPreviewModal from './MagicLayersPreviewModal.jsx';
 import { bestMagicLayerGroup } from '../../lib/posterLayers.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 const BG_REMOVE_METHODS = ['local', 'fal', 'replicate'];
 
@@ -57,7 +58,9 @@ export default function TitleCardGallery({
             <div
               className={`titlecard-gallery-frame${variant.is_selected ? ' is-main' : ''}`}
               style={{ aspectRatio: `${w || 1} / ${h || 1}` }}
+              role="button" tabIndex={0} aria-label={L.expandImageTitle}
               onClick={() => onExpand(i)}
+              onKeyDown={onActivateKey(() => onExpand(i))}
             >
               <img src={mediaUrl(`projects/${projectId}/${variant.file_path}`)} alt="" />
               <button
@@ -73,7 +76,7 @@ export default function TitleCardGallery({
               >
                 <Trash2 size={11} />
               </button>
-              <div className="image-carousel-stars" onClick={(e) => e.stopPropagation()}>
+              <div className="image-carousel-stars" role="presentation" onClick={(e) => e.stopPropagation()}>
                 {[1, 2, 3, 4, 5].map((n) => (
                   <button key={n} onClick={() => onRate(i, n)}>
                     <Star size={12} color={n <= variant.rating ? '#ff9d5c' : 'rgba(255,255,255,0.35)'} />
@@ -89,7 +92,7 @@ export default function TitleCardGallery({
                 {removingBg ? <Loader2 size={12} className="spin" /> : <Eraser size={12} />}
               </button>
               {methodMenuIdx === i && (
-                <div className="titlecard-gallery-bg-menu" ref={menuRef} onClick={(e) => e.stopPropagation()}>
+                <div className="titlecard-gallery-bg-menu" ref={menuRef} role="presentation" onClick={(e) => e.stopPropagation()}>
                   {BG_REMOVE_METHODS.map((method) => (
                     <button key={method} onClick={() => pickMethod(i, method)}>
                       {methodLabels[method]}

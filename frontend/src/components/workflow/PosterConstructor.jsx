@@ -6,6 +6,7 @@ import {
 import { Group, Image as KonvaImage, Layer, Line, Stage } from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
+import { onBackdropClick } from '../../lib/a11y.js';
 import {
   ZOOM_STEP, clampZoom, defaultTextFontSize, genId, makeDefaultGlass, makeLayer, makeMagicLayer, makeTextLayer,
   moveLayerInList, normalizeLayers, normalizeMagicLayers, normalizeTextLayers, parseTextBlock, roundRectPath,
@@ -623,9 +624,9 @@ export default function PosterConstructor({
   const isEditingSelectedCrop = !!(selectedLayer && cropEditing?.kind === selected.kind && cropEditing.id === selected.id);
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose} style={fullscreen ? { padding: 0 } : undefined}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)} style={fullscreen ? { padding: 0 } : undefined}>
       <div
-        className="modal-card modal-card-lg" onClick={(e) => e.stopPropagation()}
+        className="modal-card modal-card-lg"
         style={fullscreen
           ? { maxWidth: 'none', width: '100vw', height: '100vh', padding: 0, borderRadius: 0, display: 'flex', flexDirection: 'column', position: 'relative' }
           : { maxWidth: 900, position: 'relative' }}

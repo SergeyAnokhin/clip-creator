@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Check, Trash2 } from 'lucide-react';
 import { priceLabel } from '../../lib/pricing.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** Favorites list + default picker for a "which model" setting (text models,
  * simple models). `catalog` is `{provider: {source, models, error}}` fetched
@@ -105,8 +106,10 @@ export default function ModelFavorites({
               <div
                 key={`${s.provider}:${s.id}`}
                 className="settings-suggestion-item"
+                role="button" tabIndex={0}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => addSuggestion(s)}
+                onKeyDown={onActivateKey(() => addSuggestion(s))}
               >
                 <span className="settings-suggestion-provider">{providerLabel(s.provider)}</span>
                 {s.name}

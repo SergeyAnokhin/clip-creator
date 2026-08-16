@@ -4,6 +4,7 @@ import ModelPicker from './ModelPicker.jsx';
 import { buildSunoPromptPreview, groupPresetsByService } from '../../lib/sunoPrompt.js';
 import { estimateCost, estimateTokensFromChars, formatCost, formatTokens } from '../../lib/pricing.js';
 import { sortByUseCount } from '../../lib/wishes.js';
+import { onActivateKey } from '../../lib/a11y.js';
 import { TYPE_COLORS } from '../../i18n/dict.js';
 
 const _TAG_COLOR_DEFAULT = '#ff9d5c';
@@ -42,7 +43,9 @@ function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
       <div
         className="suno-panel-title"
         style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -99,7 +102,9 @@ function PromptPreviewPanel({
       <div
         className="suno-panel-title"
         style={{ marginBottom: open ? 12 : 0, cursor: 'pointer' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         {L.suno_previewTitle}
@@ -174,7 +179,9 @@ function DebugPanel({ L, lastDebug }) {
       <div
         className="suno-panel-title"
         style={{ marginBottom: (open || hasUsage) ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { FONT_OPTIONS } from '../../lib/posterLayers.js';
+import { onActivateKey } from '../../lib/a11y.js';
 import MagicLayersButton from './MagicLayersButton.jsx';
 
 /** The Poster constructor's side-panel widgets: per-layer effects
@@ -34,8 +35,11 @@ export function EffectSlider({ label, value, min, max, step = 1, unit = '', defa
   const canReset = defaultValue !== undefined && value !== defaultValue;
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
+      {/* `label` sits directly in the row (its own wrapper span would only
+          add a nesting level that hides it from the label's accessible
+          name); as a bare flex item it lays out exactly the same. */}
       <span style={{ color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>{label}</span>
+        {label}
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span>{value}{unit}</span>
           {canReset && <ResetToDefault onClick={() => onChange(defaultValue)} L={L} />}
@@ -295,13 +299,21 @@ export function PickerRow({ label, children, scrollable, collapsible, defaultOpe
   const isOpen = !collapsible || open;
   return (
     <div>
+      {/* Interactive props only exist in the collapsible variant - spread as
+          a group so a plain label row never announces itself as a button. */}
       <div
         className="scene-prompt-label"
         style={{
           marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           cursor: collapsible ? 'pointer' : 'default',
         }}
-        onClick={collapsible ? () => setOpen((o) => !o) : undefined}
+        {...(collapsible ? {
+          role: 'button',
+          tabIndex: 0,
+          'aria-expanded': open,
+          onClick: () => setOpen((o) => !o),
+          onKeyDown: onActivateKey(() => setOpen((o) => !o)),
+        } : {})}
       >
         <span>{label}</span>
         {collapsible && (open ? <ChevronUp size={13} /> : <ChevronDown size={13} />)}

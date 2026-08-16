@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom';
 import { Download, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import JsonTreeView from '../common/JsonTreeView.jsx';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 /** Visualizes the result of `song/transcribe` (MusicXML + PDF, zipped - see
  * providers/mureka.py) for one track. There's no in-app notation renderer,
@@ -15,8 +16,8 @@ export default function MurekaTranscriptionModal({ L, projectId, track, onClose 
   const older = entries.slice(0, -1).reverse();
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card" style={{ maxWidth: 480 }}>
         <div className="modal-header">
           <span>{L.mureka_transcribeModalTitle}</span>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>

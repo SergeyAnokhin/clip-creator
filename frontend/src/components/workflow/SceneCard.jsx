@@ -160,6 +160,8 @@ export default function SceneCard({
               <button
                 key={img.image_id}
                 className={`scene-thumb${i === boundedIndex ? ' is-active' : ''}`}
+                title={L.pickImageTitle}
+                aria-label={`${L.pickImageTitle} ${i + 1}`}
                 onClick={() => setCurrentIndex(i)}
               >
                 <img src={mediaUrl(`projects/${projectId}/${img.file_path}`)} alt="" />

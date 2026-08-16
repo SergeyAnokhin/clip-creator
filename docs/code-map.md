@@ -105,6 +105,7 @@ Two tests use a real local `ffmpeg` and `skipif` it isn't on `PATH`
 | `videoModelLimits.js` | Hand-curated per-model duration/resolution limits. Informational only, never enforced |
 | `wishes.js` | `sortByUseCount` |
 | `format.js` / `debounce.js` / `download.js` | Date labels / `debounce(fn, ms)` / `downloadJSON` |
+| `a11y.js` | Keyboard/ARIA helpers shared by the components: `onActivateKey` (Enter/Space twin of an `onClick`), `onBackdropClick` (close a modal only on a real backdrop click), `focusOnMount` (callback ref replacing `autoFocus`) — see [a11y.md](a11y.md) |
 
 Tests: `lib/*.test.js` (Vitest). **Only `lib/` is covered — components and
 hooks have no tests.**

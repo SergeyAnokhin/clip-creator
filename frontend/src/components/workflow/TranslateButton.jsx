@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Languages, Loader2, X } from 'lucide-react';
 import { api } from '../../api/client.js';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 /** Small "translate to Russian" affordance dropped next to a prompt label
  * (static/motion prompt, in either SceneTextCard.jsx or SceneCard.jsx). Owns
@@ -48,8 +49,8 @@ export default function TranslateButton({ L, text }) {
         <Languages size={12} />
       </button>
       {open && createPortal(
-        <div className="modal-backdrop" onClick={handleClose}>
-          <div className="modal-card modal-card-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(handleClose)}>
+          <div className="modal-card modal-card-lg">
             <div className="modal-header">
               <span>{L.translateModalTitle}</span>
               <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={handleClose}>

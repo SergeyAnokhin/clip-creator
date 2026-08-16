@@ -104,6 +104,7 @@ at a real project and copying its data.
 | [docs/architecture.md](docs/architecture.md) | How it fits together, the 3-stage workflow, provider seams, gotchas |
 | [docs/code-map.md](docs/code-map.md) | Which file does what — start here to find where to change something |
 | [docs/data-model.md](docs/data-model.md) | JSON shapes on disk + the full API route table |
+| [docs/a11y.md](docs/a11y.md) | Frontend accessibility conventions — the shared `lib/a11y.js` helpers, the clickable-`div` / modal-backdrop / focus patterns, and the two `jsx-a11y` rules that are off |
 | [docs/usage-tracking.md](docs/usage-tracking.md) | AI usage ledger and cost tracking — record schema, pricing catalog (built-in prices are **unverified placeholders**, see the doc), how to instrument a new call site |
 | [CLAUDE.md](CLAUDE.md) | Working conventions for AI-assisted changes in this repo |
 | [docs/specs/](docs/specs/) | Frozen V1 product specification (reference only) |

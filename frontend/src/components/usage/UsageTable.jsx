@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { formatCost, formatTokens } from '../../lib/pricing.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 function statusColor(status) {
   return status === 'error' ? 'var(--danger)' : 'var(--success)';
@@ -13,7 +14,12 @@ function UsageTableRow({ L, rec }) {
 
   return (
     <div className="settings-panel usage-row" style={{ padding: 12 }}>
-      <div className="usage-row-head" onClick={() => setOpen((o) => !o)}>
+      <div
+        className="usage-row-head"
+        role="button" tabIndex={0} aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
+      >
         {open ? <ChevronDown size={14} style={{ flexShrink: 0 }} /> : <ChevronRight size={14} style={{ flexShrink: 0 }} />}
         <span className="usage-row-time">{(rec.ts || '').slice(0, 16).replace('T', ' ')}</span>
         <span className="usage-row-project" title={rec.project_id || ''}>{rec.project_id || L.usage_noProject}</span>

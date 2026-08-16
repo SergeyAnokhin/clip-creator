@@ -1,6 +1,7 @@
 ﻿import { useState } from 'react';
 import { CheckSquare, Download, Square, X } from 'lucide-react';
 import { mediaUrl, api } from '../../api/client.js';
+import { onActivateKey, onBackdropClick } from '../../lib/a11y.js';
 
 /** Scene picker for the Video stage's bulk export (VideoStage.jsx's "export"
  * button): lets the user pick all/some scenes, then downloads a zip built by
@@ -41,8 +42,8 @@ export default function VideoExportModal({ L, project, onClose }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card" style={{ maxWidth: 480 }}>
         <div className="modal-header">
           <span>{L.video_exportModalTitle}</span>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>
@@ -71,7 +72,9 @@ export default function VideoExportModal({ L, project, onClose }) {
             return (
               <div
                 key={i}
+                role="button" tabIndex={0} aria-pressed={isSelected} aria-label={label || `${i + 1}`}
                 onClick={() => toggleOne(i)}
+                onKeyDown={onActivateKey(() => toggleOne(i))}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 8,
                   cursor: 'pointer', background: isSelected ? 'rgba(255,255,255,0.06)' : 'transparent',

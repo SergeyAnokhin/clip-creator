@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import JsonTreeView from '../common/JsonTreeView.jsx';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 /** Visualizes the result of `song/describe` (genre/instruments/mood - see
  * providers/mureka.py) for one track. `track.descriptions[]` is append-only
@@ -14,8 +15,8 @@ export default function MurekaDescribeModal({ L, track, onClose }) {
   const older = entries.slice(0, -1).reverse();
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card" style={{ maxWidth: 560 }}>
         <div className="modal-header">
           <span>{L.mureka_describeModalTitle}</span>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>

@@ -1,4 +1,5 @@
 import { CheckCircle2, Circle, Clapperboard, Download, Film, Image as ImageIcon, Loader, ListMusic, Minus, Music2, Music4, Scissors, Type } from 'lucide-react';
+import { onActivateKey } from '../../lib/a11y.js';
 
 const STATUS_ICON = { pending: Circle, processing: Loader, completed: CheckCircle2 };
 const STATUS_COLOR = { pending: 'rgba(255,255,255,0.25)', processing: '#fbbf24', completed: '#4ade80' };
@@ -64,7 +65,9 @@ export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen
 
   return (
     <>
-      {isMobile && sidebarOpen && <div className="sidebar-backdrop" onClick={onCloseMobile} />}
+      {/* Tap-outside-to-close is a pointer convenience next to the header's
+          own menu toggle, so the backdrop stays presentational. */}
+      {isMobile && sidebarOpen && <div className="sidebar-backdrop" role="presentation" onClick={onCloseMobile} />}
       <div className="sidebar" style={style}>
         <div className="sidebar-inner">
           {stageDefs(L).map((stage) => {
@@ -80,7 +83,9 @@ export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen
                     background: isActive ? 'rgba(255,157,92,0.12)' : 'transparent',
                     borderColor: isActive ? 'rgba(255,157,92,0.3)' : 'transparent',
                   }}
+                  role="button" tabIndex={0} aria-current={isActive ? 'step' : undefined}
                   onClick={() => onSelectStage(stage.key)}
+                  onKeyDown={onActivateKey(() => onSelectStage(stage.key))}
                 >
                   <span
                     className="stage-icon"

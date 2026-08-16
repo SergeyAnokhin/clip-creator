@@ -1,5 +1,6 @@
 import { Check, Pencil, Trash2 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
+import { onActivateKey } from '../../lib/a11y.js';
 
 /** Saved posters (Poster constructor's output) - mirrors TitleCardGallery.jsx's
  * grid shape but simpler: no star rating (a poster is a deliberate layout the
@@ -16,7 +17,9 @@ export default function PosterGallery({ L, projectId, posters, onExpand, onEdit,
           <div
             className={`titlecard-gallery-frame${poster.is_selected ? ' is-main' : ''}`}
             style={{ aspectRatio: `${poster.canvas_size?.width || 1} / ${poster.canvas_size?.height || 1}`, cursor: 'pointer' }}
+            role="button" tabIndex={0} aria-label={L.expandImageTitle}
             onClick={() => onExpand(i)}
+            onKeyDown={onActivateKey(() => onExpand(i))}
           >
             {/* Re-saving an existing poster keeps the same file_path (in-place
                 update) - `?v=generated_at` busts the browser's image cache so

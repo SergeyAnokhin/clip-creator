@@ -6,6 +6,7 @@ import {
 import { mediaUrl } from '../../api/client.js';
 import { resolveAnimateImage } from '../../lib/scenes.js';
 import { getVideoModelLimits } from '../../lib/videoModelLimits.js';
+import { onActivateKey } from '../../lib/a11y.js';
 import CopyButton from './CopyButton.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import TranslateButton from './TranslateButton.jsx';
@@ -55,7 +56,9 @@ function DebugPanel({ L, lastDebug }) {
       <div
         className="suno-panel-title"
         style={{ marginBottom: open ? 12 : 0, cursor: 'pointer', justifyContent: 'space-between' }}
+        role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onActivateKey(() => setOpen((o) => !o))}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -307,6 +310,7 @@ export default function VideoStage({
                   key={img.image_id}
                   className={`scene-thumb${img.image_id === animateImage?.image_id ? ' is-active' : ''}`}
                   title={L.video_pickImageTitle}
+                  aria-label={L.video_pickImageTitle}
                   onClick={() => actions.onSelectAnimateImage(currentSceneIndex, img.image_id)}
                 >
                   <img src={mediaUrl(`projects/${project.id}/${img.file_path}`)} alt="" />

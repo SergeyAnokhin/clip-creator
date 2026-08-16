@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom';
 import { Download, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import JsonTreeView from '../common/JsonTreeView.jsx';
+import { onBackdropClick } from '../../lib/a11y.js';
 
 /** Visualizes the result of `lyrics-video/generate` (a karaoke-style mp4 -
  * see providers/mureka.py) for one track: an embedded player for the newest
@@ -14,8 +15,8 @@ export default function MurekaLyricsVideoModal({ L, projectId, track, onClose })
   const older = entries.slice(0, -1).reverse();
 
   return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onClick={onBackdropClick(onClose)}>
+      <div className="modal-card" style={{ maxWidth: 420 }}>
         <div className="modal-header">
           <span>{L.mureka_lyricsVideoModalTitle}</span>
           <button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}>
