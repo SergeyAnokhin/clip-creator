@@ -147,7 +147,14 @@ hooks return `{ state, actions }`.
 
 ### `components/workflow/` — the nine stages
 
-`WorkflowScreen` → `WorkflowHeader`, `Sidebar`, and one stage component each.
+`WorkflowScreen` → `WorkflowHeader`, `Sidebar`, and one stage component each. The
+whole app shell is a fixed `height: 100vh; overflow: hidden` column
+(`App.jsx`'s `.app-shell` wrapper); `.workflow-main` (the column next to
+`Sidebar`) is the one part that scrolls (`overflow-y: auto`). A stage that
+wants to fill the viewport instead of scrolling — like the Editor stage,
+`.workflow-main-inner.is-wide` in `theme.css` — sets its own height to 100%
+of that column rather than relying on page scroll; every other stage just
+scrolls normally inside it.
 
 | File | Responsibility |
 | --- | --- |
