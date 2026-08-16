@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Maximize2, Plus, Scissors, ZoomIn, ZoomOut } from 'lucide-react';
-import { mediaUrl } from '../../api/client.js';
 import { applyEdgeTrim, dropIndexForStart } from '../../lib/timeline.js';
 import TimelineAudioTrack from './TimelineAudioTrack.jsx';
 import TimelineClipInspector from './TimelineClipInspector.jsx';
+import TimelineClipBlock from './TimelineClipBlock.jsx';
+import { sceneLabel } from '../../lib/editorClipLabel.js';
 
 // A zoomed-in timeline is one very wide DOM element (and one equally wide
 // waveform <canvas>) - this caps how wide it may get, both for the browser's
@@ -19,16 +21,6 @@ const AUDIO_TRACK_H = 42;
 function formatTimecode(ms) {
   const total = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
-}
-
-function sceneLabel(scene, sceneIndex) {
-  const text = scene?.scene_description || scene?.lyric_segment || '';
-  return `${sceneIndex + 1}. ${text.length > 48 ? `${text.slice(0, 48)}…` : text}`;
-}
-
-function sceneThumb(scene) {
-  const image = (scene?.images || []).find((img) => img.is_selected) || (scene?.images || [])[0];
-  return image?.file_path || null;
 }
 
 function rulerStepMs(scale) {
@@ -50,7 +42,7 @@ function rulerStepMs(scale) {
  * horizontal drag means "change the order", not "move to this exact time". */
 export default function EditorTimeline({
   L, projectId, scenes, clips, totalDurationMs, selectedTrack, playheadMs, isPlaying,
-  selectedClipId, actions,
+  selectedClipId, actions, toolsSlotNode,
 }) {
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
@@ -253,15 +245,14 @@ export default function EditorTimeline({
     .map((scene, sceneIndex) => ({ scene, sceneIndex }))
     .filter(({ scene, sceneIndex }) => !usedSceneIndices.has(sceneIndex) && (scene.videos || []).length > 0);
 
-  return (
-    <div className="tl-panel">
+  const toolsContent = (
+    <>
       <div className="tl-toolbar">
         <span className="tl-timecode">{formatTimecode(playheadMs)}<span className="tl-timecode-total"> / {formatTimecode(contentDurationMs)}</span></span>
         <button className="icon-btn" title={L.editor_toolSplit} onClick={actions.splitAtPlayhead} disabled={!clips.length}>
           <Scissors size={14} />
         </button>
         <div className="tl-toolbar-spacer" />
-        <span className="tl-hint">{L.editor_timelineHint}</span>
         <button className="icon-btn" title={L.editor_toolZoomOut} onClick={() => applyZoom(scale / ZOOM_FACTOR)} disabled={scale <= fitScale}>
           <ZoomOut size={14} />
         </button>
@@ -272,7 +263,33 @@ export default function EditorTimeline({
           <ZoomIn size={14} />
         </button>
       </div>
+      <span className="tl-hint">{L.editor_timelineHint}</span>
 
+      <TimelineClipInspector
+        L={L} clip={selectedClip} scene={selectedScene} sourceDurationMs={selectedSourceMs} actions={actions}
+      />
+
+      {!!addableScenes.length && (
+        <div className="tl-add-row">
+          <span className="tl-hint">{L.editor_addSceneLabel}</span>
+          {addableScenes.map(({ scene, sceneIndex }) => (
+            <button
+              key={sceneIndex} className="btn-ghost tl-add-chip"
+              onClick={() => {
+                const video = (scene.videos || []).find((v) => v.is_selected) || scene.videos[0];
+                actions.addSceneClip(sceneIndex, video.video_id);
+              }}
+            >
+              <Plus size={12} /> {sceneLabel(scene, sceneIndex)}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  const timelineJsx = (
+    <div className="tl-panel">
       {/* The scroll box is the timeline's own keyboard surface (arrows move
           between clips, Space/S/Delete act on them), so it has to be
           focusable and listen for keys while staying a container rather than
@@ -296,32 +313,24 @@ export default function EditorTimeline({
             {!clips.length && <div className="tl-track-empty">{L.editor_timelineEmpty}</div>}
             {clips.map((clip, index) => {
               const scene = scenes?.[clip.scene_index];
-              const thumb = sceneThumb(scene);
               const isDragging = drag?.mode === 'move' && drag.index === index;
               const width = Math.max(8, clip.durationMs * scale);
               return (
-                <div
+                <TimelineClipBlock
                   key={clip.clip_id}
-                  ref={(el) => { if (el) clipNodesRef.current[clip.clip_id] = el; else delete clipNodesRef.current[clip.clip_id]; }}
-                  className={`tl-clip${clip.clip_id === selectedClipId ? ' is-selected' : ''}${isDragging ? ' is-dragging' : ''}`}
-                  style={{
-                    left: clip.startMs * scale + (isDragging ? dragDx : 0),
-                    width,
-                    backgroundImage: thumb ? `url(${mediaUrl(`projects/${projectId}/${thumb}`)})` : undefined,
-                  }}
-                  onPointerDown={(e) => startClipDrag(e, clip, index)}
+                  clip={clip}
+                  scene={scene}
+                  projectId={projectId}
+                  selectedClipId={selectedClipId}
+                  isDragging={isDragging}
+                  left={clip.startMs * scale + (isDragging ? dragDx : 0)}
+                  width={width}
+                  nodeRef={(el) => { if (el) clipNodesRef.current[clip.clip_id] = el; else delete clipNodesRef.current[clip.clip_id]; }}
+                  onBlockPointerDown={(e) => startClipDrag(e, clip, index)}
                   onKeyDown={(e) => onClipKeyDown(e, clip)}
-                  title={sceneLabel(scene, clip.scene_index)}
-                  role="button"
-                  tabIndex={0}
-                >
-                  <span className="tl-clip-handle tl-clip-handle-start" onPointerDown={(e) => startTrimDrag(e, clip, 'start')} />
-                  <span className="tl-clip-label">
-                    {sceneLabel(scene, clip.scene_index)}
-                    {(clip.speed || 1) !== 1 && <b> · {clip.speed}×</b>}
-                  </span>
-                  <span className="tl-clip-handle tl-clip-handle-end" onPointerDown={(e) => startTrimDrag(e, clip, 'end')} />
-                </div>
+                  onTrimStartPointerDown={(e) => startTrimDrag(e, clip, 'start')}
+                  onTrimEndPointerDown={(e) => startTrimDrag(e, clip, 'end')}
+                />
               );
             })}
             {padWidth > 2 && (
@@ -345,27 +354,13 @@ export default function EditorTimeline({
           <div className="tl-playhead" style={{ left: playheadMs * scale }}><span /></div>
         </div>
       </div>
-
-      <TimelineClipInspector
-        L={L} clip={selectedClip} scene={selectedScene} sourceDurationMs={selectedSourceMs} actions={actions}
-      />
-
-      {!!addableScenes.length && (
-        <div className="tl-add-row">
-          <span className="tl-hint">{L.editor_addSceneLabel}</span>
-          {addableScenes.map(({ scene, sceneIndex }) => (
-            <button
-              key={sceneIndex} className="btn-ghost tl-add-chip"
-              onClick={() => {
-                const video = (scene.videos || []).find((v) => v.is_selected) || scene.videos[0];
-                actions.addSceneClip(sceneIndex, video.video_id);
-              }}
-            >
-              <Plus size={12} /> {sceneLabel(scene, sceneIndex)}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
+  );
+
+  return (
+    <>
+      {timelineJsx}
+      {toolsSlotNode ? createPortal(toolsContent, toolsSlotNode) : <div className="tl-panel tl-tools-fallback">{toolsContent}</div>}
+    </>
   );
 }

@@ -869,6 +869,10 @@
 
 .workflow-main-inner.is-wide {
   max-width: 1500px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
 }
 
 .stage-heading {
@@ -2935,22 +2939,59 @@
 
 /* ---------- Editor stage (NLE-style layout + timeline) ---------- */
 
-.editor-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+/* App-style, not a scrolling page: the monitor fills whatever height is
+   left after the timeline (docked to the very bottom, flex-shrink: 0
+   below), and the whole stage is exactly as tall as the workflow-main
+   column gives it (see .workflow-main-inner.is-wide). Only the mobile/
+   narrow-window breakpoint below falls back to normal stacked scrolling. */
+.editor-stage {
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  margin-bottom: 14px;
+  flex: 1;
+  min-height: 0;
 }
 
+.editor-layout {
+  display: flex;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* No fixed-height chain above to stretch into in stacked mode (the stage
+   itself falls back to auto height there too - see .editor-stage rules
+   below) - give the monitor a plain viewport-relative height instead, same
+   role the old max-height: 44vh cap used to play. */
 .editor-layout.is-mobile {
-  grid-template-columns: minmax(0, 1fr);
+  flex-direction: column;
+  flex: none;
+}
+
+.editor-layout.is-mobile .editor-preview {
+  flex: none;
+  height: 50vh;
+}
+
+.editor-layout.is-mobile .editor-side {
+  width: 100%;
 }
 
 /* Below the sidebar's own breakpoint the monitor column would be squeezed to
    nothing next to the fixed side panel - stack them instead. */
 @media (max-width: 1180px) {
   .editor-layout {
-    grid-template-columns: minmax(0, 1fr);
+    flex-direction: column;
+    flex: none;
+  }
+
+  .editor-preview {
+    flex: none;
+    height: 50vh;
+  }
+
+  .editor-side {
+    width: 100%;
   }
 }
 
@@ -2960,15 +3001,27 @@
   border-radius: 14px;
   padding: 12px;
   min-width: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
+/* Deliberately no aspect-ratio here - combined with flex stretch it doesn't
+   reliably size against the *stretched* cross size (the ratio gets resolved
+   before stretch runs, per the flexbox spec's sizing order), which is a
+   well-known gotcha. Simplest correct fix: let the frame fill 100% of
+   whatever box the layout gives it, and let the <video>'s own
+   object-fit: contain do the aspect-preserving letterboxing inside that -
+   same visual result (a centered, undistorted video on a black field),
+   maximized height included, without fighting the flex algorithm. */
 .editor-preview-frame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
   background: #000;
   border-radius: 10px;
   overflow: hidden;
-  aspect-ratio: 16 / 9;
-  max-height: 44vh;
-  margin: 0 auto;
 }
 
 .editor-preview-frame video {
@@ -2982,7 +3035,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
 }
 
 .editor-preview-time {
@@ -3008,6 +3060,36 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  width: 320px;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.editor-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* Keeps the scrollbar from sitting flush against block borders/content. */
+  padding-right: 2px;
+}
+
+.editor-side-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editor-side-footer .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.editor-side-title {
+  padding: 12px 14px;
 }
 
 .editor-side-block {
@@ -3017,8 +3099,13 @@
   padding: 14px;
 }
 
+.editor-side-tools:empty {
+  display: none;
+}
+
 .editor-side-renders {
-  max-height: 300px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -3076,7 +3163,11 @@
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 10px;
-  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.tl-tools-fallback {
+  margin-top: 12px;
 }
 
 .tl-toolbar {
@@ -3211,17 +3302,34 @@
   z-index: 4;
 }
 
-.tl-clip-label {
-  position: relative;
+.tl-clip-thumbs {
+  position: absolute;
+  inset: 0;
   z-index: 1;
-  display: block;
-  padding: 4px 10px;
-  font-size: 11px;
+  display: flex;
+  pointer-events: none;
+}
+
+.tl-clip-thumb {
+  flex: 1;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+}
+
+.tl-clip-thumb + .tl-clip-thumb {
+  border-left: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.tl-clip-speed {
+  position: absolute;
+  z-index: 2;
+  right: 4px;
+  bottom: 3px;
+  font-size: 10px;
+  font-weight: 700;
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   pointer-events: none;
 }
 

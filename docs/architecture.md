@@ -80,23 +80,36 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    source pictures + prompts for animating elsewhere, and
    `POST .../video-import-batch` brings the finished clips back in.
 9. **Editor** (`stage: 'editor'`) — picked clips + picked track → one file via
-   local `ffmpeg` (no external API). Laid out like a normal NLE: program monitor
-   on top, a timeline underneath with a time ruler, clip blocks drawn to scale,
-   the track's waveform on its own row and a playhead across both. Editing is
-   direct manipulation — drag a block to reorder, drag its edges to trim, drag
-   the ruler to scrub, the razor button (or `S`) to split the clip under the
-   playhead, ctrl+wheel / the toolbar to zoom — with a properties strip for
-   exact values. Still reorder/trim/split/speed only; no filters or transitions,
-   though `project.video_edit` is shaped to grow them. **The timeline has no
-   gaps**: clips are always concatenated back to back, so a horizontal drag
-   means "reorder", not "move to this exact time". The in-browser preview never
-   touches ffmpeg (a `<video>`+`<audio>` pair synced off a
-   `requestAnimationFrame` playhead approximates the cut); only the server-side
-   render is pixel-accurate. This stage is desktop-oriented by design: the
-   layout itself adapts down to mobile/tablet widths, but the direct-manipulation
-   gestures (drag, edge-trim) are mouse-only and intentionally not adapted for
-   touch — a keyboard alternative (Tab to a clip, arrow keys between clips,
-   Enter/Space to select) covers non-mouse desktop use instead.
+   local `ffmpeg` (no external API). Laid out like a real NLE app rather than a
+   scrolling page: the program monitor fills whatever height is left after the
+   timeline, which is docked to the very bottom and pared down to just its
+   three scale-locked rows — time ruler, clip blocks, the track's waveform,
+   and a playhead across all three. Every other control (playback transport,
+   split/zoom toolbar, the clip properties strip, add-scene chips, and the
+   render CTA) lives in the right-hand panel instead of crowding the monitor
+   or the timeline — `EditorTimeline.jsx` still owns the toolbar/inspector's
+   state and DOM refs, it just portals their markup into a slot
+   `EditorStage.jsx` renders in that panel. Clip blocks show actual sampled
+   frames from *that clip's own* trimmed source window (`useClipThumbnails`,
+   more frames as the block gets wider), not scene text — extraction runs
+   through one shared hidden `<video>`, serialized and cached, so many clips
+   don't fight over decoders. Editing is direct manipulation — drag a block
+   to reorder, drag its edges to trim, drag the ruler to scrub, the razor
+   button (or `S`) to split the clip under the playhead, ctrl+wheel / the
+   toolbar to zoom. Still reorder/trim/split/speed only; no filters or
+   transitions, though `project.video_edit` is shaped to grow them. **The
+   timeline has no gaps**: clips are always concatenated back to back, so a
+   horizontal drag means "reorder", not "move to this exact time". The
+   in-browser preview never touches ffmpeg (a `<video>`+`<audio>` pair synced
+   off a `requestAnimationFrame` playhead approximates the cut — see
+   `useEditorStage.js`'s `isPlayingRef`/`tick` comments for why that loop has
+   to read playback state through a ref, not the hook's own `isPlaying`
+   closure); only the server-side render is pixel-accurate. This stage is
+   desktop-oriented by design: the fixed-height "fill the viewport" layout and
+   the direct-manipulation gestures (drag, edge-trim) both fall back to a
+   normal scrolling stack and stay mouse-only below the mobile/tablet
+   breakpoint — a keyboard alternative (Tab to a clip, arrow keys between
+   clips, Enter/Space to select) covers non-mouse desktop use instead.
 
 Scenes and Images are two stages because they are two independent AI calls with
 independent model choices — you can reroll a scene's images without re-running

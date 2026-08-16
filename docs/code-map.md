@@ -99,6 +99,7 @@ Two tests use a real local `ffmpeg` and `skipif` it isn't on `PATH`
 | `lyricsTiming.js` | Mureka `lyrics_sections` → karaoke line list, plus manual anchor re-timing. Handles untimed/partially-timed responses |
 | `timeline.js` | Editor-stage timeline math: clip offsets, `findActiveClip`, `clampTrim`, plus the direct-manipulation helpers (`moveClip`, `dropIndexForStart`, `applyEdgeTrim`, `splitClipsAt`) |
 | `editorDefaults.js` | `buildDefaultClips`, `defaultMurekaTrackId` — the Editor stage's first-open seed |
+| `editorClipLabel.js` | `sceneLabel` — the "N. description" text shared by a timeline clip block's hover tooltip and the add-scene chips |
 | `posterLayers.js` | Poster constructor's pure helpers: layer/effect factories (incl. `makeMagicLayer`), stored-poster normalization, `moveLayerInList`, `bestMagicLayerGroup` (also used by the `✨N` badge outside the constructor), center-snap and zoom-clamp math, `FONT_OPTIONS` |
 | `pricing.js` | Cost formatting/estimation for `text`/`image`/`video` kinds |
 | `musicTagColors.js` | Tag palette — mirrors `routers/settings.py`'s `MUSIC_TAG_COLORS`, **keep in sync** |
@@ -135,6 +136,7 @@ hooks return `{ state, actions }`.
 | `useVideoStage` | Per-scene videos: one-scene-at-a-time nav, video wishes, generation, rating, folder import |
 | `useExportStage` | Export stage: `marked_for_export` toggles + the zip download |
 | `useEditorStage` | Editor stage: EDL seeding, clip mutations, the rAF-clocked preview engine, render job |
+| `useClipThumbnails` | A timeline clip block's real video-frame thumbnails: samples interior midpoints of the clip's trimmed window, serialized through one shared hidden `<video>`, cached module-level by video/trim/count |
 | `useVoice` | Web Speech API dictation. Created **last**. Also exports `useFieldVoice` for Settings |
 | `useHtmlImage` | URL → `HTMLImageElement` via `fetch`+`blob:` (works around a Chrome cross-origin race). Poster constructor only — once per fixed slot, plus once per magic layer via `MagicLayerNode` |
 
@@ -174,9 +176,10 @@ hooks return `{ state, actions }`.
 | `VideoGallery.jsx` | All candidate clips for the scene, hover-preview `<video>`s, resizable tiles |
 | `VideoExportModal.jsx` | Scene picker for the batch export download |
 | `ExportStage.jsx` | Picks what goes in the final zip and downloads it |
-| `EditorStage.jsx` | NLE-style layout: program monitor + track/render side panel on top, `EditorTimeline.jsx` docked under them |
-| `EditorPreview.jsx` | Program monitor: muted `<video>` synced to a hidden `<audio>`, plus the transport row. Approximate, not the real render |
-| `EditorTimeline.jsx` | The timeline proper: ruler, clip blocks drawn to scale, playhead, zoom. Drag = reorder, edge drag = trim, ruler drag = scrub, razor = split. Desktop-oriented by design: layout adapts down to mobile/tablet widths, but the drag/trim gestures themselves are mouse-only — no touch adaptation (clips are keyboard-operable via Tab/arrows/Enter as a mouse alternative, not a touch one) |
+| `EditorStage.jsx` | App-style layout, not a scrolling page: program monitor fills the height left after the timeline (docked to the very bottom); the right side panel holds everything else — playback transport, the `toolsSlot` DOM node `EditorTimeline.jsx` portals its toolbar/inspector/add-row into, the audio track picker, the renders list, and the render CTA pinned at the panel's own bottom |
+| `EditorPreview.jsx` | Program monitor only: muted `<video>` synced to a hidden `<audio>`. Approximate, not the real render — see `useEditorStage.js` |
+| `EditorTimeline.jsx` | The timeline proper: ruler, clip blocks (`TimelineClipBlock.jsx`) drawn to scale, playhead, zoom — pared to just those 3 rows, since the toolbar/`TimelineClipInspector.jsx`/add-scene-chips render into `EditorStage.jsx`'s side panel via a `createPortal` into a slot passed down as `toolsSlotNode` (falls back to rendering inline in this component when no slot is given, e.g. in tests). Drag = reorder, edge drag = trim, ruler drag = scrub, razor = split. Desktop-oriented by design: layout adapts down to mobile/tablet widths, but the drag/trim gestures themselves are mouse-only — no touch adaptation (clips are keyboard-operable via Tab/arrows/Enter as a mouse alternative, not a touch one) |
+| `TimelineClipBlock.jsx` | One clip block: real sampled frames from its own trimmed window (`useClipThumbnails`) over the scene's static image as a load-in-progress placeholder, no text. Split out of `EditorTimeline.jsx`'s `clips.map()` because a hook can't be called from inside a loop |
 | `TimelineAudioTrack.jsx` | The timeline's audio row — decoded waveform `<canvas>` on the same px/ms scale |
 | `TimelineClipInspector.jsx` | Selected clip's exact values: video variant, trim, speed, remove |
 | `ModelPicker.jsx` | `<select>` over a favorites list → `"{provider}:{id}"` composite |

@@ -103,6 +103,18 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   timelineClipsRef.current = timelineClips;
   const scenesRef = useRef(scenes);
   scenesRef.current = scenes;
+  // `tick` re-schedules *itself* via requestAnimationFrame once play() kicks
+  // it off, so the whole rAF loop keeps running the one closure captured at
+  // that moment - including whatever `isPlaying` read as right then (always
+  // `false`, since setIsPlaying(true) hasn't committed yet when play() calls
+  // requestAnimationFrame(tick)). Without this ref, every clip transition's
+  // `if (isPlayingRef.current) videoEl.play()` in applyActiveClip silently no-ops
+  // forever after the first clip - the <video> sits paused on whatever frame
+  // its src was last assigned to while DRIFT_THRESHOLD_MS below keeps
+  // yanking its currentTime to chase the audio clock, which is the "first
+  // clip plays fine, every clip after it just jitters" bug.
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
 
   function patchVideoEdit(mutator, opts) {
     updateProject((p) => ({ ...p, video_edit: mutator(p.video_edit || EMPTY_VIDEO_EDIT) }), opts);
@@ -179,7 +191,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       videoEl.src = mediaUrl(`projects/${activeProject.id}/${video.file_path}`);
       videoEl.playbackRate = active.clip.speed || 1;
       videoEl.currentTime = active.localOffsetMs / 1000;
-      if (isPlaying) videoEl.play().catch(() => {});
+      if (isPlayingRef.current) videoEl.play().catch(() => {});
     } else if (Math.abs(videoEl.currentTime * 1000 - active.localOffsetMs) > DRIFT_THRESHOLD_MS) {
       videoEl.currentTime = active.localOffsetMs / 1000;
     }
