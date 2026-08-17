@@ -1,25 +1,142 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MIN_OVERLAY_MS, activeOverlaysAt, applyOverlayEdgeResize, applyOverlayMove, overlayPositionStyle,
+  MIN_OVERLAY_MS, activeOverlaysAt, applyOverlayEdgeResize, applyOverlayMove, assignOverlayLanes,
+  defaultOverlayTransform, migrateOverlay, overlayOpacityAt,
 } from './overlays.js';
 
-describe('overlayPositionStyle', () => {
-  it('pins the top-left grid point to the frame origin, untranslated', () => {
-    expect(overlayPositionStyle('top-left')).toEqual({ top: '0%', left: '0%', transform: 'translate(0, 0)' });
+describe('migrateOverlay', () => {
+  it('passes an already-migrated overlay through unchanged', () => {
+    const overlay = {
+      overlay_id: 'a', x_pct: 12, y_pct: 34, width_pct: 20, height_pct: 15, rotation_deg: 90,
+    };
+    expect(migrateOverlay(overlay)).toBe(overlay);
   });
 
-  it('pins the bottom-right grid point to the far corner, pulled back by its own size', () => {
-    expect(overlayPositionStyle('bottom-right')).toEqual({
-      top: '100%', left: '100%', transform: 'translate(-100%, -100%)',
+  it('anchors "top-left" at the point itself (no back-translate)', () => {
+    const migrated = migrateOverlay({ position: 'top-left', width_pct: 20 });
+    expect(migrated.x_pct).toBe(0);
+    expect(migrated.y_pct).toBe(0);
+    expect(migrated.width_pct).toBe(20);
+    expect(migrated.height_pct).toBe(20);
+    expect(migrated.rotation_deg).toBe(0);
+  });
+
+  it('pulls "bottom-right" back by its own full width/height', () => {
+    const migrated = migrateOverlay({ position: 'bottom-right', width_pct: 20 });
+    expect(migrated.x_pct).toBe(80);
+    expect(migrated.y_pct).toBe(80);
+  });
+
+  it('pulls "center" back by half its own width/height', () => {
+    const migrated = migrateOverlay({ position: 'center', width_pct: 20 });
+    expect(migrated.x_pct).toBe(40);
+    expect(migrated.y_pct).toBe(40);
+  });
+
+  it('falls back to the legacy default position for an unknown key', () => {
+    const migrated = migrateOverlay({ position: 'nowhere', width_pct: 20 });
+    expect(migrated.x_pct).toBe(80);
+    expect(migrated.y_pct).toBe(80);
+  });
+
+  it('falls back to the default width when the legacy overlay has none', () => {
+    const migrated = migrateOverlay({ position: 'top-left' });
+    expect(migrated.width_pct).toBe(20);
+    expect(migrated.height_pct).toBe(20);
+  });
+});
+
+describe('defaultOverlayTransform', () => {
+  it('matches migrating a fresh bottom-right/default-width legacy overlay', () => {
+    const t = defaultOverlayTransform();
+    expect(t).toEqual({
+      x_pct: 80, y_pct: 80, width_pct: 20, height_pct: 20, rotation_deg: 0,
     });
   });
+});
 
-  it('centers on both axes for "center"', () => {
-    expect(overlayPositionStyle('center')).toEqual({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' });
+describe('assignOverlayLanes', () => {
+  it('gives three mutually-overlapping overlays three distinct lanes', () => {
+    const overlays = [
+      { overlay_id: 'a', start_ms: 0, duration_ms: 3000 },
+      { overlay_id: 'b', start_ms: 500, duration_ms: 3000 },
+      { overlay_id: 'c', start_ms: 1000, duration_ms: 3000 },
+    ];
+    const lanes = assignOverlayLanes(overlays);
+    expect(new Set(lanes.values()).size).toBe(3);
   });
 
-  it('falls back to the default position for an unknown key', () => {
-    expect(overlayPositionStyle('nowhere')).toEqual(overlayPositionStyle('bottom-right'));
+  it('puts two non-overlapping overlays in the same lane (lane 0)', () => {
+    const overlays = [
+      { overlay_id: 'a', start_ms: 0, duration_ms: 1000 },
+      { overlay_id: 'b', start_ms: 1000, duration_ms: 1000 },
+    ];
+    const lanes = assignOverlayLanes(overlays);
+    expect(lanes.get('a')).toBe(0);
+    expect(lanes.get('b')).toBe(0);
+  });
+
+  it('reuses a lane freed by an earlier overlay ending before a later one starts', () => {
+    const overlays = [
+      { overlay_id: 'a', start_ms: 0, duration_ms: 1000 }, // ends 1000, lane 0
+      { overlay_id: 'b', start_ms: 200, duration_ms: 1000 }, // overlaps a -> lane 1
+      { overlay_id: 'c', start_ms: 1500, duration_ms: 1000 }, // overlaps neither -> reuses lane 0
+    ];
+    const lanes = assignOverlayLanes(overlays);
+    expect(lanes.get('a')).toBe(0);
+    expect(lanes.get('b')).toBe(1);
+    expect(lanes.get('c')).toBe(0);
+  });
+
+  it('is order-independent - sorts by start_ms internally', () => {
+    const overlays = [
+      { overlay_id: 'b', start_ms: 500, duration_ms: 3000 },
+      { overlay_id: 'a', start_ms: 0, duration_ms: 3000 },
+    ];
+    const lanes = assignOverlayLanes(overlays);
+    expect(new Set(lanes.values()).size).toBe(2);
+  });
+
+  it('returns an empty map for no overlays', () => {
+    expect(assignOverlayLanes([]).size).toBe(0);
+  });
+});
+
+describe('overlayOpacityAt', () => {
+  // window: 1000..3000 (duration 2000), fade_in 400ms, fade_out 600ms
+  const overlay = {
+    start_ms: 1000, duration_ms: 2000, opacity: 0.8, fade_in_ms: 400, fade_out_ms: 600,
+  };
+
+  it('ramps up linearly during fade-in', () => {
+    expect(overlayOpacityAt(overlay, 1000)).toBeCloseTo(0);
+    expect(overlayOpacityAt(overlay, 1200)).toBeCloseTo(0.8 * 0.5);
+    expect(overlayOpacityAt(overlay, 1400)).toBeCloseTo(0.8);
+  });
+
+  it('stays at the flat opacity in the steady middle', () => {
+    expect(overlayOpacityAt(overlay, 2000)).toBeCloseTo(0.8);
+  });
+
+  it('ramps down linearly during fade-out', () => {
+    expect(overlayOpacityAt(overlay, 2400)).toBeCloseTo(0.8);
+    expect(overlayOpacityAt(overlay, 2700)).toBeCloseTo(0.8 * 0.5);
+    expect(overlayOpacityAt(overlay, 3000)).toBeCloseTo(0);
+  });
+
+  it('returns the flat opacity with no fades set', () => {
+    expect(overlayOpacityAt({ start_ms: 0, duration_ms: 1000, opacity: 0.6 }, 500)).toBe(0.6);
+  });
+
+  it('compresses fades proportionally when they would outlast the overlay', () => {
+    // duration 1000, fade_in + fade_out = 1600 > duration -> scaled to 625/375
+    const o = {
+      start_ms: 0, duration_ms: 1000, opacity: 1, fade_in_ms: 1000, fade_out_ms: 600,
+    };
+    // Midpoint (the fade_in/fade_out boundary after scaling) should be at ~1 (peak).
+    expect(overlayOpacityAt(o, 625)).toBeCloseTo(1);
+    expect(overlayOpacityAt(o, 0)).toBeCloseTo(0);
+    expect(overlayOpacityAt(o, 1000)).toBeCloseTo(0);
   });
 });
 

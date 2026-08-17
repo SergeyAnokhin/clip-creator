@@ -780,12 +780,32 @@ def test_start_editor_render_starts_job(client, monkeypatch):
     client.patch(f'/api/projects/{pid}', json={'video_edit': {
         'mureka_track_id': 'trk_1', 'clips': [{'scene_index': 0, 'video_id': 'v'}],
     }})
-    monkeypatch.setattr(editor, 'start_render_job', lambda slug: 'job_123')
+    monkeypatch.setattr(editor, 'start_render_job', lambda slug, range_start_ms=None, range_end_ms=None: 'job_123')
 
     resp = client.post(f'/api/projects/{pid}/editor/render')
 
     assert resp.status_code == 200
     assert resp.json() == {'job_id': 'job_123'}
+
+
+def test_start_editor_render_with_range_passes_it_through(client, monkeypatch):
+    pid = client.get('/api/projects').json()[0]['id']
+    client.patch(f'/api/projects/{pid}', json={'video_edit': {
+        'mureka_track_id': 'trk_1', 'clips': [{'scene_index': 0, 'video_id': 'v'}],
+    }})
+    captured = {}
+
+    def fake_start_render_job(slug, range_start_ms=None, range_end_ms=None):
+        captured['range_start_ms'] = range_start_ms
+        captured['range_end_ms'] = range_end_ms
+        return 'job_123'
+
+    monkeypatch.setattr(editor, 'start_render_job', fake_start_render_job)
+
+    resp = client.post(f'/api/projects/{pid}/editor/render', json={'range_start_ms': 500, 'range_end_ms': 1500})
+
+    assert resp.status_code == 200
+    assert captured == {'range_start_ms': 500, 'range_end_ms': 1500}
 
 
 def test_start_editor_render_missing_project_returns_404(client):

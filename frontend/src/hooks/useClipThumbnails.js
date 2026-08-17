@@ -144,3 +144,38 @@ export function useClipThumbnails({ projectId, video, trimStartMs, trimEndMs, wi
 
   return frames;
 }
+
+/** A single first-frame thumbnail for an arbitrary video URL - not tied to a
+ * timeline clip's own trim window, unlike `useClipThumbnails` above. Used by
+ * the Editor stage's video-overlay canvas node (`EditorPreview.jsx`), which
+ * only needs a static "what does this look like" thumbnail for its Konva
+ * `Image` (dragging/resizing it doesn't need live playback - the real
+ * render is what actually composites the video). Shares this module's
+ * frame-grab queue/cache so it doesn't fight `useClipThumbnails`' own
+ * extractions over the one shared hidden <video>. */
+export function useVideoFirstFrame(src) {
+  const key = src ? `first-frame|${src}` : null;
+  const [frame, setFrame] = useState(() => {
+    const entry = key && cache.get(key);
+    return Array.isArray(entry) ? entry[0] : null;
+  });
+
+  useEffect(() => {
+    if (!key || !src) {
+      setFrame(null);
+      return undefined;
+    }
+    let entry = cache.get(key);
+    if (!entry) {
+      entry = enqueue(() => extractFrames(src, [0]))
+        .then((result) => { cache.set(key, result); return result; })
+        .catch(() => { cache.delete(key); return []; });
+      cache.set(key, entry);
+    }
+    let cancelled = false;
+    Promise.resolve(entry).then((result) => { if (!cancelled) setFrame(Array.isArray(result) ? result[0] || null : null); });
+    return () => { cancelled = true; };
+  }, [key, src]);
+
+  return frame;
+}

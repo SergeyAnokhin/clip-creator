@@ -3261,6 +3261,18 @@
   color: var(--text-dim);
 }
 
+.editor-render-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 157, 92, 0.16);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
 .editor-render-actions {
   display: flex;
   gap: 4px;
@@ -3482,9 +3494,12 @@
   background: var(--accent);
 }
 
-/* Overlay lane (title-card/logo images over the video) - a distinct cool
-   accent (vs. the clip row's warm orange) so the two lanes read apart at a
-   glance. Free-floating, unlike .tl-clip: can overlap or leave gaps. */
+/* Overlay track (title-card/logo/video overlays over the video) - a
+   distinct cool accent (vs. the clip row's warm orange) so the two tracks
+   read apart at a glance. Free-floating, unlike .tl-clip: can overlap or
+   leave gaps - `top`/`height` (inline, from EditorTimeline.jsx) place it on
+   its own lane when it does, instead of the `top: 0; bottom: 0` full-track
+   stretch this rule falls back to if they're ever omitted. */
 .tl-overlay {
   position: absolute;
   top: 0;
@@ -3553,55 +3568,18 @@
   color: var(--text);
 }
 
-.tl-position-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 22px);
-  gap: 4px;
-}
-
-.tl-position-cell {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.03);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tl-position-cell span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-faint);
-}
-
-.tl-position-cell:hover {
-  border-color: var(--accent);
-}
-
-.tl-position-cell.is-selected {
-  border-color: #5eaaff;
-  background: rgba(94, 170, 255, 0.18);
-}
-
-.tl-position-cell.is-selected span {
-  background: #5eaaff;
-}
-
-/* Live program-monitor indicator for whichever overlay(s) are active at the
-   playhead - approximate like the rest of the preview (see
-   editor_previewDisclaimer): sized against the frame's own box, not the
-   <video> element's actual letterboxed content. */
-.editor-overlay-preview {
+/* Outlines the video's own real (non-letterboxed) content rect inside
+   `.editor-preview-frame`, computed in JS (`lib/videoFrameRect.js`'s
+   `computeContentRect`, replicating the <video>'s own `object-fit: contain`
+   math) since the browser never exposes that rect itself - answers "where's
+   the actual picture" whenever the frame's own box has a different aspect
+   ratio than the video (an overlay pinned to the frame's edge would
+   otherwise land in this letterbox padding, not on the picture). */
+.editor-frame-bounds {
   position: absolute;
   z-index: 1;
   pointer-events: none;
-  max-width: 90%;
-  max-height: 90%;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
 }
 
 /* Sits exactly on the boundary between two clip blocks, vertically centred
@@ -3692,6 +3670,21 @@
   border: 1px solid var(--accent);
   background: rgba(255, 157, 92, 0.14);
   border-radius: 4px;
+  pointer-events: none;
+}
+
+/* The test-render range - dragged on `.tl-ruler` (top: 0, spans the whole
+   ruler+tracks height, see EditorTimeline.jsx's `allTracksHeight`), a
+   distinct cool tint so it reads apart from the marquee's warm accent (that
+   one selects clips; this one bounds what "Собрать тестовое видео" renders,
+   an unrelated concern). */
+.tl-test-range {
+  position: absolute;
+  top: 0;
+  z-index: 5;
+  border-left: 1px solid #5eaaff;
+  border-right: 1px solid #5eaaff;
+  background: rgba(94, 170, 255, 0.12);
   pointer-events: none;
 }
 

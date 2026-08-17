@@ -164,6 +164,13 @@ export const MIN_TRANSITION_MS = 50;
 export const FADE_COLORS = ['black', 'white'];
 export const DEFAULT_FADE_MS = 500;
 
+// Bounds for `clip.fit` (how a clip whose own aspect ratio doesn't match the
+// canvas fills it) - mirrors `providers/editor.py`'s own clamps.
+export const FIT_MODES = ['cover', 'contain'];
+export const MIN_FIT_ZOOM = 1;
+export const MAX_FIT_ZOOM = 4;
+export const DEFAULT_FIT = { mode: 'cover', zoom: 1, offset_x_pct: 50, offset_y_pct: 50 };
+
 /** New `speed` after Ctrl+dragging one edge of a clip by `deltaOutputMs` on
  * the output timeline - the CapCut-style "speed ramp" gesture. Unlike
  * `applyEdgeTrim`, the trim window itself never moves: only `speed` changes,

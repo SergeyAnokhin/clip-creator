@@ -11,12 +11,13 @@ other rating/`is_selected`/`karaoke_sync` edit elsewhere in this app) - this
 module never decides the EDL, only renders whatever `video_edit` currently
 holds and appends the result to `renders[]`.
 
-v1 supports reorder/trim/speed against a single audio track, static-image
-overlays (title card variants / logos) on their own free-floating lane, a
-crossfade/black/white transition at any clip boundary, and a per-clip
-fade-in/fade-out (black or white) - no video-in-video yet. AI-generated clips
-are silent by convention in this app, so the render is always muted-video +
-Mureka-audio, never a mix of both.
+v1 supports reorder/trim/speed against a single audio track, image and video
+overlays (title card variants / logos / uploaded video-overlay sources) on
+their own free-floating lane, a crossfade/black/white transition at any clip
+boundary, and a per-clip fade-in/fade-out (black or white). AI-generated
+clips are silent by convention in this app, so the render is always
+muted-video + Mureka-audio, never a mix of both - an overlay video is muted
+the same way (see `build_ffmpeg_command`'s overlay-input setup).
 
 `EditorClip.transition_in` (`{type: 'dissolve'|'fadeblack'|'fadewhite',
 duration_ms}`, absent/`None` = a hard cut) describes the transition *into*
@@ -35,14 +36,43 @@ duration_ms}`, absent/`None` = no fade) are a plain ffmpeg `fade` filter
 applied to that one clip only, entirely within its own duration - no
 interaction with neighbours or the timeline layout at all.
 
+`EditorClip.fit` (`{mode: 'cover'|'contain', zoom, offset_x_pct,
+offset_y_pct}`, absent/`None` = `{mode: 'cover', zoom: 1, offset_x_pct: 50,
+offset_y_pct: 50}`) is how a clip whose own aspect ratio doesn't match the
+render canvas fills it - `cover` (the default) scales up and crops the
+overflow so the clip always fills the frame with no letterbox bars, `zoom`
+(>=1) scales in further beyond that minimum, and `offset_x_pct`/
+`offset_y_pct` (0-100%, 50 = centered) pan within the resulting overscanned
+image; `contain` is the old always-letterboxed behavior (scale down to fit,
+pad the rest), kept as an explicit opt-in for a clip the user deliberately
+wants letterboxed - `zoom`/offset are meaningless there and ignored.
+
 An overlay entry in `video_edit['overlays']` is `{overlay_id, kind:
-'title_card'|'logo', source_id, start_ms, duration_ms, position, width_pct,
-opacity}` - `start_ms`/`duration_ms` are output-timeline coordinates (same
-space as a clip's `startMs`/`durationMs` on the frontend), `position` is one
-of the 9 `_OVERLAY_XY_EXPR` grid keys, `width_pct` scales the overlay to that
-fraction of the canvas width (aspect preserved), `opacity` is 0-1 on top of
-whatever alpha the source image already carries. Array order is z-order,
-later entries painted on top - mirrors `Poster.layers`' array convention.
+'title_card'|'logo'|'video', source_id, start_ms, duration_ms, x_pct, y_pct,
+width_pct, height_pct, rotation_deg, opacity}` - `start_ms`/`duration_ms` are
+output-timeline coordinates (same space as a clip's `startMs`/`durationMs` on
+the frontend); for `kind: 'video'`, `source_id` resolves against
+`video_edit['overlay_video_sources']` (`[{id, file_path, duration_seconds}]`,
+`duration_seconds` always `None` - see `save_overlay_video_source`'s own
+docstring) rather than `project`/`settings` like the other two kinds -
+project-scoped storage, since an arbitrary overlay video is a one-off project
+asset, not cross-project branding like a logo; `x_pct`/`y_pct` place the
+overlay's own top-left corner (the
+top-left of its *unrotated* bounding box - see `build_ffmpeg_command`'s
+rotation handling below) as a percentage of the canvas; `width_pct`/
+`height_pct` scale it independently (no forced aspect lock); `rotation_deg`
+(0-360) rotates it about that same top-left corner - mirrors exactly how
+`components/shared/CanvasLayer.jsx`'s Konva `Group` places/rotates a node
+(translate to `(x,y)` then rotate then scale, offset always `(0,0)`), so the
+program monitor's live drag/resize/rotate canvas matches this render
+pixel-for-pixel; `opacity` is 0-1 on top of whatever alpha the source image
+already carries. An overlay saved before free placement existed only has the
+old `position` (a 9-point anchor) + a bare `width_pct` - `_migrate_overlay_
+position` (a Python mirror of `lib/overlays.js`'s `migrateOverlay`) derives
+the new fields from those the first time such an overlay is resolved, so a
+render against a never-reopened-in-the-new-frontend document still works.
+Array order is z-order, later entries painted on top - mirrors
+`Poster.layers`' array convention.
 
 ffmpeg is invoked the same way `mureka.py`'s reference-audio trimmer does:
 `subprocess.run` inside `asyncio.to_thread`, not
@@ -51,6 +81,7 @@ that isn't guaranteed under `uvicorn --reload` on Windows (this repo's dev
 environment) and has failed there before."""
 
 import asyncio
+import math
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -59,33 +90,36 @@ from uuid import uuid4
 
 from .. import console_log, storage
 
-# Output canvas: a fixed size keeps the ffmpeg filter graph simple (every
-# clip is scale+pad'd - letterboxed, never cropped - into the same frame)
-# regardless of what resolution/aspect ratio each source clip was generated
-# at. '9:16' only when *every* clip's own stored `aspect_ratio` says so -
-# otherwise landscape, since a mixed timeline needs one canvas either way and
-# most generated footage in this app defaults to landscape.
+# Output canvas: a fixed size keeps the ffmpeg filter graph simple regardless
+# of what resolution/aspect ratio each source clip was generated at - every
+# clip is scaled into the same frame, by default cropping overflow to fill it
+# (`clip.fit`, see this module's own docstring), letterboxed only when a clip
+# explicitly opts into `contain`. '9:16' only when *every* clip's own stored
+# `aspect_ratio` says so - otherwise landscape, since a mixed timeline needs
+# one canvas either way and most generated footage in this app defaults to
+# landscape.
 _DEFAULT_CANVAS = (1920, 1080)
 _PORTRAIT_CANVAS = (1080, 1920)
 _FPS = 30
 
-# The 9-point placement grid an overlay can sit at, each resolved (given the
-# canvas's own edge margins in px) to an ffmpeg `overlay=x=…:y=…` expression
-# in terms of that filter's own `main_w`/`main_h`/`overlay_w`/`overlay_h`
-# variables - doubles as the validation set for `position`.
-_OVERLAY_XY_EXPR = {
-    'top-left': lambda mx, my: (f'{mx}', f'{my}'),
-    'top-center': lambda mx, my: ('(main_w-overlay_w)/2', f'{my}'),
-    'top-right': lambda mx, my: (f'main_w-overlay_w-{mx}', f'{my}'),
-    'center-left': lambda mx, my: (f'{mx}', '(main_h-overlay_h)/2'),
-    'center': lambda mx, my: ('(main_w-overlay_w)/2', '(main_h-overlay_h)/2'),
-    'center-right': lambda mx, my: (f'main_w-overlay_w-{mx}', '(main_h-overlay_h)/2'),
-    'bottom-left': lambda mx, my: (f'{mx}', f'main_h-overlay_h-{my}'),
-    'bottom-center': lambda mx, my: ('(main_w-overlay_w)/2', f'main_h-overlay_h-{my}'),
-    'bottom-right': lambda mx, my: (f'main_w-overlay_w-{mx}', f'main_h-overlay_h-{my}'),
-}
-_OVERLAY_MARGIN_PCT = 0.03
+_DEFAULT_FIT = {'mode': 'cover', 'zoom': 1.0, 'offset_x_pct': 50.0, 'offset_y_pct': 50.0}
+_MIN_FIT_ZOOM = 1.0
+_MAX_FIT_ZOOM = 4.0
+
 _OVERLAY_DEFAULT_WIDTH_PCT = 20.0
+
+# `position` (a 9-point anchor - pins the overlay's own matching corner/edge/
+# center to that point, e.g. "bottom-right" pins its own bottom-right corner
+# there) -> `[xPct, yPct]` of the canvas. Kept only for `_migrate_overlay_
+# position` below, which converts an old-shape overlay to the current
+# `x_pct`/`y_pct` (top-left-anchored) fields the first time it's resolved -
+# exact Python mirror of `lib/overlays.js`'s private `_LEGACY_POSITION_PCT`.
+_LEGACY_POSITION_PCT = {
+    'top-left': (0, 0), 'top-center': (50, 0), 'top-right': (100, 0),
+    'center-left': (0, 50), 'center': (50, 50), 'center-right': (100, 50),
+    'bottom-left': (0, 100), 'bottom-center': (50, 100), 'bottom-right': (100, 100),
+}
+_LEGACY_DEFAULT_POSITION = 'bottom-right'
 
 # User-facing transition `type` -> ffmpeg `xfade` filter's own transition
 # name. A deliberately small, curated set (not xfade's full catalogue of
@@ -127,9 +161,10 @@ def _resolve_track(project: dict, track_id: str) -> dict:
     return track
 
 
-def _resolve_overlay_source(project: dict, settings: dict, overlay: dict) -> str:
-    """The overlay image's `file_path` - project-relative for a title card
-    variant (joined against `project_dir` in `build_ffmpeg_command`, same
+def _resolve_overlay_source(project: dict, settings: dict, video_edit: dict, overlay: dict) -> str:
+    """The overlay source's `file_path` - project-relative for a title card
+    variant or a video-overlay source (both live under this project's own
+    directory, joined against `project_dir` in `build_ffmpeg_command`, same
     convention as a clip's own `file_path`), or an *absolute* path for a logo
     (the global cross-project library lives under the data root, not any
     project's own directory). `project_dir / file_path` silently prefers an
@@ -150,32 +185,132 @@ def _resolve_overlay_source(project: dict, settings: dict, overlay: dict) -> str
         if logo is None:
             raise RenderPlanError(f'Оверлей: логотип {source_id} не найден')
         return str(storage.get_data_root() / logo['file_path'])
+    if kind == 'video':
+        sources = video_edit.get('overlay_video_sources') or []
+        source = next((item for item in sources if item.get('id') == source_id), None)
+        if source is None:
+            raise RenderPlanError(f'Оверлей: видео {source_id} не найдено')
+        return source['file_path']
     raise RenderPlanError(f'Оверлей: неизвестный тип {kind!r}')
+
+
+def _migrate_overlay_position(overlay: dict) -> dict:
+    """An overlay already carrying `x_pct`/`y_pct` passes through unchanged;
+    an old-shape overlay (`position` + bare `width_pct`, no `height_pct`/
+    `rotation_deg`) gets them derived from the legacy anchor - exact mirror
+    of `lib/overlays.js`'s `migrateOverlay` (see that function's own
+    docstring for the anchor->top-left math). `height_pct` becomes a square
+    placeholder (`== width_pct`, the old shape never recorded a height) -
+    immediately adjustable once the frontend re-saves it, same as the
+    frontend's own migration."""
+    if overlay.get('x_pct') is not None and overlay.get('y_pct') is not None:
+        return overlay
+    anchor_x, anchor_y = _LEGACY_POSITION_PCT.get(overlay.get('position'), _LEGACY_POSITION_PCT[_LEGACY_DEFAULT_POSITION])
+    width_pct = overlay.get('width_pct') or _OVERLAY_DEFAULT_WIDTH_PCT
+    height_pct = width_pct
+    tx_frac = 0.0 if anchor_x == 0 else 1.0 if anchor_x == 100 else 0.5
+    ty_frac = 0.0 if anchor_y == 0 else 1.0 if anchor_y == 100 else 0.5
+    return {
+        **overlay,
+        'x_pct': anchor_x - width_pct * tx_frac,
+        'y_pct': anchor_y - height_pct * ty_frac,
+        'width_pct': width_pct,
+        'height_pct': height_pct,
+        'rotation_deg': overlay.get('rotation_deg') or 0,
+    }
 
 
 def _resolve_overlays(project: dict, settings: dict, video_edit: dict) -> list[dict]:
     resolved = []
-    for overlay in video_edit.get('overlays') or []:
-        file_path = _resolve_overlay_source(project, settings, overlay)
+    for raw_overlay in video_edit.get('overlays') or []:
+        overlay = _migrate_overlay_position(raw_overlay)
+        file_path = _resolve_overlay_source(project, settings, video_edit, overlay)
         duration_ms = overlay.get('duration_ms') or 0
         if duration_ms <= 0:
             raise RenderPlanError('Оверлей: некорректная длительность')
         start_ms = max(0, overlay.get('start_ms') or 0)
-        position = overlay.get('position')
-        if position not in _OVERLAY_XY_EXPR:
-            position = 'bottom-right'
+        x_pct = float(overlay.get('x_pct') or 0.0)
+        y_pct = float(overlay.get('y_pct') or 0.0)
         width_pct = min(100.0, max(1.0, overlay.get('width_pct') or _OVERLAY_DEFAULT_WIDTH_PCT))
+        height_pct = min(100.0, max(1.0, overlay.get('height_pct') or width_pct))
+        rotation_deg = (overlay.get('rotation_deg') or 0.0) % 360
         opacity = overlay.get('opacity')
         opacity = 1.0 if opacity is None else min(1.0, max(0.0, opacity))
+        # Compressed proportionally if they'd together outlast the overlay's
+        # own `duration_ms` (so they never overlap past the midpoint) - same
+        # clamp `lib/overlays.js`'s `overlayOpacityAt` applies for the live
+        # preview, so what the render produces matches what the user saw.
+        fade_in_ms = max(0.0, overlay.get('fade_in_ms') or 0.0)
+        fade_out_ms = max(0.0, overlay.get('fade_out_ms') or 0.0)
+        if fade_in_ms + fade_out_ms > duration_ms:
+            scale = duration_ms / (fade_in_ms + fade_out_ms)
+            fade_in_ms *= scale
+            fade_out_ms *= scale
         resolved.append({
+            'kind': overlay.get('kind'),
             'file_path': file_path,
             'start_s': start_ms / 1000,
             'duration_s': duration_ms / 1000,
-            'position': position,
+            'x_pct': x_pct,
+            'y_pct': y_pct,
             'width_pct': width_pct,
+            'height_pct': height_pct,
+            'rotation_deg': rotation_deg,
             'opacity': opacity,
+            'fade_in_s': fade_in_ms / 1000,
+            'fade_out_s': fade_out_ms / 1000,
         })
     return resolved
+
+
+def _overlay_alpha_filters(overlay: dict) -> str:
+    """The alpha-shaping filter chain fragment for one overlay (comma-joined,
+    dropped in right after `format=rgba` in both of `build_ffmpeg_command`'s
+    overlay branches): a flat `colorchannelmixer=aa=<opacity>` (today's
+    form, unchanged), plus one `fade=...:alpha=1` per fade actually set.
+    `colorchannelmixer`'s own `aa` option takes a plain number, not a
+    time-varying expression (confirmed against a real ffmpeg build - a
+    `t`-based eval expression there fails to parse, `aa` isn't one of the
+    filter's expression-capable options) - `fade`'s dedicated `alpha=1` mode
+    is the actual supported way to ramp alpha over time. `fade` *multiplies*
+    the existing alpha by its own 0->1 (or 1->0) curve during `[st, st+d)`
+    and holds flat at the post-ramp value everywhere outside that window
+    (1 before a fade-in starts or after a fade-out ends, matching "no
+    fade"), so chaining `colorchannelmixer` (sets the flat base) then one
+    `fade` per side composes exactly like `lib/overlays.js`'s
+    `overlayOpacityAt` computes the same ramp for the live preview. `st`/`d`
+    are the overlay's own stream's timestamp in seconds since the whole
+    render started - same axis `enable='between(t,...)'` below already uses
+    (an image's `-loop 1` stream and a video overlay's `setpts`-shifted
+    stream both start counting from that same zero - see this module's own
+    docstring and the `pre_filter` comment in `build_ffmpeg_command`)."""
+    parts = [f"colorchannelmixer=aa={overlay['opacity']:.3f}"]
+    fade_in_s = overlay['fade_in_s']
+    fade_out_s = overlay['fade_out_s']
+    if fade_in_s > 0:
+        parts.append(f"fade=t=in:st={overlay['start_s']:.3f}:d={fade_in_s:.3f}:alpha=1")
+    if fade_out_s > 0:
+        end_s = overlay['start_s'] + overlay['duration_s']
+        fade_out_start = end_s - fade_out_s
+        parts.append(f"fade=t=out:st={fade_out_start:.3f}:d={fade_out_s:.3f}:alpha=1")
+    return ','.join(parts)
+
+
+def _resolve_fit(raw: dict | None) -> dict:
+    """`{mode, zoom, offset_x_pct, offset_y_pct}` for a `clip.fit` spec -
+    `_DEFAULT_FIT` (cover, centered, no extra zoom) when absent. `contain`
+    ignores/drops `zoom`/offset (meaningless there - see this module's own
+    docstring) rather than carrying stale values through."""
+    if not raw or raw.get('mode') != 'contain':
+        if not raw:
+            return dict(_DEFAULT_FIT)
+        return {
+            'mode': 'cover',
+            'zoom': min(_MAX_FIT_ZOOM, max(_MIN_FIT_ZOOM, raw.get('zoom') or _DEFAULT_FIT['zoom'])),
+            'offset_x_pct': min(100.0, max(0.0, raw.get('offset_x_pct') if raw.get('offset_x_pct') is not None else _DEFAULT_FIT['offset_x_pct'])),
+            'offset_y_pct': min(100.0, max(0.0, raw.get('offset_y_pct') if raw.get('offset_y_pct') is not None else _DEFAULT_FIT['offset_y_pct'])),
+        }
+    return {'mode': 'contain'}
 
 
 def _resolve_fade(raw: dict | None, max_ms: float) -> dict | None:
@@ -255,6 +390,7 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
             'transition_in': None,
             'fade_in': _resolve_fade(clip.get('fade_in'), effective_ms),
             'fade_out': _resolve_fade(clip.get('fade_out'), effective_ms),
+            'fit': _resolve_fit(clip.get('fit')),
         })
 
     # A transition eats into (overlaps) both the clip before it and this one
@@ -293,6 +429,102 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
     }
 
 
+def _trim_plan_to_range(plan: dict, range_start_ms: float, range_end_ms: float) -> dict:
+    """Post-processes an already-resolved render plan (`build_render_plan`'s
+    own output) down to only the `[range_start_ms, range_end_ms)` window of
+    its output timeline - the backend half of "Собрать тестовое видео"
+    (`start_editor_render` -> `start_render_job` -> here).
+
+    Clips entirely outside the range are dropped; the new first/last clip's
+    own `trim_start_s`/`trim_end_s` are tightened to whatever part of their
+    own content falls inside the range (the shift is converted from output-
+    timeline ms to source-time via `* speed`, same direction
+    `build_render_plan` already trims by); a transition into the new first
+    clip is cleared (a transition from a clip that's no longer there is
+    meaningless); the tail freeze-pad (`tpad_s`) is cleared from every kept
+    clip except recomputed on the new last one, only if the range's own end
+    reaches past that clip's real content into what would have been padding.
+    Overlays are kept only if they intersect the range, with `start_s`
+    shifted so the range's own start becomes the new timeline's zero and
+    `duration_s` clamped to the trimmed window's own end.
+    `audio_offset_s`/`output_duration_s` replace `audio_duration_s` as what
+    drives the final `-t` and the audio track's own trim
+    (`build_ffmpeg_command`)."""
+    clips = plan['clips']
+
+    def content_ms(clip: dict) -> float | None:
+        if clip['trim_end_s'] is None:
+            return None
+        return (clip['trim_end_s'] - clip['trim_start_s']) * 1000 / clip['speed']
+
+    # Cumulative output-timeline start per clip - mirrors the offset math
+    # `build_ffmpeg_command`'s own `xfade` chain already computes (a
+    # transition into clip `i` starts blending `duration_s` before the
+    # combined stream would otherwise reach it, so *this* clip's own start
+    # moves back by its own transition's duration, not the next one's).
+    # Ignores transition *overlap*'s effect on later boundaries beyond that
+    # - the render's own established tolerance for that approximation, see
+    # this module's `transition_in` docstring, applies here too.
+    starts_ms = []
+    ends_ms = []  # own real content end, tpad excluded
+    cursor_ms = 0.0
+    for clip in clips:
+        if clip['transition_in']:
+            cursor_ms -= clip['transition_in']['duration_s'] * 1000
+        starts_ms.append(cursor_ms)
+        c_ms = content_ms(clip)
+        # An unbounded clip's own contribution is unknown - same "counts as
+        # 0" tolerance `build_render_plan` already applies elsewhere; a range
+        # spanning past it can't be trimmed precisely, an existing, already-
+        # accepted edge case rather than a new one.
+        ends_ms.append(cursor_ms + c_ms if c_ms is not None else cursor_ms)
+        if c_ms is not None:
+            cursor_ms += c_ms + clip['tpad_s'] * 1000
+
+    trimmed_clips = []
+    kept_end_ms = []
+    for i, clip in enumerate(clips):
+        clip_start_ms, clip_end_ms = starts_ms[i], ends_ms[i]
+        if clip_end_ms <= range_start_ms or clip_start_ms >= range_end_ms:
+            continue
+        new_clip = dict(clip)
+        if clip_start_ms < range_start_ms:
+            new_clip['trim_start_s'] += (range_start_ms - clip_start_ms) / 1000 * clip['speed']
+        if new_clip['trim_end_s'] is not None and clip_end_ms > range_end_ms:
+            new_clip['trim_end_s'] -= (clip_end_ms - range_end_ms) / 1000 * clip['speed']
+        new_clip['tpad_s'] = 0.0
+        trimmed_clips.append(new_clip)
+        kept_end_ms.append(clip_end_ms)
+
+    if not trimmed_clips:
+        raise RenderPlanError('Выбранный диапазон не пересекается ни с одним клипом')
+
+    trimmed_clips[0]['transition_in'] = None
+    if kept_end_ms[-1] is not None and range_end_ms > kept_end_ms[-1]:
+        trimmed_clips[-1]['tpad_s'] = (range_end_ms - kept_end_ms[-1]) / 1000
+
+    trimmed_overlays = []
+    for overlay in plan.get('overlays') or []:
+        ov_start_ms = overlay['start_s'] * 1000
+        ov_end_ms = ov_start_ms + overlay['duration_s'] * 1000
+        if ov_end_ms <= range_start_ms or ov_start_ms >= range_end_ms:
+            continue
+        new_overlay = dict(overlay)
+        new_start_ms = max(ov_start_ms, range_start_ms) - range_start_ms
+        new_end_ms = min(ov_end_ms, range_end_ms) - range_start_ms
+        new_overlay['start_s'] = new_start_ms / 1000
+        new_overlay['duration_s'] = (new_end_ms - new_start_ms) / 1000
+        trimmed_overlays.append(new_overlay)
+
+    return {
+        **plan,
+        'clips': trimmed_clips,
+        'overlays': trimmed_overlays,
+        'audio_offset_s': range_start_ms / 1000,
+        'output_duration_s': (range_end_ms - range_start_ms) / 1000,
+    }
+
+
 def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: int = _FPS) -> list[str]:
     """Pure command construction - every input path is resolved but nothing
     is executed here, so this is fully unit-testable without real ffmpeg or
@@ -310,11 +542,23 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
     cmd += ['-i', str(project_dir / plan['audio_file_path'])]
     overlay_base_index = audio_index + 1
     for overlay in overlays:
-        # `-loop 1` turns the still image into an infinite stream, so the
-        # `overlay` filter below has frames for as long as its own
-        # `enable='between(...)'` window stays true - bounded by the whole
-        # command's final `-t`, not by the image input itself.
-        cmd += ['-loop', '1', '-i', str(project_dir / overlay['file_path'])]
+        if overlay['kind'] == 'video':
+            # A real video stream, not a looped still - plays from its own
+            # start for as long as the `overlay` filter's `enable=` window
+            # below stays true (or until it hits its own EOF, whichever
+            # comes first - v1 doesn't loop a video overlay shorter than its
+            # window, same "approximate, non-blocking" tradeoff as an
+            # unbounded clip elsewhere in this module). Never `-map`'d for
+            # audio (below, with every other overlay/clip input) - an
+            # overlay video is always silent, same "AI clips are silent"
+            # convention this module already applies to every main clip.
+            cmd += ['-i', str(project_dir / overlay['file_path'])]
+        else:
+            # `-loop 1` turns the still image into an infinite stream, so the
+            # `overlay` filter below has frames for as long as its own
+            # `enable='between(...)'` window stays true - bounded by the
+            # whole command's final `-t`, not by the image input itself.
+            cmd += ['-loop', '1', '-i', str(project_dir / overlay['file_path'])]
 
     filter_parts = []
     labels = []
@@ -330,11 +574,31 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
         # runs this clip to its own EOF instead of collapsing it to zero
         # length.
         trim_end_part = f":end={clip['trim_end_s']:.3f}" if clip['trim_end_s'] is not None else ''
+        fit = clip['fit']
+        if fit['mode'] == 'contain':
+            fit_chain = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"
+        else:
+            # `cover`: scale up to *at least* wxh (ffmpeg's own "increase"
+            # formula, `max(w/iw, h/ih)`, written out as an expression since
+            # the source's actual resolution is only known at ffmpeg's own
+            # runtime, not here) times `zoom`, `ceil`'d so the scaled image
+            # is never a fraction of a pixel short of wxh (a `trunc` here
+            # could round down right at the boundary and make the crop
+            # below go negative); then `crop` to exactly wxh, panned within
+            # the overscanned image by `offset_x_pct`/`offset_y_pct` (0-100%,
+            # 50 = centered) - fills the frame with no letterbox bars.
+            scale_expr = (
+                f"ceil(iw*max({w}/iw\\,{h}/ih)*{fit['zoom']:.4f}):"
+                f"ceil(ih*max({w}/iw\\,{h}/ih)*{fit['zoom']:.4f})"
+            )
+            crop_expr = (
+                f"crop={w}:{h}:(in_w-{w})*{fit['offset_x_pct']:.3f}/100:(in_h-{h})*{fit['offset_y_pct']:.3f}/100"
+            )
+            fit_chain = f"scale={scale_expr},{crop_expr}"
         chain = (
             f"[{i}:v]trim=start={clip['trim_start_s']:.3f}{trim_end_part},"
             f"setpts=(PTS-STARTPTS)/{clip['speed']:.4f},"
-            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}"
+            f"{fit_chain},setsar=1,fps={fps}"
         )
         content_duration_s = None
         if clip['trim_end_s'] is not None:
@@ -390,22 +654,76 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
                     else cumulative_s + clip_durations_s[i]
                 )
             current_label = out_label
-    filter_parts.append(f"[{audio_index}:a]apad[aout]")
+    audio_offset_s = plan.get('audio_offset_s')
+    if audio_offset_s:
+        # A test render's audio track is a slice of the full one, starting
+        # `audio_offset_s` seconds in - `atrim` cuts it, `asetpts` resets the
+        # cut's own timestamps back to zero (same reason the video `trim`
+        # filter above is always followed by `setpts=(PTS-STARTPTS)/...`;
+        # without it the muxed output would start with `audio_offset_s` of
+        # silence instead of the trimmed content).
+        filter_parts.append(f"[{audio_index}:a]atrim=start={audio_offset_s:.3f},asetpts=PTS-STARTPTS,apad[aout]")
+    else:
+        filter_parts.append(f"[{audio_index}:a]apad[aout]")
 
     if overlays:
-        margin_x = round(w * _OVERLAY_MARGIN_PCT)
-        margin_y = round(h * _OVERLAY_MARGIN_PCT)
         cur = f'[{concat_label}]'
         for i, overlay in enumerate(overlays):
             idx = overlay_base_index + i
+            # Independently scaled to `width_pct`/`height_pct` of the canvas
+            # (no forced aspect lock - matches `CanvasLayer`'s free corner-
+            # resize) rather than the old aspect-preserved auto-height.
             ow_px = max(1, round(w * overlay['width_pct'] / 100))
-            # `-2` (not `-1`) forces an even auto-height regardless of the
-            # source image's own aspect - odd dimensions here have been
-            # observed to trip up some ffmpeg builds' rgba scalers.
-            filter_parts.append(
-                f"[{idx}:v]scale={ow_px}:-2,format=rgba,colorchannelmixer=aa={overlay['opacity']:.3f}[ovl{i}]",
-            )
-            x_expr, y_expr = _OVERLAY_XY_EXPR[overlay['position']](margin_x, margin_y)
+            oh_px = max(1, round(h * overlay['height_pct'] / 100))
+            rotation_deg = overlay['rotation_deg']
+            x_px = w * overlay['x_pct'] / 100
+            y_px = h * overlay['y_pct'] / 100
+            # A video overlay's own stream starts decoding from its own
+            # frame 0 the instant the whole ffmpeg process starts, in
+            # lockstep with every other input - without this, by the time
+            # the main timeline reaches `start_s` (when `enable=` below
+            # first turns it on), the overlay video would already be
+            # `start_s` seconds into its own playback instead of showing its
+            # own first frame. Shifting its presentation timestamps forward
+            # by `start_s` re-aligns "its own frame 0" with "the moment it
+            # becomes visible". Meaningless for an image overlay (`-loop 1`
+            # makes every frame identical), so only applied for `kind:
+            # 'video'`.
+            pre_filter = f"setpts=PTS+{overlay['start_s']:.3f}/TB," if overlay['kind'] == 'video' else ''
+            if rotation_deg:
+                # Rotates the overlay about its own *top-left* corner (not
+                # its center) - exactly what Konva's `Group.rotation` does
+                # for `CanvasLayer` (translate to `(x,y)` then rotate, offset
+                # always `(0,0)` - see this module's own docstring). ffmpeg's
+                # `rotate` filter only ever pivots around its input frame's
+                # own center, so the trick is to first pad the scaled image
+                # into a frame exactly twice its size with the image placed
+                # in the bottom-right quadrant - that puts the image's own
+                # top-left corner exactly at the padded frame's center, i.e.
+                # the pivot `rotate` will actually use.
+                rad = math.radians(rotation_deg)
+                padded_w, padded_h = ow_px * 2, oh_px * 2
+                rotw_px = max(1, round(abs(padded_w * math.cos(rad)) + abs(padded_h * math.sin(rad))))
+                roth_px = max(1, round(abs(padded_w * math.sin(rad)) + abs(padded_h * math.cos(rad))))
+                filter_parts.append(
+                    f"[{idx}:v]{pre_filter}scale={ow_px}:{oh_px},format=rgba,"
+                    f"pad={padded_w}:{padded_h}:{ow_px}:{oh_px}:color=0x00000000,"
+                    f"rotate={rad:.6f}:ow={rotw_px}:oh={roth_px}:c=none,"
+                    f"{_overlay_alpha_filters(overlay)}[ovl{i}]",
+                )
+                # The padded frame's center - our pivot, still exactly the
+                # overlay's own top-left corner - stays fixed by `rotate`,
+                # so it sits at the rotated output's own center too: placing
+                # *that* at `(x_px, y_px)` is what keeps this pixel-for-pixel
+                # aligned with what the live preview's `CanvasLayer` shows.
+                x_expr = f'{round(x_px - rotw_px / 2)}'
+                y_expr = f'{round(y_px - roth_px / 2)}'
+            else:
+                filter_parts.append(
+                    f"[{idx}:v]{pre_filter}scale={ow_px}:{oh_px},format=rgba,{_overlay_alpha_filters(overlay)}[ovl{i}]",
+                )
+                x_expr = f'{round(x_px)}'
+                y_expr = f'{round(y_px)}'
             end_s = overlay['start_s'] + overlay['duration_s']
             out_label = '[vout]' if i == len(overlays) - 1 else f'[vov{i}]'
             filter_parts.append(
@@ -422,6 +740,24 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
         str(dest_path),
     ]
     return cmd
+
+
+def save_overlay_video_source(slug: str, content: bytes, ext: str) -> dict:
+    """Writes an uploaded video-overlay source into the project's own
+    `editor/overlay_sources/` dir (project-scoped, unlike a logo - see this
+    module's own docstring on `kind: 'video'`) and returns the
+    `video_edit.overlay_video_sources[]` entry for it. `duration_seconds` is
+    always `None` - never ffprobed, same convention `video.save_uploaded_
+    video` already established for uploaded/imported clips elsewhere in this
+    app (an overlay's own `start_ms`/`duration_ms` governs its on-timeline
+    window regardless of the source's own length, same as an image
+    overlay)."""
+    source_id = f'ovv_{uuid4().hex[:8]}'
+    sources_dir = storage.project_dir(slug) / 'editor' / 'overlay_sources'
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    filename = f'{source_id}.{ext}'
+    (sources_dir / filename).write_bytes(content)
+    return {'id': source_id, 'file_path': f'editor/overlay_sources/{filename}', 'duration_seconds': None}
 
 
 def _run_ffmpeg_render(cmd: list[str]) -> None:
@@ -443,6 +779,7 @@ def _run_ffmpeg_render(cmd: list[str]) -> None:
 
 async def render_to_file(
     project: dict, video_edit: dict, project_dir: Path, dest_path: Path, settings: dict | None = None,
+    range_start_ms: float | None = None, range_end_ms: float | None = None,
 ) -> dict:
     if shutil.which('ffmpeg') is None:
         raise RuntimeError(
@@ -450,13 +787,17 @@ async def render_to_file(
             'Установите ffmpeg (ffmpeg.org) и перезапустите backend.',
         )
     plan = build_render_plan(project, video_edit, settings)
+    if range_start_ms is not None and range_end_ms is not None:
+        if range_end_ms <= range_start_ms:
+            raise RenderPlanError('Некорректный диапазон теста')
+        plan = _trim_plan_to_range(plan, max(0.0, range_start_ms), range_end_ms)
     cmd = build_ffmpeg_command(plan, project_dir, dest_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(_run_ffmpeg_render, cmd)
     return {'duration_ms': int(plan['output_duration_s'] * 1000), 'clip_count': len(plan['clips'])}
 
 
-async def _run_render_job(job_id: str, slug: str) -> None:
+async def _run_render_job(job_id: str, slug: str, range_start_ms: float | None = None, range_end_ms: float | None = None) -> None:
     try:
         project = storage.load_project(slug)
         if project is None:
@@ -466,7 +807,8 @@ async def _run_render_job(job_id: str, slug: str) -> None:
         render_id = f'rnd_{uuid4().hex[:8]}'
         project_dir = storage.project_dir(slug)
         dest_path = project_dir / 'editor' / f'{render_id}.mp4'
-        result = await render_to_file(project, video_edit, project_dir, dest_path, settings)
+        is_test = range_start_ms is not None and range_end_ms is not None
+        result = await render_to_file(project, video_edit, project_dir, dest_path, settings, range_start_ms, range_end_ms)
 
         render_entry = {
             'render_id': render_id,
@@ -475,6 +817,8 @@ async def _run_render_job(job_id: str, slug: str) -> None:
             'duration_ms': result['duration_ms'],
             'clip_count': result['clip_count'],
             'mureka_track_id': video_edit.get('mureka_track_id'),
+            'kind': 'test' if is_test else 'final',
+            'range': {'start_ms': range_start_ms, 'end_ms': range_end_ms} if is_test else None,
         }
         async with storage.project_lock(slug):
             project = storage.load_project(slug)
@@ -489,10 +833,10 @@ async def _run_render_job(job_id: str, slug: str) -> None:
         _jobs[job_id] = {'status': 'failed', 'render': None, 'error': str(exc)}
 
 
-def start_render_job(slug: str) -> str:
+def start_render_job(slug: str, range_start_ms: float | None = None, range_end_ms: float | None = None) -> str:
     job_id = uuid4().hex
     _jobs[job_id] = {'status': 'pending', 'render': None, 'error': None}
-    asyncio.create_task(_run_render_job(job_id, slug))
+    asyncio.create_task(_run_render_job(job_id, slug, range_start_ms, range_end_ms))
     return job_id
 
 

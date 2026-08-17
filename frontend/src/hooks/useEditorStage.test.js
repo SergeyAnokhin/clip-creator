@@ -240,18 +240,17 @@ describe('useEditorStage overlays', () => {
     expect(result.current.state.selectedClipIds).toEqual(new Set());
   });
 
-  it('setOverlayTiming/setOverlayPosition/setOverlayWidthPct/setOverlayOpacity patch just that overlay', () => {
+  it('setOverlayTiming/setOverlayTransform/setOverlayOpacity patch just that overlay', () => {
     const { result, project } = setupMultiClip();
     act(() => { result.current.actions.addOverlay('title_card', 'tcv_1'); });
     const id = project.video_edit.overlays[0].overlay_id;
 
     act(() => { result.current.actions.setOverlayTiming(id, 2000, 4000); });
-    act(() => { result.current.actions.setOverlayPosition(id, 'top-left'); });
-    act(() => { result.current.actions.setOverlayWidthPct(id, 35); });
+    act(() => { result.current.actions.setOverlayTransform(id, { x_pct: 10, y_pct: 15, width_pct: 35 }); });
     act(() => { result.current.actions.setOverlayOpacity(id, 0.5); });
 
     expect(project.video_edit.overlays[0]).toMatchObject({
-      start_ms: 2000, duration_ms: 4000, position: 'top-left', width_pct: 35, opacity: 0.5,
+      start_ms: 2000, duration_ms: 4000, x_pct: 10, y_pct: 15, width_pct: 35, opacity: 0.5,
     });
   });
 

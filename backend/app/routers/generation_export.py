@@ -10,7 +10,7 @@ import re
 import zipfile
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile
 
 from .. import storage
 from ..providers import editor, video
@@ -240,7 +240,12 @@ async def export_final_package(project_id: str):
 # the actual ffmpeg render, same job/poll shape as image/video generation.
 
 @router.post('/{project_id}/editor/render')
-async def start_editor_render(project_id: str):
+async def start_editor_render(project_id: str, body: dict = Body(default={})):
+    """`range_start_ms`/`range_end_ms` (both optional, both-or-neither) make
+    this a *test* render - only that window of the timeline is rendered
+    (`editor.py`'s `_trim_plan_to_range`), and the resulting `renders[]`
+    entry is tagged `kind: 'test'` (vs `'final'`) so the side panel can label
+    it differently - "Собрать тестовое видео" in `EditorStage.jsx`."""
     project = storage.load_project(project_id)
     if project is None:
         raise HTTPException(404, 'Project not found')
@@ -249,7 +254,7 @@ async def start_editor_render(project_id: str):
         raise HTTPException(422, 'Таймлайн пуст — добавьте хотя бы один клип')
     if not video_edit.get('mureka_track_id'):
         raise HTTPException(422, 'Не выбран аудиотрек для монтажа')
-    job_id = editor.start_render_job(project_id)
+    job_id = editor.start_render_job(project_id, body.get('range_start_ms'), body.get('range_end_ms'))
     return {'job_id': job_id}
 
 
@@ -259,6 +264,58 @@ async def get_editor_render_job(project_id: str, job_id: str):
     if job is None:
         raise HTTPException(404, 'Job not found')
     return job
+
+
+@router.post('/{project_id}/editor/overlay-videos')
+async def upload_editor_overlay_video(project_id: str, file: UploadFile = File(...)):
+    """Uploads an arbitrary video file to overlay on the main timeline
+    (`kind: 'video'` in `video_edit.overlays[]`) - project-scoped storage
+    (`video_edit.overlay_video_sources[]`), same file-validation convention
+    `import_video_batch` uses, but this route owns persistence itself
+    (single file, no per-scene matching needed) rather than the frontend
+    appending via a separate `PATCH`."""
+    name = file.filename or ''
+    suffix = ('.' + name.rsplit('.', 1)[-1].lower()) if '.' in name else ''
+    if suffix not in _ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(422, 'Неподдерживаемый формат видео')
+    content = await file.read()
+
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        source = editor.save_overlay_video_source(project_id, content, suffix.removeprefix('.'))
+        video_edit = project.get('video_edit') or {}
+        video_edit['overlay_video_sources'] = [*(video_edit.get('overlay_video_sources') or []), source]
+        project['video_edit'] = video_edit
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    return source
+
+
+@router.delete('/{project_id}/editor/overlay-videos/{source_id}')
+async def delete_editor_overlay_video(project_id: str, source_id: str):
+    async with storage.project_lock(project_id):
+        project = storage.load_project(project_id)
+        if project is None:
+            raise HTTPException(404, 'Project not found')
+        video_edit = project.get('video_edit') or {}
+        sources = video_edit.get('overlay_video_sources') or []
+        target = next((s for s in sources if s.get('id') == source_id), None)
+        if target is None:
+            raise HTTPException(404, 'Overlay video not found')
+        remaining = [s for s in sources if s.get('id') != source_id]
+        video_edit['overlay_video_sources'] = remaining
+        project['video_edit'] = video_edit
+        project['updated_at'] = _now()
+        storage.save_project(project_id, project)
+
+    file_path = storage.project_dir(project_id) / target['file_path']
+    if file_path.is_file():
+        file_path.unlink()
+
+    return {'overlay_video_sources': remaining}
 
 
 @router.delete('/{project_id}/editor/renders/{render_id}')

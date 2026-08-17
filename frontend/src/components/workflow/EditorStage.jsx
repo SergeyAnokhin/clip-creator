@@ -50,7 +50,7 @@ function formatTime(ms) {
  * useEditorStage.js for the state/preview-engine design; this component is
  * layout only. */
 export default function EditorStage({
-  L, project, isMobile, videoEdit, clips, overlays, totalDurationMs, selectedTrack, tracks,
+  L, project, isMobile, videoEdit, clips, overlays, overlayVideoSources, totalDurationMs, selectedTrack, tracks,
   playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds, selectedClipIds,
   selectedOverlayId, selectedTransitionClipId, logos, videoRef, audioRef, canUndo, canRedo, actions,
 }) {
@@ -59,6 +59,11 @@ export default function EditorStage({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sideWidthPx, setSideWidthPx] = useState(loadStoredSideWidth);
   const [resizeDrag, setResizeDrag] = useState(null);
+  // The test-render range picked by dragging the timeline's ruler
+  // (EditorTimeline.jsx) - a render-time input, not part of the EDL, so it's
+  // plain local state here rather than going through useEditorStage.js/
+  // commitVideoEdit (see the plan's own scoping note).
+  const [testRange, setTestRange] = useState(null);
 
   useEffect(() => {
     if (!isFullscreen) return undefined;
@@ -125,7 +130,9 @@ export default function EditorStage({
         <EditorPreview
           L={L} videoRef={videoRef} audioRef={audioRef} projectId={project.id} selectedTrack={selectedTrack}
           overlays={overlays} playheadMs={playheadMs} titleCardVariants={titleCardVariants} logos={logos}
+          overlayVideoSources={overlayVideoSources}
           isFullscreen={isFullscreen} onToggleFullscreen={() => setIsFullscreen((v) => !v)}
+          selectedOverlayId={selectedOverlayId} actions={actions}
         />
 
         {!isMobile && (
@@ -194,7 +201,9 @@ export default function EditorStage({
                 <div key={r.render_id} className="editor-render-row">
                   <video src={mediaUrl(`projects/${project.id}/${r.file_path}`)} controls />
                   <div className="editor-render-meta">
+                    {r.kind === 'test' && <span className="editor-render-badge">{L.editor_testRenderBadge}</span>}
                     {new Date(r.created_at).toLocaleString()} · {formatSeconds(r.duration_ms)}s · {r.clip_count} {L.editor_clipsCountLabel}
+                    {r.range && ` · ${formatTime(r.range.start_ms)}–${formatTime(r.range.end_ms)}`}
                   </div>
                   <div className="editor-render-actions">
                     <button className="icon-btn" title={L.editor_renderDownload} onClick={() => actions.downloadRender(r)}>
@@ -211,7 +220,15 @@ export default function EditorStage({
 
           <div className="editor-side-footer">
             {!renderLoading && renderError && <div className="editor-side-error">⚠️ {renderError}</div>}
-            <button className="btn btn-gradient" onClick={actions.startRender} disabled={!canRender || renderLoading}>
+            <button
+              className="btn btn-ghost" onClick={() => actions.startRender({ range: testRange })}
+              disabled={!canRender || renderLoading || !testRange}
+              title={testRange ? '' : L.editor_testRenderHint}
+            >
+              {renderLoading ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
+              {renderLoading ? L.editor_renderElapsed.replace('{s}', elapsedSeconds) : L.editor_testRenderButton}
+            </button>
+            <button className="btn btn-gradient" onClick={() => actions.startRender({})} disabled={!canRender || renderLoading}>
               {renderLoading ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
               {renderLoading ? L.editor_renderElapsed.replace('{s}', elapsedSeconds) : L.editor_renderButton}
             </button>
@@ -224,8 +241,10 @@ export default function EditorStage({
         selectedTrack={selectedTrack} playheadMs={playheadMs} isPlaying={isPlaying}
         selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
         selectedTransitionClipId={selectedTransitionClipId}
-        titleCardVariants={titleCardVariants} logos={logos}
+        titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources}
         actions={actions} toolsSlotNode={toolsSlot}
+        testRange={testRange} onRangeSelected={(startMs, endMs) => setTestRange({ startMs, endMs })}
+        onClearTestRange={() => setTestRange(null)}
         onOpenShortcuts={() => setShortcutsOpen(true)} canUndo={canUndo} canRedo={canRedo}
       />
 

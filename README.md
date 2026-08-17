@@ -76,9 +76,12 @@ easy to regress and tedious to set up by hand through the UI (scene numbers
 are 1-based, as shown in the app):
 
 - Scene 3 has `aspect_ratio: "9:16"` while every other scene is `"16:9"` —
-  the mixed-aspect-ratio letterboxing case, where the render canvas must
-  stay the default `1920×1080` (it only switches to `1080×1920` when *every*
-  clip is `9:16`).
+  the mixed-aspect-ratio case, where the render canvas must stay the default
+  `1920×1080` (it only switches to `1080×1920` when *every* clip is `9:16`).
+  Useful for testing a clip's per-clip `fit` too: by default (`cover`) this
+  clip fills the landscape frame with no bars; switch it to `contain` to
+  exercise the letterboxed path instead (see `docs/data-model.md`'s
+  `EditorClip.fit`).
 - Scene 4's clip has `trim_end_ms: null` on a video with **known**
   `duration_seconds` — the "trim to end of source" case, which should fall
   back to that duration.
@@ -96,6 +99,17 @@ upload-scenario clip as-is, copy one track's `.mp3`, and hand-write
 `config.json` following `docs/data-model.md`'s `Scene` / `Video` /
 `MurekaTrack` / `VideoEdit` shapes — do not recreate it by pointing the app
 at a real project and copying its data.
+
+For a manual test that *does* need to mutate `video_edit` (adding an overlay,
+setting a transition, actually clicking "Собрать финальное видео") rather
+than just clicking around read-only, don't edit the fixture itself — copy its
+folder under `app_data/projects/` to a scratch name, edit the copy's
+`config.json` `id`/`title` to match, test against that, then delete the copy
+**and** its entry in `app_data/projects/_redirects.json`. The app renames a
+project's folder to `{author} - {title}` the first time it autosaves after
+load (see `docs/architecture.md`'s "Project rename uses a redirect map"), so
+the copy's on-disk folder name won't match what you set — check
+`_redirects.json` for the real one before deleting.
 
 ## Documentation
 

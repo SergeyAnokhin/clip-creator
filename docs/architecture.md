@@ -87,9 +87,13 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    and a playhead across all three. Every other control (playback transport,
    split/zoom toolbar, the clip properties strip, add-scene chips, and the
    render CTA) lives in the right-hand panel instead of crowding the monitor
-   or the timeline — `EditorTimeline.jsx` still owns the toolbar/inspector's
-   state and DOM refs, it just portals their markup into a slot
-   `EditorStage.jsx` renders in that panel. Clip blocks show actual sampled
+   or the timeline — `EditorTimeline.jsx` still owns the timeline's own DOM/
+   scroll/zoom state, it just portals `EditorTimelineTools.jsx`'s toolbar/
+   inspector/pickers markup into a slot `EditorStage.jsx` renders in that
+   panel (the drag/trim/marquee gesture state machine is its own
+   `useTimelineDrag.js` hook - both split out of `EditorTimeline.jsx` once it
+   grew past ~600 lines covering zoom, gestures, and side-panel JSX all at
+   once; see `docs/code-map.md`). Clip blocks show actual sampled
    frames from *that clip's own* trimmed source window (`useClipThumbnails`,
    more frames as the block gets wider), not scene text — extraction runs
    through one shared hidden `<video>`, serialized and cached, so many clips
@@ -106,21 +110,36 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    into one step the same way `PosterConstructor.jsx`'s `commit()` does;
    renders aren't part of the undoable document, only clip order/trim/speed/
    transitions/fades, overlays, and the picked track). Above the clip row sits
-   a second, shorter lane for **overlays** - title-card variants / global logos
-   placed over the video for their own `[start_ms, start_ms+duration_ms)`
-   window, added from a collapsible picker (`PickerRow`/`PickerThumb`, reused
-   from `PosterPanels.jsx`) that lists the project's title-card variants and
-   `settings.logos[]`. Unlike clips, overlays don't tile back to back - drag
-   moves one in time, drag an edge resizes it, and they can overlap or leave
-   gaps; picking one is mutually exclusive with clip selection (own
-   `selectedOverlayId`, not part of `selectedClipIds`), and its inspector
-   (`TimelineOverlayInspector.jsx`) is a 9-point position grid plus
-   width%/opacity sliders rather than draggable canvas placement - a real
-   Konva-style overlay editor was scoped out of v1 (see the plan's rationale).
-   The program monitor draws whichever overlay(s) are active at the playhead
-   as plain absolutely-positioned `<img>`s (approximate, like the rest of this
-   preview); the real render composites them for real with ffmpeg's `overlay`
-   filter, each gated to its own window via `enable='between(t,…)'`
+   a track for **overlays** - title-card variants, global logos, or an
+   uploaded video, placed over the video for their own
+   `[start_ms, start_ms+duration_ms)` window, added from a collapsible picker
+   (`PickerRow`/`PickerThumb`, reused from `PosterPanels.jsx`) that lists the
+   project's title-card variants, `settings.logos[]`, and its own
+   `video_edit.overlay_video_sources[]` (plus an upload button for the last
+   one). Unlike clips, overlays don't tile back to back - drag moves one in
+   time, drag an edge resizes it, and they can overlap or leave gaps; when two
+   overlap in time they render on separate lanes/rows instead of stacking
+   illegibly (`lib/overlays.js`'s `assignOverlayLanes`, greedy interval-graph
+   coloring - purely a display concern, never stored on the overlay). Picking
+   one is mutually exclusive with clip selection (own `selectedOverlayId`, not
+   part of `selectedClipIds`).
+
+   An overlay's position/size/rotation are set by **dragging it directly on
+   the program monitor** - `EditorPreview.jsx` renders active overlays on a
+   `react-konva` `Stage` sized and positioned to exactly the video's own real
+   (non-letterboxed) content rect (`lib/videoFrameRect.js`'s
+   `computeContentRect`, replicating the `<video>`'s own `object-fit: contain`
+   math, since the frame's own box can have a different aspect ratio than the
+   video), via the shared `components/shared/CanvasLayer.jsx` primitive - the
+   same Konva `Group`+`Transformer` drag/resize/rotate wrapper the Poster
+   constructor's layers use (`PosterCanvasLayers.jsx`'s `OverlayImage` was
+   refactored onto it), so both editors share one interaction model instead of
+   two parallel implementations. A dashed `.editor-frame-bounds` outline marks
+   that same content rect so it's visible even with no overlay selected.
+   `TimelineOverlayInspector.jsx` is a numeric fallback for the same fields
+   (x/y/width/height/rotation %, opacity, fade in/out), not a second source of
+   truth. The real render composites overlays with ffmpeg's `overlay` filter,
+   each gated to its own window via `enable='between(t,…)'`
    (`providers/editor.py::build_ffmpeg_command`).
 
    Every boundary between two clips carries a small `TimelineTransitionMarker`
@@ -142,13 +161,14 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    black/white, entirely within that one clip's own duration, no effect on
    neighbours).
 
-   Reorder/trim/split/speed/overlays/transitions/fades - no video-in-video
-   yet. **The timeline has no gaps**: clips are always
+   Reorder/trim/split/speed/overlays (image or video, freely
+   placed/resized/rotated, with fade in/out)/transitions/fades/per-clip fit.
+   **The timeline has no gaps**: clips are always
    concatenated back to back, so a
    horizontal drag means "reorder", not "move to this exact time". The
    in-browser preview never touches ffmpeg (a `<video>`+`<audio>` pair synced
    off a `requestAnimationFrame` playhead approximates the cut — see
-   `useEditorStage.js`'s `isPlayingRef`/`tick` comments for why that loop has
+   `useEditorPreview.js`'s `isPlayingRef`/`tick` comments for why that loop has
    to read playback state through a ref, not the hook's own `isPlaying`
    closure); only the server-side render is pixel-accurate. This stage is
    desktop-oriented by design: the fixed-height "fill the viewport" layout and
@@ -156,6 +176,18 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    normal scrolling stack and stay mouse-only below the mobile/tablet
    breakpoint — a keyboard alternative (Tab to a clip, arrow keys between
    clips, Enter/Space to select) covers non-mouse desktop use instead.
+
+   Dragging on the timeline's **ruler** (`useTimelineDrag.js`'s
+   `startRangeSelect`, a dedicated gesture that takes priority there over the
+   ruler's usual scrub-by-background click) picks an ephemeral time range,
+   shown as a translucent band spanning the whole timeline height - not part
+   of `video_edit`, just render-time input local to `EditorStage.jsx`. With a
+   range picked, "Собрать тестовое видео" renders only that window
+   (`providers/editor.py`'s `_trim_plan_to_range`, applied after the normal
+   full-EDL plan is resolved) instead of the whole timeline - cheap iteration
+   on one overlay/effect without paying for a full render. Its `renders[]`
+   entry is tagged `kind: 'test'` (vs. `'final'`) with its own `range`, shown
+   with a badge in the renders list.
 
 Scenes and Images are two stages because they are two independent AI calls with
 independent model choices — you can reroll a scene's images without re-running
@@ -756,6 +788,15 @@ lives in the button's own component state.
   other providers have a handful); everything else reads "unknown" until priced
   in Settings → Prices. Translation is unpriceable by design — `pricing.py` row
   shapes cover per-token and per-image billing, not per-character.
+- **A freshly-finished ffmpeg render can 404/fail-to-open for a moment after
+  the process exits.** `subprocess.run` returning doesn't guarantee the OS has
+  flushed the `.mp4`'s trailing `moov` atom to disk yet (observed on Windows
+  while manually verifying Editor-stage renders with `ffprobe` right after
+  `render_to_file` returned) - `ffprobe`/`ffmpeg -i` on the file immediately
+  afterward can report "moov atom not found" even though the render itself
+  succeeded and the job/`renders[]` entry is already correct. Retrying the
+  probe a few seconds later (or just re-running it) clears up on its own; it's
+  a filesystem-timing artifact of manual verification, not a real render bug.
 - **A Konva `Stage` filling a dynamic container needs its first size read
   synchronously.** `ResizeObserver`'s first callback isn't guaranteed to land in
   the mount frame (it has failed to fire at all in an automated browser, leaving

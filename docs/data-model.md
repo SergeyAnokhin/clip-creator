@@ -112,15 +112,17 @@ probed**, so `duration_seconds`/`resolution`/`aspect_ratio`/`generation_ms` are
 `null` on it — which matters for the Editor stage's trim math below.
 
 **VideoEdit** (Editor stage, `providers/editor.py`): `{mureka_track_id, clips[],
-renders[]}`. Lazily seeded the first time the stage opens (one clip per scene
-that has an `is_selected` video, in scene order; `mureka_track_id` from whichever
-`MurekaTrack.is_selected`), but — unlike `TitleCard.text_block` — persisted
-immediately, so a reload right after first opening the stage doesn't lose it.
-`clips`/`mureka_track_id` are edited only through the generic
-`PATCH /api/projects/{id}`; only the render is a real job/poll call.
+overlays[], overlay_video_sources[], renders[]}`. Lazily seeded the first time
+the stage opens (one clip per scene that has an `is_selected` video, in scene
+order; `mureka_track_id` from whichever `MurekaTrack.is_selected`), but —
+unlike `TitleCard.text_block` — persisted immediately, so a reload right after
+first opening the stage doesn't lose it. `clips`/`overlays`/`mureka_track_id`
+are edited only through the generic `PATCH /api/projects/{id}`; uploading an
+overlay video and rendering are the only real job/API calls (see the route
+table below).
 
 An **`EditorClip`** is `{clip_id, scene_index, video_id, trim_start_ms,
-trim_end_ms, speed}` — `video_id` must resolve inside
+trim_end_ms, speed, fit?}` — `video_id` must resolve inside
 `scenes[scene_index].videos[]` but need **not** be unique across `clips[]`: the
 timeline's razor (`lib/timeline.js`'s `splitClipsAt`) turns one clip into two
 entries over the same source video with adjacent trim windows, and the render
@@ -133,26 +135,66 @@ uploaded/imported clip), where the render leaves the end genuinely unbounded
 frontend, which can't probe the file, lays such a clip out with a fixed 5s
 stand-in (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) purely for display.
 
-An **overlay** entry in `overlays[]` is `{overlay_id, kind: 'title_card'|'logo',
-source_id, start_ms, duration_ms, position, width_pct, opacity}` — a static
-title-card variant or global logo image shown over the video for
-`[start_ms, start_ms+duration_ms)` on the output timeline (same millisecond
-axis as a clip's own `startMs`/`durationMs`). Unlike clips, overlays don't tile
-back to back: they float freely, can overlap each other, or leave gaps, and
-live on their own lane above the video track. `kind: 'title_card'` resolves
+`fit` (`{mode: 'cover'|'contain', zoom, offset_x_pct, offset_y_pct}`,
+absent/`null` = `{mode: 'cover', zoom: 1, offset_x_pct: 50, offset_y_pct: 50}`)
+is how a clip whose own aspect ratio doesn't match the render canvas fills it -
+`cover` (the default) scales up and crops the overflow so the clip always
+fills the frame with no letterbox bars, `zoom` (≥1) scales in further, and
+`offset_x_pct`/`offset_y_pct` (0-100%, 50 = centered) pan within the resulting
+overscanned image (`TimelineClipInspector.jsx`'s "Кадрирование" section);
+`contain` is the old always-letterboxed behavior (scale down to fit, pad the
+rest), an explicit opt-in for a clip the user deliberately wants letterboxed.
+
+An **overlay** entry in `overlays[]` is `{overlay_id, kind:
+'title_card'|'logo'|'video', source_id, start_ms, duration_ms, x_pct, y_pct,
+width_pct, height_pct, rotation_deg, opacity, fade_in_ms, fade_out_ms}` —
+shown over the video for `[start_ms, start_ms+duration_ms)` on the output
+timeline (same millisecond axis as a clip's own `startMs`/`durationMs`).
+Unlike clips, overlays don't tile back to back: they float freely, can
+overlap each other, or leave gaps, and live on their own track above the
+video row (overlapping ones render on separate lanes - purely a timeline
+*display* concern, see `docs/architecture.md`). `kind: 'title_card'` resolves
 `source_id` against this same project's `title_card.variants[].variant_id`;
 `kind: 'logo'` resolves it against the *global* `settings.logos[].id`
-(`docs/architecture.md`'s Settings section). `position` is one of a 9-point
-grid (`top-left` … `bottom-right`, `center`); `width_pct` scales the overlay to
-that fraction of the render canvas's width (aspect preserved); `opacity`
-(0-1) multiplies whatever alpha the source image already carries. Array order
-is z-order, later entries painted on top (mirrors `Poster.layers`'s
-convention). Editing an overlay's timing/position/size only ever patches its
-own object — no cascading layout the way clip trim/speed can shift every
-later clip. Real placement/scale on the canvas is *not* interactively
-draggable in the preview (unlike the Poster constructor's Konva canvas) — v1
-scope is the 9-point grid plus numeric fields, see `providers/editor.py`'s
-`_OVERLAY_XY_EXPR`.
+(`docs/architecture.md`'s Settings section); `kind: 'video'` resolves it
+against this same `VideoEdit`'s own `overlay_video_sources[]` (below) -
+project-scoped, like a title card, not global like a logo.
+
+`x_pct`/`y_pct` place the overlay's own **top-left corner** (of its
+*unrotated* bounding box) as a percentage of the canvas; `width_pct`/
+`height_pct` scale it independently (no forced aspect lock); `rotation_deg`
+(0-360) rotates it about that same top-left corner - mirrors exactly how the
+shared `CanvasLayer.jsx`/Konva `Group` places and rotates a node (translate
+to `(x,y)`, then rotate, offset always `(0,0)`), so the program monitor's live
+drag/resize/rotate canvas and the real ffmpeg render land on the same pixel.
+`opacity` (0-1) is the overlay's flat alpha; `fade_in_ms`/`fade_out_ms`
+(default `0`) ramp it from/to `0` at the start/end of its own window - both
+are clamped proportionally if their sum would outlast `duration_ms`. Array
+order is z-order, later entries painted on top (mirrors `Poster.layers`'s
+convention). Editing an overlay's timing/position/size/fade only ever patches
+its own object — no cascading layout the way clip trim/speed can shift every
+later clip.
+
+Placement is set by **dragging the overlay directly on the program monitor**
+(`EditorPreview.jsx`, via `CanvasLayer.jsx` - the same primitive the Poster
+constructor's layers use), not a fixed grid; `TimelineOverlayInspector.jsx`'s
+numeric fields are a precise-entry fallback for the same data, not a second
+source of truth. An overlay saved before this existed only has the old
+`position` (one of a 9-point grid) + a bare `width_pct` - both frontend
+(`lib/overlays.js`'s `migrateOverlay`) and backend
+(`providers/editor.py`'s `_migrate_overlay_position`) derive the new fields
+from those the first time such an overlay is read/rendered, so old projects
+open and render unchanged without a migration pass.
+
+**`overlay_video_sources[]`** (`VideoEdit`, alongside `overlays[]`) is
+`[{id, file_path, duration_seconds}]` - uploaded video files usable as a
+`kind: 'video'` overlay (video-in-video compositing). `file_path` is
+`editor/overlay_sources/{id}.{ext}`, project-relative like a clip's own
+`file_path`. `duration_seconds` is always `null` - never ffprobed, same
+"unknown duration" convention `Video.duration_seconds` already has for an
+uploaded/imported clip; the overlay's own `start_ms`/`duration_ms` governs its
+on-timeline window regardless of the source video's real length. Managed via
+its own upload/delete routes (below), not the generic `PATCH`.
 
 An `EditorClip` can also carry `transition_in` (`{type: 'dissolve'|'fadeblack'|
 'fadewhite', duration_ms}`, absent = a hard cut) and `fade_in`/`fade_out`
@@ -174,15 +216,29 @@ never exceed the content they'd apply to (see `providers/editor.py`'s
 `_resolve_fade` / the transition-duration clamp in `build_render_plan`).
 
 `renders[]` is server-managed and append-only: `{render_id, file_path,
-created_at, duration_ms, clip_count, mureka_track_id}`. Output canvas is a fixed
-1920×1080 (or 1080×1920 if every clip's `aspect_ratio` is `9:16`); clips are
-scaled and letterboxed into it, never cropped. If the clips run **shorter** than
-the audio the last clip is frozen (ffmpeg `tpad`) to fill the remainder; if
-**longer**, the render is hard-capped at the audio's length (`-t`), silently
-truncating the tail. The UI shows a non-blocking duration-mismatch warning for
-both, computed client-side. Overlays composite on top of the concatenated
-clips via ffmpeg's `overlay` filter, each gated to its own window with
+created_at, duration_ms, clip_count, mureka_track_id, kind: 'final'|'test',
+range: {start_ms, end_ms}|null}`. Output canvas is a fixed 1920×1080 (or
+1080×1920 if every clip's `aspect_ratio` is `9:16`); each clip fills it per
+its own `fit` (above) - `cover`-by-default crops overflow to fill the frame,
+`contain` letterboxes. If the clips run **shorter** than the audio the last
+clip is frozen (ffmpeg `tpad`) to fill the remainder; if **longer**, the
+render is hard-capped at the audio's length (`-t`), silently truncating the
+tail. The UI shows a non-blocking duration-mismatch warning for both,
+computed client-side. Overlays composite on top of the concatenated clips via
+ffmpeg's `overlay` filter, each gated to its own window with
 `enable='between(t,…)'` — see `providers/editor.py::build_ffmpeg_command`.
+
+A **test render** (`kind: 'test'`, `range` set) renders only a
+`[start_ms, end_ms)` window of the timeline instead of the whole thing -
+picked by dragging the timeline ruler in the frontend, an ephemeral selection
+that's never itself part of `VideoEdit` (see `docs/architecture.md`).
+`providers/editor.py`'s `_trim_plan_to_range` post-processes the normal,
+fully-resolved render plan: clips entirely outside the range are dropped, the
+new first/last clip's own trim points are tightened to their own content
+inside the range, a transition into the new first clip is cleared, overlays
+are kept only if they intersect the range (shifted so the range's own start
+becomes the new timeline zero), and the audio track is trimmed to the same
+window (`atrim`/`asetpts` in `build_ffmpeg_command`).
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` —
 `text_block` is one free-text field the user edits directly (not separate
@@ -576,9 +632,11 @@ reference-image upload (multipart).
 | `GET /api/projects/{id}/video-export` | `?scenes=0,2,5` (comma-separated 0-based indices, omitted/`all` for every scene) → a zip file (`application/zip`, `Content-Disposition: attachment`). Bulk hand-off for animating scenes in an outside tool: for each included scene, resolves its animate-source picture the same way the Video stage itself does (`animate_image_id` override → `is_selected` → first image → skip if none, or if the file is missing on disk), writes it as `{scene_number:03d}_{motion_prompt_slug}.{ext}` (1-based scene number, so a partial export's numbers still match the real scene positions), and adds one `prompts.txt` with every included scene's `motion_prompt`, blank-line separated, in scene order. A scene with no resolvable image is silently skipped from both the zip and `prompts.txt` — nothing to export for it. `404` if the project doesn't exist |
 | `POST /api/projects/{id}/video-import-batch` | multipart `files` (one or more, `.mp4\|.mov\|.webm\|.mkv`) → `{assigned: [{filename, scene_index, video}], skipped: [{filename, reason}]}` — reverse of `video-export` above: each file is matched back to a scene purely by the leading `{scene_number:03d}_...` prefix on its **last path segment** (same convention `video-export` writes; a folder-picker upload can hand back `subfolder/008_clip.mp4` instead of a bare filename depending on the browser, so matching strips any `/`-or-`\`-delimited directory part first — `filename` in the response is still the original, unstripped name the browser sent), 1-based number minus one giving the 0-based `scene_index`; matched files are appended to that scene's `videos[]` via the same `video.save_uploaded_video` the single-file upload route above uses (`model: 'upload'`, `cost: 0`). `reason` is one of `unsupported_type`\|`no_scene_number`\|`scene_out_of_range` — a bad file in the batch is skipped, not a hard failure for the rest. `404` if the project doesn't exist |
 | `GET /api/projects/{id}/final-export` | → a zip file (`application/zip`, `Content-Disposition: attachment`) — the Export stage's (last stage, `stage: 'export'`) deliverable bundle, distinct from `video-export` above (that one hands off *source* pictures+prompts for animating elsewhere; this one packages the *finished* results). `videos/`: **every** `Video` across every scene (not just each scene's `is_selected` pick), named `{5-rating}★_scene{n:03d}_{motion_prompt_slug}_{shortid}.mp4` — the inverted-rating prefix (`0` for 5★ down to `5` for unrated) sorts the best clips first alphabetically; `{shortid}` (the video file's own generated hex suffix) disambiguates several candidates sharing the same scene/prompt. `audio/`: the project's `is_selected` `MurekaTrack`'s `.mp3`, if any (skipped otherwise — no fallback). `title/`: every `TitleCardVariant` with `marked_for_export: true`, numbered `{i:02d}_{filename}`; if none are marked, falls back to the single `is_selected` variant so older projects (predating this flag) still get their main title card. A scene/track/variant whose file is missing on disk is silently skipped, same tolerance as `video-export`. `404` if the project doesn't exist |
-| `POST /api/projects/{id}/editor/render` | no body (reads `project.video_edit`, edited beforehand via the generic `PATCH`) → `{job_id}` — `422` if `video_edit.clips` is empty or `mureka_track_id` is unset, `404` if the project doesn't exist. Same immediate-return/background-job shape as scene images/video, but the work is a local `ffmpeg` call (`providers/editor.py`'s `start_render_job`/`render_to_file`), not an external API |
+| `POST /api/projects/{id}/editor/render` | optional body `{range_start_ms, range_end_ms}` (both-or-neither; reads `project.video_edit`, edited beforehand via the generic `PATCH`) → `{job_id}` — `422` if `video_edit.clips` is empty or `mureka_track_id` is unset, `404` if the project doesn't exist. Same immediate-return/background-job shape as scene images/video, but the work is a local `ffmpeg` call (`providers/editor.py`'s `start_render_job`/`render_to_file`), not an external API. With a range, the resulting `renders[]` entry is tagged `kind: 'test'` and only that window is rendered (`_trim_plan_to_range`) - no body renders the full timeline (`kind: 'final'`) |
 | `GET /api/projects/{id}/editor/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', render: Render\|null, error: str\|null}` — polled every 3s by the frontend (`useEditorStage.js`); in-memory-only job state (`providers/editor.py`'s own `_jobs` dict). On success, the `render` entry has already been appended to `project.video_edit.renders` server-side |
 | `DELETE /api/projects/{id}/editor/renders/{render_id}` | → `{renders}` — removes one from `video_edit.renders` and deletes its file; `404` if the project or the render doesn't exist |
+| `POST /api/projects/{id}/editor/overlay-videos` | multipart `file` → the new `overlay_video_sources[]` entry `{id, file_path, duration_seconds: null}` — `422` on an unsupported video extension, `404` if the project doesn't exist. The route itself appends to `video_edit.overlay_video_sources` under the project lock (mirrors `import_video_batch`'s own pattern), not a separate `PATCH` round-trip |
+| `DELETE /api/projects/{id}/editor/overlay-videos/{source_id}` | → `{overlay_video_sources}` — removes one and deletes its file; `404` if the project or the source doesn't exist |
 | `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
 | `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
 | `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |

@@ -1,5 +1,8 @@
 import { Copy, RotateCcw, Trash2 } from 'lucide-react';
-import { DEFAULT_FADE_MS, MAX_SPEED, MIN_SPEED, clampTrim } from '../../lib/timeline.js';
+import {
+  DEFAULT_FADE_MS, DEFAULT_FIT, MAX_FIT_ZOOM, MAX_SPEED, MIN_FIT_ZOOM, MIN_SPEED, clampTrim,
+} from '../../lib/timeline.js';
+import { EffectSlider } from './PosterPanels.jsx';
 
 /** One fade row (in or out): a duration field (0 = off) plus a black/white
  * swatch pair that both picks the colour and - if the fade was off - turns
@@ -28,6 +31,67 @@ function FadeRow({ L, label, fade, onSet }) {
         onClick={() => onSet('white', fade?.duration_ms || DEFAULT_FADE_MS)}
       />
     </span>
+  );
+}
+
+/** How a clip whose own aspect ratio doesn't match the render canvas fills
+ * it - `Заполнить` (cover, the default when `fit` is absent: fills the
+ * frame, cropping overflow, no letterbox bars) or `Вписать` (contain: the
+ * old always-letterboxed behavior, kept as an explicit opt-in). Cover mode
+ * additionally exposes zoom + pan (`offset_x_pct`/`offset_y_pct`, 0-100%
+ * within the overscanned crop window, 50/50 = centered) for repositioning
+ * what's visible - mirrors `providers/editor.py`'s `build_ffmpeg_command`
+ * crop-vs-pad branch exactly (see that module for the filter math). A
+ * top-level component for the same remount/focus reason `FadeRow` is. */
+function ClipFitRow({ L, fit, onChange }) {
+  const mode = fit?.mode === 'contain' ? 'contain' : 'cover';
+  const zoom = fit?.zoom || DEFAULT_FIT.zoom;
+  const offsetXPct = fit?.offset_x_pct ?? DEFAULT_FIT.offset_x_pct;
+  const offsetYPct = fit?.offset_y_pct ?? DEFAULT_FIT.offset_y_pct;
+
+  function setMode(nextMode) {
+    onChange(nextMode === 'contain' ? { mode: 'contain' } : { mode: 'cover', zoom, offset_x_pct: offsetXPct, offset_y_pct: offsetYPct });
+  }
+  function patchCover(patch) {
+    onChange({ mode: 'cover', zoom, offset_x_pct: offsetXPct, offset_y_pct: offsetYPct, ...patch });
+  }
+
+  return (
+    <div className="tl-inspector-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span className="tl-inspector-label">
+        <span className="tl-inspector-rowlabel">{L.editor_clipFitLabel}</span>
+      </span>
+      <div className="tl-inspector-row tl-transition-types">
+        <button
+          type="button" className={`tl-transition-chip${mode === 'cover' ? ' is-selected' : ''}`}
+          onClick={() => setMode('cover')}
+        >
+          {L.editor_clipFitCover}
+        </button>
+        <button
+          type="button" className={`tl-transition-chip${mode === 'contain' ? ' is-selected' : ''}`}
+          onClick={() => setMode('contain')}
+        >
+          {L.editor_clipFitContain}
+        </button>
+      </div>
+      {mode === 'cover' && (
+        <>
+          <EffectSlider
+            label={L.editor_clipFitZoomLabel} value={Math.round(zoom * 100)} min={MIN_FIT_ZOOM * 100} max={MAX_FIT_ZOOM * 100}
+            unit="%" onChange={(v) => patchCover({ zoom: v / 100 })} L={L}
+          />
+          <EffectSlider
+            label={L.editor_clipFitOffsetXLabel} value={Math.round(offsetXPct)} min={0} max={100}
+            unit="%" onChange={(v) => patchCover({ offset_x_pct: v })} L={L}
+          />
+          <EffectSlider
+            label={L.editor_clipFitOffsetYLabel} value={Math.round(offsetYPct)} min={0} max={100}
+            unit="%" onChange={(v) => patchCover({ offset_y_pct: v })} L={L}
+          />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -116,6 +180,8 @@ export default function TimelineClipInspector({
         />
         <span className="tl-inspector-arrow">×</span>
       </label>
+
+      <ClipFitRow L={L} fit={clip.fit} onChange={(fit) => actions.setClipFit(clip.clip_id, fit)} />
 
       <FadeRow L={L} label={L.editor_fadeInLabel} fade={clip.fade_in} onSet={(color, ms) => actions.setClipFadeIn(clip.clip_id, color, ms)} />
       <FadeRow L={L} label={L.editor_fadeOutLabel} fade={clip.fade_out} onSet={(color, ms) => actions.setClipFadeOut(clip.clip_id, color, ms)} />

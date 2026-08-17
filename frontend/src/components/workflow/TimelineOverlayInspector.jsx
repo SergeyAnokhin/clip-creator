@@ -1,25 +1,30 @@
 import { Trash2 } from 'lucide-react';
 import { EffectSlider } from './PosterPanels.jsx';
-import {
-  MAX_OVERLAY_WIDTH_PCT, MIN_OVERLAY_MS, MIN_OVERLAY_WIDTH_PCT, OVERLAY_POSITIONS,
-} from '../../lib/overlays.js';
+import { MAX_OVERLAY_WIDTH_PCT, MIN_OVERLAY_MS, MIN_OVERLAY_WIDTH_PCT } from '../../lib/overlays.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
 
 /** Properties strip for the overlay currently selected on the overlay lane -
- * the numeric/grid counterpart to that lane's direct-manipulation gestures
- * (drag = move in time, edge drag = resize). Position is a 9-point grid
- * (matches `providers/editor.py`'s `_OVERLAY_XY_EXPR`) rather than free
- * drag-on-canvas placement - see the plan's v1 scoping note. */
+ * the numeric counterpart to that lane's own direct-manipulation gestures
+ * (drag = move in time, edge drag = resize) *and* to the program monitor's
+ * drag/resize/rotate canvas (`EditorPreview.jsx`, via the shared
+ * `CanvasLayer` primitive) - a precise-entry fallback for the same
+ * `x_pct`/`y_pct`/`width_pct`/`height_pct`/`rotation_deg` fields, not a
+ * second source of truth. */
 export default function TimelineOverlayInspector({
-  L, overlay, projectId, titleCardVariants, logos, actions,
+  L, overlay, projectId, titleCardVariants, logos, overlayVideoSources, actions,
 }) {
   if (!overlay) return null;
-  const { label } = resolveOverlaySource(overlay, { projectId, titleCardVariants, logos, L });
+  const { label } = resolveOverlaySource(overlay, {
+    projectId, titleCardVariants, logos, overlayVideoSources, L,
+  });
 
   function commitTiming(nextStartMs, nextDurationMs) {
     const startMs = Math.max(0, nextStartMs);
     const durationMs = Math.max(MIN_OVERLAY_MS, nextDurationMs);
     actions.setOverlayTiming(overlay.overlay_id, Math.round(startMs), Math.round(durationMs));
+  }
+  function setTransform(patch) {
+    actions.setOverlayTransform(overlay.overlay_id, patch);
   }
 
   return (
@@ -44,31 +49,58 @@ export default function TimelineOverlayInspector({
         />
       </span>
 
-      <div className="tl-inspector-row tl-position-grid" role="group" aria-label={L.overlay_positionLabel}>
-        {OVERLAY_POSITIONS.map((pos) => (
-          <button
-            key={pos}
-            type="button"
-            className={`tl-position-cell${overlay.position === pos ? ' is-selected' : ''}`}
-            title={L[`overlay_position_${pos.replace(/-/g, '_')}`]}
-            aria-label={L[`overlay_position_${pos.replace(/-/g, '_')}`]}
-            onClick={() => actions.setOverlayPosition(overlay.overlay_id, pos)}
-          >
-            <span />
-          </button>
-        ))}
-      </div>
+      <span className="tl-inspector-label tl-inspector-row">
+        <span className="tl-inspector-rowlabel">{L.overlay_xLabel}</span>
+        <input
+          type="number" step="1"
+          className="field tl-inspector-num" value={Math.round(overlay.x_pct)}
+          aria-label={L.overlay_xLabel}
+          onChange={(e) => setTransform({ x_pct: Number(e.target.value) })}
+        />
+        <span className="tl-inspector-rowlabel">{L.overlay_yLabel}</span>
+        <input
+          type="number" step="1"
+          className="field tl-inspector-num" value={Math.round(overlay.y_pct)}
+          aria-label={L.overlay_yLabel}
+          onChange={(e) => setTransform({ y_pct: Number(e.target.value) })}
+        />
+      </span>
 
       <div className="tl-inspector-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <EffectSlider
-          label={L.overlay_widthLabel} value={overlay.width_pct} min={MIN_OVERLAY_WIDTH_PCT} max={MAX_OVERLAY_WIDTH_PCT}
-          unit="%" onChange={(v) => actions.setOverlayWidthPct(overlay.overlay_id, v)} L={L}
+          label={L.overlay_widthLabel} value={Math.round(overlay.width_pct)} min={MIN_OVERLAY_WIDTH_PCT} max={MAX_OVERLAY_WIDTH_PCT}
+          unit="%" onChange={(v) => setTransform({ width_pct: v })} L={L}
+        />
+        <EffectSlider
+          label={L.overlay_heightLabel} value={Math.round(overlay.height_pct)} min={MIN_OVERLAY_WIDTH_PCT} max={MAX_OVERLAY_WIDTH_PCT}
+          unit="%" onChange={(v) => setTransform({ height_pct: v })} L={L}
+        />
+        <EffectSlider
+          label={L.overlay_rotationLabel} value={Math.round(overlay.rotation_deg)} min={0} max={360}
+          unit="°" onChange={(v) => setTransform({ rotation_deg: v })} L={L}
         />
         <EffectSlider
           label={L.overlay_opacityLabel} value={Math.round(overlay.opacity * 100)} min={0} max={100}
           unit="%" onChange={(v) => actions.setOverlayOpacity(overlay.overlay_id, v / 100)} L={L}
         />
       </div>
+
+      <span className="tl-inspector-label tl-inspector-row">
+        <span className="tl-inspector-rowlabel">{L.overlay_fadeInLabel}</span>
+        <input
+          type="number" step="0.1" min={0}
+          className="field tl-inspector-num" value={((overlay.fade_in_ms || 0) / 1000).toFixed(1)}
+          aria-label={L.overlay_fadeInLabel}
+          onChange={(e) => actions.setOverlayFade(overlay.overlay_id, Math.max(0, Number(e.target.value) * 1000), overlay.fade_out_ms || 0)}
+        />
+        <span className="tl-inspector-rowlabel">{L.overlay_fadeOutLabel}</span>
+        <input
+          type="number" step="0.1" min={0}
+          className="field tl-inspector-num" value={((overlay.fade_out_ms || 0) / 1000).toFixed(1)}
+          aria-label={L.overlay_fadeOutLabel}
+          onChange={(e) => actions.setOverlayFade(overlay.overlay_id, overlay.fade_in_ms || 0, Math.max(0, Number(e.target.value) * 1000))}
+        />
+      </span>
 
       <div className="tl-inspector-actions">
         <button

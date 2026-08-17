@@ -101,9 +101,18 @@ export const api = {
   },
   finalExportUrl: (id) => `${BASE_URL}${projectPath(id)}/final-export`,
 
-  startEditorRender: (id) => request(`${projectPath(id)}/editor/render`, { method: 'POST' }),
+  startEditorRender: (id, range) => request(`${projectPath(id)}/editor/render`, {
+    method: 'POST',
+    body: JSON.stringify(range ? { range_start_ms: range.startMs, range_end_ms: range.endMs } : {}),
+  }),
   getEditorRenderJob: (id, jobId) => request(`${projectPath(id)}/editor/jobs/${encodeURIComponent(jobId)}`),
   deleteEditorRender: (id, renderId) => request(`${projectPath(id)}/editor/renders/${encodeURIComponent(renderId)}`, { method: 'DELETE' }),
+  uploadEditorOverlayVideo: (id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return requestForm(`${projectPath(id)}/editor/overlay-videos`, { method: 'POST', body: form });
+  },
+  deleteEditorOverlayVideo: (id, sourceId) => request(`${projectPath(id)}/editor/overlay-videos/${encodeURIComponent(sourceId)}`, { method: 'DELETE' }),
 
   listUsage: (params) => request(`/api/usage/records${qs(params)}`),
   usageSummary: (params) => request(`/api/usage/summary${qs(params)}`),

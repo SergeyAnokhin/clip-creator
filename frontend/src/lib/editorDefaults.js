@@ -9,6 +9,14 @@ function randomId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// The shape `video_edit` falls back to before the stage has ever seeded one
+// (see `buildDefaultClips` below) or while `activeProject` itself is still
+// loading - shared by `useEditorStage.js` and `useEditorRender.js` so both
+// agree on it without one importing internals from the other.
+export const EMPTY_VIDEO_EDIT = {
+  mureka_track_id: null, clips: [], overlays: [], overlay_video_sources: [], renders: [],
+};
+
 /** One clip per scene that already has an `is_selected` video, in scene
  * order - scenes with no selected video are simply skipped (the user can
  * add them later via "add scene"). */

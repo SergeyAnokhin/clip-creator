@@ -1,18 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import { api, mediaUrl } from '../api/client.js';
-import { buildDefaultClips, defaultMurekaTrackId } from '../lib/editorDefaults.js';
-import {
-  DEFAULT_OVERLAY_DURATION_MS, DEFAULT_OVERLAY_POSITION, DEFAULT_OVERLAY_WIDTH_PCT,
-} from '../lib/overlays.js';
-import {
-  computeTimelineClips, findActiveClip, getTotalDurationMs, moveClip, splitClipsAt,
-} from '../lib/timeline.js';
+import { useRef, useState } from 'react';
+import { api } from '../api/client.js';
+import { buildDefaultClips, defaultMurekaTrackId, EMPTY_VIDEO_EDIT } from '../lib/editorDefaults.js';
+import { DEFAULT_OVERLAY_DURATION_MS, defaultOverlayTransform, migrateOverlay } from '../lib/overlays.js';
+import { computeTimelineClips, getTotalDurationMs, moveClip, splitClipsAt } from '../lib/timeline.js';
+import { useEditorPreview } from './useEditorPreview.js';
+import { useEditorRender } from './useEditorRender.js';
 
-const EMPTY_VIDEO_EDIT = { mureka_track_id: null, clips: [], overlays: [], renders: [] };
-// Only re-seek the preview <video> once the drift from where it should be
-// exceeds this - avoids constantly reseeking (which stutters playback) for
-// the normal small amount of clock drift between rAF ticks.
-const DRIFT_THRESHOLD_MS = 250;
 // Undo/redo history depth (oldest snapshots drop off past this) - mirrors
 // PosterConstructor.jsx's MAX_HISTORY.
 const MAX_HISTORY = 50;
@@ -24,11 +17,6 @@ const HISTORY_COALESCE_MS = 400;
 
 function randomId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function findSceneVideo(scenes, sceneIndex, videoId) {
-  const videos = scenes?.[sceneIndex]?.videos || [];
-  return videos.find((v) => v.video_id === videoId) || null;
 }
 
 /** {video_id: durationMs} for every video referenced anywhere in `scenes` -
@@ -48,33 +36,27 @@ function buildSourceDurations(scenes) {
  * video clips into one rendered file, synced to the project's selected
  * Mureka audio track (`providers/editor.py`, a local ffmpeg call, no
  * external API). `project.video_edit` (`{mureka_track_id, clips[],
- * renders[]}`) is the edit decision list - clip order/trim/speed/track
- * selection all ride the generic `updateProject` autosave, same convention
- * as every other rating/`is_selected` edit elsewhere in this app; only the
- * actual render is a job/poll call (mirrors useVideoStage.js's
- * generateVideo/pollVideoJob).
+ * overlays[], renders[]}`) is the edit decision list - clip/overlay/
+ * transition/track edits all ride the generic `updateProject` autosave, same
+ * convention as every other rating/`is_selected` edit elsewhere in this app.
  *
- * The in-browser preview never touches ffmpeg - a shared <audio>/<video>
- * pair is driven off one rAF-clocked "playhead", with the audio element as
- * the sync source of truth (see `play`/`tick` below). It only approximates
- * cuts/reorder/trim/speed; it never letterboxes or renders the freeze-frame
- * pad the real render does - see EditorStage.jsx's disclaimer. */
+ * This hook owns the EDL itself: clip/overlay/transition/fade mutations, the
+ * three mutually-exclusive selections (`selectedClipIds`/`selectedOverlayId`/
+ * `selectedTransitionClipId`), and the undo/redo history that spans all of
+ * them (`commitVideoEdit` below). The in-browser preview engine and the
+ * render job are independent of all that - neither touches `video_edit`'s
+ * undo history or cares which selection is active - so they're split into
+ * `useEditorPreview.js`/`useEditorRender.js` and just composed here; this
+ * hook merges their state/actions into the same public shape it always
+ * returned, so nothing downstream (`EditorStage.jsx`, `App.jsx`) had to
+ * change for the split. */
 export function useEditorStage({ activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L }) {
-  const [playheadMs, setPlayheadMs] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipIds, setSelectedClipIds] = useState(() => new Set());
   const [selectedOverlayId, setSelectedOverlayId] = useState(null);
   const [selectedTransitionClipId, setSelectedTransitionClipId] = useState(null);
-  const [renderLoading, setRenderLoading] = useState(false);
-  const [renderError, setRenderError] = useState(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [past, setPast] = useState([]);
   const [future, setFuture] = useState([]);
   const lastCommitAtRef = useRef(0);
-  const videoRef = useRef(null);
-  const audioRef = useRef(null);
-  const rafRef = useRef(null);
-  const activeClipIndexRef = useRef(-1);
   // Shift+click range-select anchors off the last plain/modifier click, not
   // off whatever the render order of the Set happens to be.
   const selectionAnchorRef = useRef(null);
@@ -83,42 +65,15 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   // these clips to this timeline".
   const clipboardRef = useRef([]);
 
-  useEffect(() => {
-    if (renderLoading) {
-      setElapsedSeconds(0);
-      const timer = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
-      return () => clearInterval(timer);
-    }
-    return undefined;
-  }, [renderLoading]);
-
-  function resetForProject(project) {
-    setPlayheadMs(0);
-    setIsPlaying(false);
-    setRenderError(null);
-    setSelectedClipIds(new Set());
-    setSelectedOverlayId(null);
-    setSelectedTransitionClipId(null);
-    setPast([]);
-    setFuture([]);
-    lastCommitAtRef.current = 0;
-    selectionAnchorRef.current = null;
-    activeClipIndexRef.current = -1;
-    // Loose check on purpose: a project's `video_edit` can be persisted as
-    // `null` (not just absent) - e.g. `updateProject((p) => ({ ...p,
-    // video_edit: null }))` - and that should re-seed exactly like a project
-    // that has never opened this stage, not permanently show an empty
-    // timeline.
-    if (project?.video_edit == null) {
-      const clips = buildDefaultClips(project?.scenes);
-      const mureka_track_id = defaultMurekaTrackId(project?.mureka?.tracks);
-      updateProject((p) => ({ ...p, video_edit: { mureka_track_id, clips, overlays: [], renders: [] } }));
-    }
-  }
-
   const videoEdit = activeProject?.video_edit || EMPTY_VIDEO_EDIT;
   const clips = videoEdit.clips || [];
-  const overlays = videoEdit.overlays || [];
+  // Lazily normalized on every read - an overlay saved before free x/y/w/h/
+  // rotation placement existed just has no `x_pct`/`y_pct` yet; any later
+  // edit (even an unrelated one, like timing) commits the migrated shape
+  // back through the normal autosave, so no separate one-time pass is
+  // needed (see `migrateOverlay`'s own docstring).
+  const overlays = (videoEdit.overlays || []).map(migrateOverlay);
+  const overlayVideoSources = videoEdit.overlay_video_sources || [];
   const scenes = activeProject?.scenes || [];
   const sourceDurationsById = buildSourceDurations(scenes);
   const timelineClips = computeTimelineClips(clips, sourceDurationsById);
@@ -126,36 +81,39 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   const tracks = activeProject?.mureka?.tracks || [];
   const selectedTrack = tracks.find((t) => t.track_id === videoEdit.mureka_track_id) || null;
 
-  // Always-current refs for the rAF loop below, which - once started by
-  // `play()` - keeps calling the same `tick` closure across frames rather
-  // than picking up a fresh one on every render.
-  const timelineClipsRef = useRef(timelineClips);
-  timelineClipsRef.current = timelineClips;
-  const scenesRef = useRef(scenes);
-  scenesRef.current = scenes;
-  // `tick` re-schedules *itself* via requestAnimationFrame once play() kicks
-  // it off, so the whole rAF loop keeps running the one closure captured at
-  // that moment - including whatever `isPlaying` read as right then (always
-  // `false`, since setIsPlaying(true) hasn't committed yet when play() calls
-  // requestAnimationFrame(tick)). Without this ref, every clip transition's
-  // `if (isPlayingRef.current) videoEl.play()` in applyActiveClip silently no-ops
-  // forever after the first clip - the <video> sits paused on whatever frame
-  // its src was last assigned to while DRIFT_THRESHOLD_MS below keeps
-  // yanking its currentTime to chase the audio clock, which is the "first
-  // clip plays fine, every clip after it just jitters" bug.
-  const isPlayingRef = useRef(isPlaying);
-  isPlayingRef.current = isPlaying;
+  const preview = useEditorPreview({ activeProject, timelineClips, scenes, selectedTrack, totalDurationMs });
+  const render = useEditorRender({ activeProject, setActiveProject, flushPendingSave, showToast, L });
+  const { invalidatePreviewClip } = preview;
+
+  function resetForProject(project) {
+    preview.resetPreview();
+    render.resetRender();
+    setSelectedClipIds(new Set());
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
+    setPast([]);
+    setFuture([]);
+    lastCommitAtRef.current = 0;
+    selectionAnchorRef.current = null;
+    // Loose check on purpose: a project's `video_edit` can be persisted as
+    // `null` (not just absent) - e.g. `updateProject((p) => ({ ...p,
+    // video_edit: null }))` - and that should re-seed exactly like a project
+    // that has never opened this stage, not permanently show an empty
+    // timeline.
+    if (project?.video_edit == null) {
+      const clipsSeed = buildDefaultClips(project?.scenes);
+      const mureka_track_id = defaultMurekaTrackId(project?.mureka?.tracks);
+      updateProject((p) => ({
+        ...p,
+        video_edit: {
+          mureka_track_id, clips: clipsSeed, overlays: [], overlay_video_sources: [], renders: [],
+        },
+      }));
+    }
+  }
 
   function patchVideoEdit(mutator, opts) {
     updateProject((p) => ({ ...p, video_edit: mutator(p.video_edit || EMPTY_VIDEO_EDIT) }), opts);
-  }
-
-  // Every edit that changes *which* source frame sits under the playhead
-  // (order, cuts, removals) has to drop the "clip N is already loaded in the
-  // <video>" memo, or the preview keeps showing the old clip until the
-  // playhead happens to cross into another one.
-  function invalidatePreviewClip() {
-    activeClipIndexRef.current = -1;
   }
 
   /** Undo/redo history: a single choke point every `video_edit`-mutating
@@ -218,7 +176,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     invalidatePreviewClip();
     commitVideoEdit((edit) => ({
       ...edit,
-      clips: splitClipsAt(edit.clips, sourceDurationsById, playheadMs, () => randomId('clip')),
+      clips: splitClipsAt(edit.clips, sourceDurationsById, preview.playheadMs, () => randomId('clip')),
     }));
   }
   function removeClips(clipIds) {
@@ -354,6 +312,18 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, speed } : c)),
     }), { immediate: false });
   }
+  /** How a clip whose own aspect ratio doesn't match the render canvas fills
+   * it - `fit: {mode:'cover'|'contain', zoom, offset_x_pct, offset_y_pct}`.
+   * Absent/`null` means `cover` at `zoom:1`, centered (today's default -
+   * fills the frame, cropping overflow, no letterbox bars); `contain` is the
+   * old always-letterboxed behavior, now an explicit opt-in. Mirrors
+   * `providers/editor.py`'s `build_ffmpeg_command` crop-vs-pad branch. */
+  function setClipFit(clipId, fit) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, fit } : c)),
+    }), { immediate: false });
+  }
   /** Reverts one clip's trim window and speed back to "the whole source clip,
    * at 1x" - the same shape a freshly added clip starts in (see
    * addSceneClip above). */
@@ -408,8 +378,8 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   function addOverlay(kind, sourceId) {
     const overlay = {
       overlay_id: randomId('ovl'), kind, source_id: sourceId,
-      start_ms: Math.round(playheadMs), duration_ms: DEFAULT_OVERLAY_DURATION_MS,
-      position: DEFAULT_OVERLAY_POSITION, width_pct: DEFAULT_OVERLAY_WIDTH_PCT, opacity: 1,
+      start_ms: Math.round(preview.playheadMs), duration_ms: DEFAULT_OVERLAY_DURATION_MS,
+      ...defaultOverlayTransform(), opacity: 1, fade_in_ms: 0, fade_out_ms: 0,
     };
     commitVideoEdit((edit) => ({ ...edit, overlays: [...(edit.overlays || []), overlay] }));
     setSelectedOverlayId(overlay.overlay_id);
@@ -422,22 +392,30 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       )),
     }), { immediate: false });
   }
-  function setOverlayPosition(overlayId, position) {
+  /** Partial patch of an overlay's free placement (`x_pct`/`y_pct`/
+   * `width_pct`/`height_pct`/`rotation_deg`) - the one entry point both the
+   * program monitor's drag/resize/rotate canvas (`EditorPreview.jsx`, via
+   * `CanvasLayer`'s `onChange`) and the inspector's numeric precise-entry
+   * fallback (`TimelineOverlayInspector.jsx`) call, so a drag and a typed
+   * value both go through the exact same undo-coalescing path. */
+  function setOverlayTransform(overlayId, patch) {
     commitVideoEdit((edit) => ({
       ...edit,
-      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, position } : o)),
-    }));
-  }
-  function setOverlayWidthPct(overlayId, widthPct) {
-    commitVideoEdit((edit) => ({
-      ...edit,
-      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, width_pct: widthPct } : o)),
+      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, ...patch } : o)),
     }), { immediate: false });
   }
   function setOverlayOpacity(overlayId, opacity) {
     commitVideoEdit((edit) => ({
       ...edit,
       overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, opacity } : o)),
+    }), { immediate: false });
+  }
+  function setOverlayFade(overlayId, fadeInMs, fadeOutMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (
+        o.overlay_id === overlayId ? { ...o, fade_in_ms: fadeInMs, fade_out_ms: fadeOutMs } : o
+      )),
     }), { immediate: false });
   }
   function removeOverlay(overlayId) {
@@ -447,136 +425,63 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       overlays: (edit.overlays || []).filter((o) => o.overlay_id !== overlayId),
     }));
   }
-
-  // ---------- preview engine ----------
-  function applyActiveClip(active) {
-    const videoEl = videoRef.current;
-    if (!active || !videoEl || !activeProject) return;
-    const video = findSceneVideo(scenesRef.current, active.clip.scene_index, active.clip.video_id);
-    if (!video) return;
-    if (activeClipIndexRef.current !== active.index) {
-      activeClipIndexRef.current = active.index;
-      videoEl.src = mediaUrl(`projects/${activeProject.id}/${video.file_path}`);
-      videoEl.playbackRate = active.clip.speed || 1;
-      videoEl.currentTime = active.localOffsetMs / 1000;
-      if (isPlayingRef.current) videoEl.play().catch(() => {});
-    } else if (Math.abs(videoEl.currentTime * 1000 - active.localOffsetMs) > DRIFT_THRESHOLD_MS) {
-      videoEl.currentTime = active.localOffsetMs / 1000;
-    }
-  }
-
-  function tick() {
-    const audioEl = audioRef.current;
-    if (!audioEl) return;
-    const ms = audioEl.currentTime * 1000;
-    setPlayheadMs(ms);
-    applyActiveClip(findActiveClip(timelineClipsRef.current, ms));
-    if (!audioEl.paused && !audioEl.ended) {
-      rafRef.current = requestAnimationFrame(tick);
-    } else {
-      setIsPlaying(false);
-    }
-  }
-
-  function play() {
-    if (!selectedTrack || !timelineClips.length) return;
-    setIsPlaying(true);
-    audioRef.current?.play().catch(() => {});
-    videoRef.current?.play().catch(() => {});
-    rafRef.current = requestAnimationFrame(tick);
-  }
-  function pause() {
-    setIsPlaying(false);
-    audioRef.current?.pause();
-    videoRef.current?.pause();
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  }
-  function seek(ms) {
-    // Clamped to the audio track too, not just the clips: when the clips run
-    // shorter, the tail still exists in the output (the render freeze-frames
-    // the last clip over it), so the playhead has to be able to go there.
-    const clamped = Math.max(0, Math.min(ms, Math.max(totalDurationMs, selectedTrack?.duration_ms || 0)));
-    if (audioRef.current) audioRef.current.currentTime = clamped / 1000;
-    activeClipIndexRef.current = -1;
-    setPlayheadMs(clamped);
-    applyActiveClip(findActiveClip(timelineClipsRef.current, clamped));
-  }
-
-  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
-
-  // ---------- render ----------
-  async function pollRenderJob(projectId, jobId) {
-    for (;;) {
-      const job = await api.getEditorRenderJob(projectId, jobId);
-      if (job.status === 'completed' || job.status === 'failed') return job;
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-    }
-  }
-
-  async function startRender() {
-    if (!activeProject) return;
-    setRenderLoading(true);
-    setRenderError(null);
+  /** Uploads a video file to overlay on the timeline (`kind: 'video'`) - the
+   * backend route owns persistence for this one (mirrors `useEditorRender.
+   * js`'s `deleteRender`/`startRender`: an upload/render result is server-
+   * appended and read back, not built by a local edit action), so this just
+   * merges the response into local state rather than going through
+   * `commitVideoEdit`/`patchVideoEdit` (which would PATCH a second time). Not
+   * part of the undo history for the same reason a render isn't - it's an
+   * asset upload, not an edit decision to undo. */
+  async function uploadOverlayVideo(file) {
+    if (!activeProject) return null;
     try {
-      await flushPendingSave();
-      const { job_id: jobId } = await api.startEditorRender(activeProject.id);
-      const job = await pollRenderJob(activeProject.id, jobId);
-      if (job.status === 'completed') {
-        setActiveProject((p) => ({
-          ...p,
-          video_edit: { ...(p.video_edit || EMPTY_VIDEO_EDIT), renders: [...(p.video_edit?.renders || []), job.render] },
-        }));
-        showToast(L.toast_generated);
-      } else {
-        setRenderError(job.error || 'Не удалось собрать видео');
-        showToast(job.error || 'Не удалось собрать видео');
-      }
-    } catch (err) {
-      const message = err?.detail || 'Не удалось собрать видео';
-      console.error('[Editor render] request failed:', err);
-      setRenderError(message);
-      showToast(message);
-    } finally {
-      setRenderLoading(false);
-    }
-  }
-
-  async function deleteRender(renderId) {
-    if (!activeProject) return;
-    try {
-      const result = await api.deleteEditorRender(activeProject.id, renderId);
-      setActiveProject((p) => ({ ...p, video_edit: { ...(p.video_edit || EMPTY_VIDEO_EDIT), renders: result.renders } }));
+      const source = await api.uploadEditorOverlayVideo(activeProject.id, file);
+      setActiveProject((p) => ({
+        ...p,
+        video_edit: {
+          ...(p.video_edit || EMPTY_VIDEO_EDIT),
+          overlay_video_sources: [...((p.video_edit || EMPTY_VIDEO_EDIT).overlay_video_sources || []), source],
+        },
+      }));
+      return source;
     } catch {
-      showToast('Не удалось удалить видео');
+      showToast(L.editor_overlayVideoUploadError);
+      return null;
     }
   }
-
-  function downloadRender(render) {
+  async function deleteOverlayVideo(sourceId) {
     if (!activeProject) return;
-    const a = document.createElement('a');
-    a.href = mediaUrl(`projects/${activeProject.id}/${render.file_path}`);
-    a.download = '';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    try {
+      const result = await api.deleteEditorOverlayVideo(activeProject.id, sourceId);
+      setActiveProject((p) => ({
+        ...p,
+        video_edit: { ...(p.video_edit || EMPTY_VIDEO_EDIT), overlay_video_sources: result.overlay_video_sources },
+      }));
+    } catch {
+      showToast(L.editor_overlayVideoDeleteError);
+    }
   }
 
   return {
     state: {
-      videoEdit, clips: timelineClips, overlays, totalDurationMs, selectedTrack, tracks,
-      playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds,
+      videoEdit, clips: timelineClips, overlays, overlayVideoSources, totalDurationMs, selectedTrack, tracks,
+      playheadMs: preview.playheadMs, isPlaying: preview.isPlaying,
+      renderLoading: render.renderLoading, renderError: render.renderError, elapsedSeconds: render.elapsedSeconds,
       selectedClipIds, selectedOverlayId, selectedTransitionClipId,
-      videoRef, audioRef, canUndo: past.length > 0, canRedo: future.length > 0,
+      videoRef: preview.videoRef, audioRef: preview.audioRef,
+      canUndo: past.length > 0, canRedo: future.length > 0,
     },
     resetForProject,
     actions: {
       reorderClip, splitAtPlayhead, removeClips, addSceneClip, changeClipVideo,
-      setClipTrim, setClipSpeed, resetClip, setMurekaTrackId, selectClip, setSelection, selectAll,
+      setClipTrim, setClipSpeed, setClipFit, resetClip, setMurekaTrackId, selectClip, setSelection, selectAll,
       duplicateClips, copyClips, pasteClips, undo, redo,
-      addOverlay, setOverlayTiming, setOverlayPosition, setOverlayWidthPct, setOverlayOpacity,
-      removeOverlay, selectOverlay,
+      addOverlay, setOverlayTiming, setOverlayTransform, setOverlayOpacity, setOverlayFade,
+      removeOverlay, selectOverlay, uploadOverlayVideo, deleteOverlayVideo,
       setClipTransition, setClipFadeIn, setClipFadeOut, selectTransition,
-      play, pause, seek, startRender, deleteRender, downloadRender,
+      play: preview.play, pause: preview.pause, seek: preview.seek,
+      startRender: render.startRender, deleteRender: render.deleteRender, downloadRender: render.downloadRender,
     },
   };
 }

@@ -4,6 +4,8 @@ import { Group, Image as KonvaImage, Rect, Text, Transformer } from 'react-konva
 import { mediaUrl } from '../../api/client.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import { glowPasses, snapGroupToCenter } from '../../lib/posterLayers.js';
+import { pctTransformToPixels, pixelsToPctTransform } from '../../lib/canvasLayer.js';
+import CanvasLayer from '../shared/CanvasLayer.jsx';
 
 /** The draggable overlay node types the Poster constructor's Konva stage
  * renders: an image layer (title card or logo), a magic layer, the
@@ -55,18 +57,9 @@ export function OverlayImage({
   image, layer, isSelected, isCropEditing, onSelect, onChange, onCropChange,
   bgWidth, bgHeight, effectiveScale, setGuides,
 }) {
-  const groupRef = useRef(null);
-  const trRef = useRef(null);
   const cropRectRef = useRef(null);
   const cropTrRef = useRef(null);
   const cloneRef = useRef(null);
-
-  useEffect(() => {
-    if (isSelected && !isCropEditing && trRef.current && groupRef.current) {
-      trRef.current.nodes([groupRef.current]);
-      trRef.current.getLayer()?.batchDraw();
-    }
-  }, [isSelected, isCropEditing]);
 
   useEffect(() => {
     if (isCropEditing && cropTrRef.current && cropRectRef.current) {
@@ -103,97 +96,94 @@ export function OverlayImage({
     return { x, y, width: w, height: h };
   }
 
+  // The layer's stored pixel transform (bg-natural-pixel space) converted to
+  // percentages of the background box purely at this boundary - CanvasLayer
+  // itself only ever sees/reports percentages (see lib/canvasLayer.js's
+  // module docstring for why).
+  const pct = pixelsToPctTransform(
+    { x: layer.x, y: layer.y, scaleX: layer.scaleX, scaleY: layer.scaleY, rotation: layer.rotation },
+    bgWidth, bgHeight, boxW, boxH,
+  );
+
   return (
-    <>
-      <Group
-        ref={groupRef}
-        x={layer.x} y={layer.y}
-        scaleX={layer.scaleX} scaleY={layer.scaleY}
-        rotation={layer.rotation}
-        draggable={!isCropEditing}
-        onClick={onSelect} onTap={onSelect}
-        onDragMove={(e) => setGuides(snapGroupToCenter(e.target, bgWidth, bgHeight, effectiveScale))}
-        onDragEnd={(e) => { setGuides({ v: false, h: false }); onChange({ x: e.target.x(), y: e.target.y() }); }}
-        onTransformEnd={() => {
-          const node = groupRef.current;
-          if (!node) return;
-          onChange({ x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY(), rotation: node.rotation() });
-        }}
-      >
-        {clone.enabled && (
-          <Group ref={cloneRef} name="clone-blur" x={clone.offsetX} y={clone.offsetY}>
-            {Array.from({ length: glowPassCount }).map((_, i) => (
-              <KonvaImage
-                key={i}
-                image={image}
-                crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
-                width={boxW} height={boxH}
-                opacity={clone.opacity}
-                shadowEnabled={glow.enabled}
-                shadowColor={glow.color} shadowBlur={glow.blur}
-                shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
-                shadowOpacity={glowPassOpacity}
-              />
-            ))}
-          </Group>
-        )}
-        {Array.from({ length: glowPassCount }).map((_, i) => (
-          <KonvaImage
-            key={i}
-            image={image}
-            crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
-            width={boxW} height={boxH}
-            opacity={opacity}
-            shadowEnabled={glow.enabled}
-            shadowColor={glow.color} shadowBlur={glow.blur}
-            shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
-            shadowOpacity={glowPassOpacity}
-          />
-        ))}
-        {isCropEditing && (
-          <>
-            <KonvaImage name="crop-editor" image={image} width={naturalW} height={naturalH} opacity={0.3} listening={false} />
-            <Rect
-              ref={cropRectRef} name="crop-editor"
-              x={crop?.x ?? 0} y={crop?.y ?? 0} width={crop?.width ?? naturalW} height={crop?.height ?? naturalH}
-              stroke="#ff9d5c" strokeWidth={2} fill="rgba(255,157,92,0.12)"
-              draggable
-              onDragMove={(e) => {
-                const node = e.target;
-                const w = node.width();
-                const h = node.height();
-                node.x(Math.max(0, Math.min(node.x(), naturalW - w)));
-                node.y(Math.max(0, Math.min(node.y(), naturalH - h)));
-              }}
-              onDragEnd={(e) => onCropChange({ x: e.target.x(), y: e.target.y(), width: e.target.width(), height: e.target.height() })}
-              onTransformEnd={() => {
-                const node = cropRectRef.current;
-                if (!node) return;
-                onCropChange(clampCropNode(node));
-              }}
+    <CanvasLayer
+      xPct={pct.xPct} yPct={pct.yPct} widthPct={pct.widthPct} heightPct={pct.heightPct} rotationDeg={pct.rotationDeg}
+      naturalW={boxW} naturalH={boxH} containerW={bgWidth} containerH={bgHeight}
+      isSelected={isSelected && !isCropEditing}
+      draggable={!isCropEditing}
+      onSelect={onSelect}
+      onDragMove={(e) => setGuides(snapGroupToCenter(e.target, bgWidth, bgHeight, effectiveScale))}
+      onChange={(next) => {
+        setGuides({ v: false, h: false });
+        const px = pctTransformToPixels(next, bgWidth, bgHeight, boxW, boxH);
+        onChange({ x: px.x, y: px.y, scaleX: px.scaleX, scaleY: px.scaleY, rotation: px.rotation });
+      }}
+    >
+      {clone.enabled && (
+        <Group ref={cloneRef} name="clone-blur" x={clone.offsetX} y={clone.offsetY}>
+          {Array.from({ length: glowPassCount }).map((_, i) => (
+            <KonvaImage
+              key={i}
+              image={image}
+              crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
+              width={boxW} height={boxH}
+              opacity={clone.opacity}
+              shadowEnabled={glow.enabled}
+              shadowColor={glow.color} shadowBlur={glow.blur}
+              shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+              shadowOpacity={glowPassOpacity}
             />
-            <Transformer
-              name="crop-editor" ref={cropTrRef}
-              rotateEnabled={false}
-              enabledAnchors={[
-                'top-left', 'top-center', 'top-right',
-                'middle-left', 'middle-right',
-                'bottom-left', 'bottom-center', 'bottom-right',
-              ]}
-              boundBoxFunc={(oldBox, newBox) => (newBox.width < 20 || newBox.height < 20 ? oldBox : newBox)}
-            />
-          </>
-        )}
-      </Group>
-      {isSelected && !isCropEditing && (
-        <Transformer
-          ref={trRef}
-          rotateEnabled
-          enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
-          boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)}
-        />
+          ))}
+        </Group>
       )}
-    </>
+      {Array.from({ length: glowPassCount }).map((_, i) => (
+        <KonvaImage
+          key={i}
+          image={image}
+          crop={crop ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height } : undefined}
+          width={boxW} height={boxH}
+          opacity={opacity}
+          shadowEnabled={glow.enabled}
+          shadowColor={glow.color} shadowBlur={glow.blur}
+          shadowOffsetX={glowOffset} shadowOffsetY={glowOffset}
+          shadowOpacity={glowPassOpacity}
+        />
+      ))}
+      {isCropEditing && (
+        <>
+          <KonvaImage name="crop-editor" image={image} width={naturalW} height={naturalH} opacity={0.3} listening={false} />
+          <Rect
+            ref={cropRectRef} name="crop-editor"
+            x={crop?.x ?? 0} y={crop?.y ?? 0} width={crop?.width ?? naturalW} height={crop?.height ?? naturalH}
+            stroke="#ff9d5c" strokeWidth={2} fill="rgba(255,157,92,0.12)"
+            draggable
+            onDragMove={(e) => {
+              const node = e.target;
+              const w = node.width();
+              const h = node.height();
+              node.x(Math.max(0, Math.min(node.x(), naturalW - w)));
+              node.y(Math.max(0, Math.min(node.y(), naturalH - h)));
+            }}
+            onDragEnd={(e) => onCropChange({ x: e.target.x(), y: e.target.y(), width: e.target.width(), height: e.target.height() })}
+            onTransformEnd={() => {
+              const node = cropRectRef.current;
+              if (!node) return;
+              onCropChange(clampCropNode(node));
+            }}
+          />
+          <Transformer
+            name="crop-editor" ref={cropTrRef}
+            rotateEnabled={false}
+            enabledAnchors={[
+              'top-left', 'top-center', 'top-right',
+              'middle-left', 'middle-right',
+              'bottom-left', 'bottom-center', 'bottom-right',
+            ]}
+            boundBoxFunc={(oldBox, newBox) => (newBox.width < 20 || newBox.height < 20 ? oldBox : newBox)}
+          />
+        </>
+      )}
+    </CanvasLayer>
   );
 }
 
