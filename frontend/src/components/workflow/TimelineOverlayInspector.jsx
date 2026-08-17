@@ -26,6 +26,16 @@ export default function TimelineOverlayInspector({
   function setTransform(patch) {
     actions.setOverlayTransform(overlay.overlay_id, patch);
   }
+  // Width/height used to be two independent sliders, which let them drift
+  // apart and stretch the overlay's content out of its own aspect ratio -
+  // one "scale" slider keeps that ratio by moving both percentages by the
+  // same factor (mirrors dragging a corner handle on the program monitor,
+  // which Konva's Transformer already keeps locked to the natural aspect).
+  function scaleTo(nextWidthPct) {
+    const factor = nextWidthPct / overlay.width_pct;
+    // height_axis stamped here too - see lib/overlays.js's overlayPatchFromCanvasLayer.
+    setTransform({ width_pct: nextWidthPct, height_pct: overlay.height_pct * factor, height_axis: 'width' });
+  }
 
   return (
     <div className="tl-inspector">
@@ -68,12 +78,8 @@ export default function TimelineOverlayInspector({
 
       <div className="tl-inspector-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <EffectSlider
-          label={L.overlay_widthLabel} value={Math.round(overlay.width_pct)} min={MIN_OVERLAY_WIDTH_PCT} max={MAX_OVERLAY_WIDTH_PCT}
-          unit="%" onChange={(v) => setTransform({ width_pct: v })} L={L}
-        />
-        <EffectSlider
-          label={L.overlay_heightLabel} value={Math.round(overlay.height_pct)} min={MIN_OVERLAY_WIDTH_PCT} max={MAX_OVERLAY_WIDTH_PCT}
-          unit="%" onChange={(v) => setTransform({ height_pct: v })} L={L}
+          label={L.overlay_scaleLabel} value={Math.round(overlay.width_pct)} min={MIN_OVERLAY_WIDTH_PCT} max={MAX_OVERLAY_WIDTH_PCT}
+          unit="%" onChange={(v) => scaleTo(v)} L={L}
         />
         <EffectSlider
           label={L.overlay_rotationLabel} value={Math.round(overlay.rotation_deg)} min={0} max={360}

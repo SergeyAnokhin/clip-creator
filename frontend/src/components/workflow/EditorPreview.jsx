@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { Image as KonvaImage, Layer, Stage } from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
-import { activeOverlaysAt, overlayOpacityAt } from '../../lib/overlays.js';
+import {
+  activeOverlaysAt, canvasLayerHeightPct, overlayOpacityAt, overlayPatchFromCanvasLayer,
+} from '../../lib/overlays.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
 import { computeContentRect } from '../../lib/videoFrameRect.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
@@ -16,7 +18,11 @@ import CanvasLayer from '../shared/CanvasLayer.jsx';
  * called in a loop). Delegates all drag/resize/rotate wiring to the shared
  * `CanvasLayer` primitive - this is the actual free-placement UI the
  * overlay used to lack (a 9-point grid only, see `docs/architecture.md`'s
- * note on the old v1 scoping).
+ * note on the old v1 scoping). `CanvasLayer`'s own `onChange` reports
+ * camelCase pct fields (shared with `PosterCanvasLayers.jsx`, whose
+ * poster-layer model uses that casing natively) - `lib/overlays.js`'s
+ * `overlayPatchFromCanvasLayer` converts them to this overlay model's
+ * snake_case fields right here at the boundary, not passed through as-is.
  *
  * A `kind: 'video'` overlay shows a static first-frame thumbnail here, not
  * live playback - `useVideoFirstFrame` grabs one frame as a data URL, which
@@ -30,7 +36,7 @@ import CanvasLayer from '../shared/CanvasLayer.jsx';
  * `providers/editor.py`'s conditional `colorchannelmixer` expression
  * produces in the real render. */
 function OverlayCanvasNode({
-  overlay, src, containerW, containerH, playheadMs, isSelected, onSelect, onChange,
+  overlay, src, containerW, containerH, playheadMs, isSelected, isPlaying, onSelect, onChange,
 }) {
   const videoFrame = useVideoFirstFrame(overlay.kind === 'video' ? src : null);
   const imageSrc = overlay.kind === 'video' ? videoFrame : src;
@@ -38,12 +44,13 @@ function OverlayCanvasNode({
   if (!image) return null;
   return (
     <CanvasLayer
-      xPct={overlay.x_pct} yPct={overlay.y_pct} widthPct={overlay.width_pct} heightPct={overlay.height_pct}
+      xPct={overlay.x_pct} yPct={overlay.y_pct} widthPct={overlay.width_pct}
+      heightPct={canvasLayerHeightPct(overlay, containerW, containerH)}
       rotationDeg={overlay.rotation_deg}
       naturalW={naturalW} naturalH={naturalH} containerW={containerW} containerH={containerH}
-      isSelected={isSelected}
+      isSelected={isSelected} showOutline={!isPlaying}
       onSelect={onSelect}
-      onChange={onChange}
+      onChange={(patch) => onChange(overlayPatchFromCanvasLayer(patch, containerW, containerH))}
     >
       <KonvaImage image={image} width={naturalW} height={naturalH} opacity={overlayOpacityAt(overlay, playheadMs)} />
     </CanvasLayer>
@@ -67,18 +74,31 @@ function OverlayCanvasNode({
  * don't match the frame's own box (a mixed-aspect-ratio timeline).
  *
  * Whichever overlay(s) are active at the current playhead are drawn on a
- * `react-konva` `Stage` sized and positioned to exactly `contentRect` - so
- * an overlay always sits on the real picture, never the letterbox padding -
- * each as an `OverlayCanvasNode`/`CanvasLayer` the user can drag/resize/
- * rotate directly here, the same interaction model
- * `PosterCanvasLayers.jsx`'s poster layers use. Position/timing edits still
- * commit through `useEditorStage.js`'s normal undo history; this preview
- * stays otherwise approximate (see `editor_previewDisclaimer`) - the real
- * render composites overlays with ffmpeg's `overlay` filter instead
- * (`providers/editor.py`). */
+ * `react-konva` `Stage` sized and positioned to exactly `canvasFitRect` -
+ * the render's actual output canvas (`canvasSize`, from `EditorStage.jsx`'s
+ * `resolveCanvasSize`) letterboxed to fit the frame - **not** the currently
+ * playing clip's own content rect. `providers/editor.py` always scales an
+ * overlay's `width_pct`/`height_pct` against the fixed output canvas
+ * (`build_ffmpeg_command`'s `w`/`h`), so anchoring the live Stage to the
+ * clip's own (per-clip, letterboxing-dependent) content rect instead used to
+ * store percentages in the wrong coordinate space - harmless while the
+ * currently-viewed clip's own aspect ratio happened to match the canvas, but
+ * a visibly squished/stretched overlay in the real render whenever it
+ * didn't (e.g. a landscape-sourced clip pillarboxed inside a portrait
+ * canvas). `contentRect` (the clip's own real, non-letterboxed picture -
+ * still shown as the dashed `.editor-frame-bounds` outline) is now computed
+ * *inside* `canvasFitRect`'s own box for the same reason - it's purely
+ * informational, not what overlays are placed against. Each overlay is an
+ * `OverlayCanvasNode`/`CanvasLayer` the user can drag/resize/rotate directly
+ * here, the same interaction model `PosterCanvasLayers.jsx`'s poster layers
+ * use. Position/timing edits still commit through `useEditorStage.js`'s
+ * normal undo history; this preview stays otherwise approximate (see
+ * `editor_previewDisclaimer` - it doesn't replicate a clip's own `fit`/zoom/
+ * crop) - the real render composites overlays with ffmpeg's `overlay` filter
+ * instead (`providers/editor.py`). */
 export default function EditorPreview({
-  L, videoRef, audioRef, projectId, selectedTrack, overlays, playheadMs,
-  titleCardVariants, logos, overlayVideoSources, isFullscreen, onToggleFullscreen,
+  L, videoRef, audioRef, projectId, selectedTrack, overlays, playheadMs, isPlaying,
+  titleCardVariants, logos, overlayVideoSources, canvasSize, isFullscreen, onToggleFullscreen,
   selectedOverlayId, actions,
 }) {
   const frameRef = useRef(null);
@@ -107,20 +127,45 @@ export default function EditorPreview({
     return () => video.removeEventListener('loadedmetadata', onLoadedMetadata);
   }, [videoRef]);
 
-  const contentRect = computeContentRect(
-    containerSize.width, containerSize.height, videoNaturalSize.width, videoNaturalSize.height,
+  // The output canvas, letterboxed to fit the frame - the stable coordinate
+  // space overlays are positioned/scaled against (matches providers/
+  // editor.py, unlike the per-clip contentRect below).
+  const canvasFitRect = computeContentRect(
+    containerSize.width, containerSize.height, canvasSize.width, canvasSize.height,
   );
+  // The clip's own real (non-letterboxed) picture, inside canvasFitRect -
+  // informational only (the dashed outline), not an overlay coordinate space.
+  const localContentRect = computeContentRect(
+    canvasFitRect.width, canvasFitRect.height, videoNaturalSize.width, videoNaturalSize.height,
+  );
+  const contentRect = {
+    x: canvasFitRect.x + localContentRect.x,
+    y: canvasFitRect.y + localContentRect.y,
+    width: localContentRect.width,
+    height: localContentRect.height,
+  };
 
   const activeOverlays = activeOverlaysAt(overlays, playheadMs);
   return (
     <div className="editor-preview">
       <div className="editor-preview-frame" ref={frameRef}>
-        <video ref={videoRef} muted playsInline />
-        {containerSize.width > 0 && <div className="editor-frame-bounds" style={contentRect} />}
-        {containerSize.width > 0 && contentRect.width > 0 && (
+        <video
+          ref={videoRef} muted playsInline
+          style={containerSize.width > 0 ? {
+            position: 'absolute', left: canvasFitRect.x, top: canvasFitRect.y,
+            width: canvasFitRect.width, height: canvasFitRect.height,
+          } : undefined}
+        />
+        {containerSize.width > 0 && (
+          <div
+            className="editor-frame-bounds"
+            style={{ left: contentRect.x, top: contentRect.y, width: contentRect.width, height: contentRect.height }}
+          />
+        )}
+        {containerSize.width > 0 && canvasFitRect.width > 0 && (
           <Stage
-            width={contentRect.width} height={contentRect.height}
-            style={{ position: 'absolute', left: contentRect.x, top: contentRect.y }}
+            width={canvasFitRect.width} height={canvasFitRect.height}
+            style={{ position: 'absolute', left: canvasFitRect.x, top: canvasFitRect.y }}
           >
             <Layer>
               {activeOverlays.map((overlay) => {
@@ -132,8 +177,8 @@ export default function EditorPreview({
                   <OverlayCanvasNode
                     key={overlay.overlay_id}
                     overlay={overlay} src={src} playheadMs={playheadMs}
-                    containerW={contentRect.width} containerH={contentRect.height}
-                    isSelected={selectedOverlayId === overlay.overlay_id}
+                    containerW={canvasFitRect.width} containerH={canvasFitRect.height}
+                    isSelected={selectedOverlayId === overlay.overlay_id} isPlaying={isPlaying}
                     onSelect={() => actions.selectOverlay(overlay.overlay_id)}
                     onChange={(patch) => actions.setOverlayTransform(overlay.overlay_id, patch)}
                   />

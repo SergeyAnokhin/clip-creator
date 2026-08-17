@@ -79,7 +79,7 @@ function rulerStepMs(scale) {
 export default function EditorTimeline({
   L, projectId, scenes, clips, overlays, totalDurationMs, selectedTrack, playheadMs, isPlaying,
   selectedClipIds, selectedOverlayId, selectedTransitionClipId, titleCardVariants, logos, overlayVideoSources,
-  actions, toolsSlotNode, testRange, onRangeSelected, onClearTestRange, onOpenShortcuts, canUndo, canRedo,
+  actions, toolsSlotNode, testRange, onClearTestRange, onOpenShortcuts, canUndo, canRedo,
 }) {
   const scrollRef = useRef(null);
   const clipNodesRef = useRef({});
@@ -101,9 +101,9 @@ export default function EditorTimeline({
 
   const {
     contentRef, drag, dragDx, startContentPointerDown, startClipDrag, onClipKeyDown,
-    startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown, startRangeSelect,
+    startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown,
   } = useTimelineDrag({
-    actions, scenes, clips, scale, onRangeSelected,
+    actions, scenes, clips, scale,
   });
 
   useEffect(() => {
@@ -235,10 +235,6 @@ export default function EditorTimeline({
   const laneCount = overlayLanes.size ? Math.max(...overlayLanes.values()) + 1 : 1;
   const overlayTrackHeight = laneCount * LANE_H;
   const videoTrackTop = RULER_H + TRACK_GAP + overlayTrackHeight + TRACK_GAP;
-  // Full vertical extent of the ruler + every track below it, for the
-  // test-render range band (spans the whole timeline height, not just one
-  // track, so it reads as "this time window" rather than "this row").
-  const allTracksHeight = RULER_H + TRACK_GAP + overlayTrackHeight + TRACK_GAP + VIDEO_TRACK_H + TRACK_GAP + AUDIO_TRACK_H;
 
   const toolsContent = (
     <EditorTimelineTools
@@ -267,30 +263,20 @@ export default function EditorTimeline({
           className="tl-content" ref={contentRef} style={{ width: contentWidth }}
           onPointerDown={startContentPointerDown}
         >
-          <div className="tl-ruler" onPointerDown={startRangeSelect}>
+          <div className="tl-ruler">
             {Array.from({ length: tickCount }, (_, i) => (
               <div key={i} className="tl-tick" style={{ left: i * stepMs * scale }}>
                 <span>{formatTimecode(i * stepMs)}</span>
               </div>
             ))}
-          </div>
-
-          {testRange && drag?.mode !== 'range-select' && (
-            <div
-              className="tl-test-range"
-              style={{ left: testRange.startMs * scale, width: (testRange.endMs - testRange.startMs) * scale, height: allTracksHeight }}
-            />
-          )}
-          {drag?.mode === 'range-select' && (() => {
-            const startPx = drag.startMs * scale;
-            const currentPx = startPx + dragDx;
-            return (
+            {testRange && (
               <div
-                className="tl-test-range"
-                style={{ left: Math.min(startPx, currentPx), width: Math.abs(currentPx - startPx), height: allTracksHeight }}
+                className="tl-test-range-tick"
+                style={{ left: testRange.startMs * scale, width: (testRange.endMs - testRange.startMs) * scale }}
+                title={`${L.editor_testRangeLabel}: ${formatTimecode(testRange.startMs)} → ${formatTimecode(testRange.endMs)}`}
               />
-            );
-          })()}
+            )}
+          </div>
 
           <div className="tl-track tl-track-overlay" style={{ height: overlayTrackHeight }}>
             {(overlays || []).map((overlay) => {

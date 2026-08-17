@@ -5,13 +5,17 @@ import {
 import EditorPreview from './EditorPreview.jsx';
 import EditorTimeline from './EditorTimeline.jsx';
 import KeyboardShortcutsModal from './KeyboardShortcutsModal.jsx';
+import TestRangeModal from './TestRangeModal.jsx';
 import { mediaUrl } from '../../api/client.js';
+import { resolveCanvasSize } from '../../lib/canvasOrientation.js';
 
 const DURATION_MISMATCH_THRESHOLD_MS = 1000;
 const SIDE_WIDTH_STORAGE_KEY = 'editorSideWidthPx';
 const DEFAULT_SIDE_WIDTH = 320;
 const MIN_SIDE_WIDTH = 240;
 const MAX_SIDE_WIDTH = 560;
+const TEST_RANGE_STORAGE_KEY_PREFIX = 'editorTestRange_';
+const DEFAULT_TEST_RANGE_MS = 10000;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -24,6 +28,18 @@ function loadStoredSideWidth() {
   } catch {
     return DEFAULT_SIDE_WIDTH;
   }
+}
+
+// Test-render range is per-project (not part of `video_edit` - see the note
+// on the `testRange` state below) but should still survive a reload, so it
+// remembers the last range picked in `TestRangeModal.jsx` per project id,
+// same `localStorage` pattern as the side-panel width above.
+function loadStoredTestRange(projectId) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TEST_RANGE_STORAGE_KEY_PREFIX + projectId));
+    if (Number.isFinite(parsed?.startMs) && Number.isFinite(parsed?.endMs) && parsed.endMs > parsed.startMs) return parsed;
+  } catch { /* ignore */ }
+  return null;
 }
 
 function formatSeconds(ms) {
@@ -59,11 +75,24 @@ export default function EditorStage({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sideWidthPx, setSideWidthPx] = useState(loadStoredSideWidth);
   const [resizeDrag, setResizeDrag] = useState(null);
-  // The test-render range picked by dragging the timeline's ruler
-  // (EditorTimeline.jsx) - a render-time input, not part of the EDL, so it's
-  // plain local state here rather than going through useEditorStage.js/
-  // commitVideoEdit (see the plan's own scoping note).
-  const [testRange, setTestRange] = useState(null);
+  // The test-render range picked in TestRangeModal.jsx - a render-time
+  // input, not part of the EDL, so it's plain local state here (persisted to
+  // localStorage per project, not `video_edit`/undo history - see
+  // `loadStoredTestRange` above) rather than going through
+  // useEditorStage.js/commitVideoEdit.
+  const [testRange, setTestRange] = useState(() => loadStoredTestRange(project.id));
+  const [testRangeModalOpen, setTestRangeModalOpen] = useState(false);
+
+  useEffect(() => {
+    setTestRange(loadStoredTestRange(project.id));
+  }, [project.id]);
+
+  function confirmTestRange(range) {
+    setTestRange(range);
+    try { localStorage.setItem(TEST_RANGE_STORAGE_KEY_PREFIX + project.id, JSON.stringify(range)); } catch { /* ignore */ }
+    setTestRangeModalOpen(false);
+    actions.startRender({ range });
+  }
 
   useEffect(() => {
     if (!isFullscreen) return undefined;
@@ -123,14 +152,17 @@ export default function EditorStage({
   const showMismatch = selectedTrack && Math.abs(mismatchMs) > DURATION_MISMATCH_THRESHOLD_MS;
   const canRender = clips.length > 0 && !!selectedTrack;
   const timelineMs = Math.max(totalDurationMs, selectedTrack?.duration_ms || 0);
+  const canvasOrientation = videoEdit.canvas_orientation || 'auto';
+  const canvasSize = resolveCanvasSize(clips, scenes, canvasOrientation);
 
   return (
     <div className={`editor-stage${isMobile ? ' is-mobile' : ''}${isFullscreen ? ' editor-fullscreen' : ''}`}>
       <div className={`editor-layout${isMobile ? ' is-mobile' : ''}`}>
         <EditorPreview
           L={L} videoRef={videoRef} audioRef={audioRef} projectId={project.id} selectedTrack={selectedTrack}
-          overlays={overlays} playheadMs={playheadMs} titleCardVariants={titleCardVariants} logos={logos}
-          overlayVideoSources={overlayVideoSources}
+          overlays={overlays} playheadMs={playheadMs} isPlaying={isPlaying}
+          titleCardVariants={titleCardVariants} logos={logos}
+          overlayVideoSources={overlayVideoSources} canvasSize={canvasSize}
           isFullscreen={isFullscreen} onToggleFullscreen={() => setIsFullscreen((v) => !v)}
           selectedOverlayId={selectedOverlayId} actions={actions}
         />
@@ -147,11 +179,6 @@ export default function EditorStage({
 
         <div className="editor-side" style={{ '--editor-side-w': `${sideWidthPx}px` }}>
           <div className="editor-side-scroll">
-            <div className="editor-side-block editor-side-title">
-              <div className="stage-heading-title">{L.editorStageTitle}</div>
-              <div className="stage-heading-subtitle">{L.editorStageSubtitle}</div>
-            </div>
-
             <div className="editor-side-block editor-side-transport">
               <div className="editor-preview-transport">
                 <button className="icon-btn" title={L.editor_toStart} onClick={() => actions.seek(0)} disabled={!selectedTrack}>
@@ -219,19 +246,45 @@ export default function EditorStage({
           </div>
 
           <div className="editor-side-footer">
+            <span className="tl-inspector-label tl-inspector-row">
+              <span className="tl-inspector-rowlabel">{L.editor_canvasSizeLabel}</span>
+              <span className="tl-timecode">{canvasSize.width}×{canvasSize.height}</span>
+            </span>
+            <div className="tl-inspector-row tl-transition-types">
+              <button
+                type="button" className={`tl-transition-chip${canvasOrientation === 'auto' ? ' is-selected' : ''}`}
+                onClick={() => actions.setCanvasOrientation('auto')}
+              >
+                {L.editor_canvasOrientationAuto}
+              </button>
+              <button
+                type="button" className={`tl-transition-chip${canvasOrientation === 'portrait' ? ' is-selected' : ''}`}
+                onClick={() => actions.setCanvasOrientation('portrait')}
+              >
+                {L.editor_canvasOrientationPortrait}
+              </button>
+              <button
+                type="button" className={`tl-transition-chip${canvasOrientation === 'landscape' ? ' is-selected' : ''}`}
+                onClick={() => actions.setCanvasOrientation('landscape')}
+              >
+                {L.editor_canvasOrientationLandscape}
+              </button>
+            </div>
+
             {!renderLoading && renderError && <div className="editor-side-error">⚠️ {renderError}</div>}
-            <button
-              className="btn btn-ghost" onClick={() => actions.startRender({ range: testRange })}
-              disabled={!canRender || renderLoading || !testRange}
-              title={testRange ? '' : L.editor_testRenderHint}
-            >
-              {renderLoading ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
-              {renderLoading ? L.editor_renderElapsed.replace('{s}', elapsedSeconds) : L.editor_testRenderButton}
-            </button>
-            <button className="btn btn-gradient" onClick={() => actions.startRender({})} disabled={!canRender || renderLoading}>
-              {renderLoading ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
-              {renderLoading ? L.editor_renderElapsed.replace('{s}', elapsedSeconds) : L.editor_renderButton}
-            </button>
+            <div className="editor-side-footer-buttons">
+              <button
+                className="btn btn-ghost" onClick={() => setTestRangeModalOpen(true)}
+                disabled={!canRender || renderLoading}
+              >
+                {renderLoading ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
+                {renderLoading ? L.editor_renderElapsed.replace('{s}', elapsedSeconds) : L.editor_testRenderButton}
+              </button>
+              <button className="btn btn-gradient" onClick={() => actions.startRender({})} disabled={!canRender || renderLoading}>
+                {renderLoading ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
+                {renderLoading ? L.editor_renderElapsed.replace('{s}', elapsedSeconds) : L.editor_renderButton}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -243,12 +296,21 @@ export default function EditorStage({
         selectedTransitionClipId={selectedTransitionClipId}
         titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources}
         actions={actions} toolsSlotNode={toolsSlot}
-        testRange={testRange} onRangeSelected={(startMs, endMs) => setTestRange({ startMs, endMs })}
-        onClearTestRange={() => setTestRange(null)}
+        testRange={testRange} onClearTestRange={() => setTestRange(null)}
         onOpenShortcuts={() => setShortcutsOpen(true)} canUndo={canUndo} canRedo={canRedo}
       />
 
       {shortcutsOpen && <KeyboardShortcutsModal L={L} onClose={() => setShortcutsOpen(false)} />}
+      {testRangeModalOpen && (
+        <TestRangeModal
+          L={L}
+          initialStartMs={testRange?.startMs ?? 0}
+          initialEndMs={testRange?.endMs ?? Math.min(DEFAULT_TEST_RANGE_MS, timelineMs)}
+          maxMs={timelineMs}
+          onConfirm={confirmTestRange}
+          onClose={() => setTestRangeModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

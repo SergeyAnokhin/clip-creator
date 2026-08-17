@@ -47,12 +47,17 @@ def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, sp
 def _overlay(kind='logo', source_id='logo_1', start_ms=0, duration_ms=2000,
              x_pct=80, y_pct=80, width_pct=20, height_pct=20, rotation_deg=0, opacity=1.0,
              fade_in_ms=0, fade_out_ms=0):
+    """`height_pct` is already in the current `height_axis: 'width'`
+    convention (percentage of canvas width, same axis as `width_pct` - see
+    `_migrate_overlay_position`'s docstring) - `test_build_render_plan_
+    migrates_pre_height_axis_overlay` below covers the one-time rescale for
+    an overlay saved before that convention existed."""
     return {
         'overlay_id': 'ov_1', 'kind': kind, 'source_id': source_id,
         'start_ms': start_ms, 'duration_ms': duration_ms,
         'x_pct': x_pct, 'y_pct': y_pct, 'width_pct': width_pct, 'height_pct': height_pct,
         'rotation_deg': rotation_deg, 'opacity': opacity,
-        'fade_in_ms': fade_in_ms, 'fade_out_ms': fade_out_ms,
+        'fade_in_ms': fade_in_ms, 'fade_out_ms': fade_out_ms, 'height_axis': 'width',
     }
 
 
@@ -152,6 +157,49 @@ def test_build_render_plan_portrait_canvas_when_every_clip_is_9_16():
 def test_build_render_plan_landscape_canvas_by_default():
     project = _project(_video(aspect_ratio='16:9'), _track())
     video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()]}
+
+    plan = editor.build_render_plan(project, video_edit)
+
+    assert (plan['target_width'], plan['target_height']) == (1920, 1080)
+
+
+def test_build_render_plan_null_aspect_ratio_does_not_force_landscape():
+    # A manually uploaded clip's aspect_ratio is always None (never probed -
+    # see video.save_uploaded_video) - it shouldn't be treated as evidence
+    # the clip is landscape.
+    project = _project(_video(aspect_ratio=None), _track())
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()]}
+
+    plan = editor.build_render_plan(project, video_edit)
+
+    assert (plan['target_width'], plan['target_height']) == (1080, 1920)
+
+
+def test_build_render_plan_explicit_non_9_16_still_forces_landscape():
+    project = {
+        'id': 'poem-a',
+        'scenes': [{'videos': [_video('a', aspect_ratio=None)]}, {'videos': [_video('b', aspect_ratio='16:9')]}],
+        'mureka': {'tracks': [_track()]},
+    }
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip(video_id='a'), _clip(scene_index=1, video_id='b')]}
+
+    plan = editor.build_render_plan(project, video_edit)
+
+    assert (plan['target_width'], plan['target_height']) == (1920, 1080)
+
+
+def test_build_render_plan_canvas_orientation_override_forces_portrait():
+    project = _project(_video(aspect_ratio='16:9'), _track())
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'canvas_orientation': 'portrait'}
+
+    plan = editor.build_render_plan(project, video_edit)
+
+    assert (plan['target_width'], plan['target_height']) == (1080, 1920)
+
+
+def test_build_render_plan_canvas_orientation_override_forces_landscape():
+    project = _project(_video(aspect_ratio='9:16'), _track())
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'canvas_orientation': 'landscape'}
 
     plan = editor.build_render_plan(project, video_edit)
 
@@ -383,6 +431,28 @@ def test_build_render_plan_migrates_legacy_position_overlay():
     assert ov['width_pct'] == 20
     assert ov['height_pct'] == 20
     assert ov['rotation_deg'] == 0
+
+
+def test_build_render_plan_migrates_pre_height_axis_overlay():
+    """An overlay saved before `height_pct` was pinned to the canvas's own
+    *width* (same axis as `width_pct` - see `_migrate_overlay_position`'s
+    docstring) had it as a percentage of canvas *height* instead - resolving
+    one now rescales it by `canvas_height/canvas_width` so its real pixel
+    size doesn't jump the first time it's rendered after the convention
+    changed."""
+    project = _project(_video(), _track())
+    settings = {'logos': [{'id': 'logo_1', 'file_path': 'logos/l.png'}]}
+    overlay = _overlay(height_pct=36)
+    del overlay['height_axis']
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [overlay]}
+
+    plan = editor.build_render_plan(project, video_edit, settings)
+
+    # Default canvas here is landscape 1920x1080 (a 16:9 clip) - 36% of
+    # height (1080) rescaled onto 20% of width (1920) is the same 388.8px.
+    ov = plan['overlays'][0]
+    assert ov['width_pct'] == 20
+    assert ov['height_pct'] == pytest.approx(36 * 1080 / 1920)
 
 
 def test_build_render_plan_migrates_legacy_bottom_right_overlay():
@@ -743,8 +813,10 @@ def test_build_ffmpeg_command_overlay_chain_shape():
     assert cmd[overlay_input_idx - 1] == '-i'
     # concat now feeds an intermediate label, not [vout] directly.
     assert 'concat=n=1:v=1:a=0[vbase]' in joined
-    # 25% of 1920x1080, independently scaled (no forced aspect lock).
-    assert 'scale=480:270,format=rgba,colorchannelmixer=aa=0.500' in joined
+    # 25% of 1920 (canvas width) for *both* dimensions - width_pct/height_pct
+    # share the canvas-width axis (see _migrate_overlay_position's docstring),
+    # independently scaled (no forced source-aspect lock).
+    assert 'scale=480:480,format=rgba,colorchannelmixer=aa=0.500' in joined
     # 10%/5% of 1920x1080, no rotation - plain top-left placement.
     assert 'overlay=x=192:y=54:' in joined
     assert "enable='between(t,0.500,2.000)'" in joined
@@ -791,15 +863,17 @@ def test_build_ffmpeg_command_rotated_overlay_pads_and_rotates_before_compositin
     cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
     filter_complex = cmd[cmd.index('-filter_complex') + 1]
 
-    # 20% of 1920x1080 -> 384x216; padded to double (768x432, image placed at
-    # the pad offset 384,216 - its own center); rotated 90 degrees, whose
-    # bounding box is the padded frame with width/height swapped (432x768).
-    assert 'scale=384:216,format=rgba,pad=768:432:384:216:color=0x00000000' in filter_complex
-    assert 'rotate=1.570796:ow=432:oh=768:c=none' in filter_complex
+    # 20% of 1920 (canvas width) for *both* dimensions -> 384x384 (a square,
+    # since width_pct/height_pct share the canvas-width axis); padded to
+    # double (768x768, image placed at the pad offset 384,384 - its own
+    # center); rotated 90 degrees, whose bounding box is the padded frame
+    # with width/height swapped - unchanged here since it's already square.
+    assert 'scale=384:384,format=rgba,pad=768:768:384:384:color=0x00000000' in filter_complex
+    assert 'rotate=1.570796:ow=768:oh=768:c=none' in filter_complex
     # Pivot (the overlay's own top-left corner) at 50%/50% of 1920x1080 =
     # (960, 540); the rotated frame's center must land exactly there:
-    # x = 960 - 432/2 = 744, y = 540 - 768/2 = 156.
-    assert 'overlay=x=744:y=156:' in filter_complex
+    # x = 960 - 768/2 = 576, y = 540 - 768/2 = 156.
+    assert 'overlay=x=576:y=156:' in filter_complex
 
 
 def test_build_ffmpeg_command_unrotated_overlay_has_no_pad_or_rotate_filter():

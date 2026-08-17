@@ -3,6 +3,7 @@ import { api } from '../api/client.js';
 import { buildDefaultClips, defaultMurekaTrackId, EMPTY_VIDEO_EDIT } from '../lib/editorDefaults.js';
 import { DEFAULT_OVERLAY_DURATION_MS, defaultOverlayTransform, migrateOverlay } from '../lib/overlays.js';
 import { computeTimelineClips, getTotalDurationMs, moveClip, splitClipsAt } from '../lib/timeline.js';
+import { resolveCanvasSize } from '../lib/canvasOrientation.js';
 import { useEditorPreview } from './useEditorPreview.js';
 import { useEditorRender } from './useEditorRender.js';
 
@@ -67,14 +68,18 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
 
   const videoEdit = activeProject?.video_edit || EMPTY_VIDEO_EDIT;
   const clips = videoEdit.clips || [];
+  const scenes = activeProject?.scenes || [];
+  // The overlay migration below needs the canvas size an overlay's
+  // height_pct is (or should be) relative to - see migrateOverlay's own
+  // docstring on `height_axis`.
+  const canvasSize = resolveCanvasSize(clips, scenes, videoEdit.canvas_orientation || 'auto');
   // Lazily normalized on every read - an overlay saved before free x/y/w/h/
   // rotation placement existed just has no `x_pct`/`y_pct` yet; any later
   // edit (even an unrelated one, like timing) commits the migrated shape
   // back through the normal autosave, so no separate one-time pass is
   // needed (see `migrateOverlay`'s own docstring).
-  const overlays = (videoEdit.overlays || []).map(migrateOverlay);
+  const overlays = (videoEdit.overlays || []).map((o) => migrateOverlay(o, canvasSize.width, canvasSize.height));
   const overlayVideoSources = videoEdit.overlay_video_sources || [];
-  const scenes = activeProject?.scenes || [];
   const sourceDurationsById = buildSourceDurations(scenes);
   const timelineClips = computeTimelineClips(clips, sourceDurationsById);
   const totalDurationMs = getTotalDurationMs(clips, sourceDurationsById);
@@ -106,7 +111,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       updateProject((p) => ({
         ...p,
         video_edit: {
-          mureka_track_id, clips: clipsSeed, overlays: [], overlay_video_sources: [], renders: [],
+          mureka_track_id, clips: clipsSeed, overlays: [], overlay_video_sources: [], renders: [], canvas_orientation: 'auto',
         },
       }));
     }
@@ -337,6 +342,9 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   function setMurekaTrackId(trackId) {
     commitVideoEdit((edit) => ({ ...edit, mureka_track_id: trackId }));
   }
+  function setCanvasOrientation(orientation) {
+    commitVideoEdit((edit) => ({ ...edit, canvas_orientation: orientation }));
+  }
 
   // ---------- transitions & fades ----------
   /** The transition *into* `clipId` from whichever clip precedes it -
@@ -475,7 +483,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     resetForProject,
     actions: {
       reorderClip, splitAtPlayhead, removeClips, addSceneClip, changeClipVideo,
-      setClipTrim, setClipSpeed, setClipFit, resetClip, setMurekaTrackId, selectClip, setSelection, selectAll,
+      setClipTrim, setClipSpeed, setClipFit, resetClip, setMurekaTrackId, setCanvasOrientation, selectClip, setSelection, selectAll,
       duplicateClips, copyClips, pasteClips, undo, redo,
       addOverlay, setOverlayTiming, setOverlayTransform, setOverlayOpacity, setOverlayFade,
       removeOverlay, selectOverlay, uploadOverlayVideo, deleteOverlayVideo,

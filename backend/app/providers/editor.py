@@ -59,8 +59,14 @@ project-scoped storage, since an arbitrary overlay video is a one-off project
 asset, not cross-project branding like a logo; `x_pct`/`y_pct` place the
 overlay's own top-left corner (the
 top-left of its *unrotated* bounding box - see `build_ffmpeg_command`'s
-rotation handling below) as a percentage of the canvas; `width_pct`/
-`height_pct` scale it independently (no forced aspect lock); `rotation_deg`
+rotation handling below) as a percentage of the canvas (`x_pct` of width,
+`y_pct` of height); `width_pct`/`height_pct` scale it independently (no
+forced source-aspect lock) - both as a percentage of the canvas's own
+**width** (`height_pct` deliberately shares `width_pct`'s axis rather than
+being a percentage of canvas height, so their ratio always reproduces the
+overlay's real pixel aspect ratio no matter which shape the canvas itself is
+- see `_migrate_overlay_position`'s docstring for the bug this avoids);
+`rotation_deg`
 (0-360) rotates it about that same top-left corner - mirrors exactly how
 `components/shared/CanvasLayer.jsx`'s Konva `Group` places/rotates a node
 (translate to `(x,y)` then rotate then scale, offset always `(0,0)`), so the
@@ -84,6 +90,7 @@ import asyncio
 import math
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -94,10 +101,14 @@ from .. import console_log, storage
 # of what resolution/aspect ratio each source clip was generated at - every
 # clip is scaled into the same frame, by default cropping overflow to fill it
 # (`clip.fit`, see this module's own docstring), letterboxed only when a clip
-# explicitly opts into `contain`. '9:16' only when *every* clip's own stored
-# `aspect_ratio` says so - otherwise landscape, since a mixed timeline needs
-# one canvas either way and most generated footage in this app defaults to
-# landscape.
+# explicitly opts into `contain`. Auto mode (`video_edit.canvas_orientation`
+# absent or `'auto'`) picks '9:16' unless some clip's own stored
+# `aspect_ratio` is *explicitly* something else - an unset/unprobed
+# `aspect_ratio` (a manually uploaded clip - see `build_render_plan`'s own
+# comment) doesn't force landscape, only a known non-9:16 clip does.
+# `'portrait'`/`'landscape'` force that canvas outright regardless of any
+# clip's aspect ratio - the manual override a user picks when auto-detection
+# guesses wrong.
 _DEFAULT_CANVAS = (1920, 1080)
 _PORTRAIT_CANVAS = (1080, 1920)
 _FPS = 30
@@ -194,17 +205,39 @@ def _resolve_overlay_source(project: dict, settings: dict, video_edit: dict, ove
     raise RenderPlanError(f'Оверлей: неизвестный тип {kind!r}')
 
 
-def _migrate_overlay_position(overlay: dict) -> dict:
-    """An overlay already carrying `x_pct`/`y_pct` passes through unchanged;
-    an old-shape overlay (`position` + bare `width_pct`, no `height_pct`/
-    `rotation_deg`) gets them derived from the legacy anchor - exact mirror
-    of `lib/overlays.js`'s `migrateOverlay` (see that function's own
-    docstring for the anchor->top-left math). `height_pct` becomes a square
-    placeholder (`== width_pct`, the old shape never recorded a height) -
-    immediately adjustable once the frontend re-saves it, same as the
-    frontend's own migration."""
+def _migrate_overlay_position(overlay: dict, canvas_width: int, canvas_height: int) -> dict:
+    """An overlay already carrying `x_pct`/`y_pct` *and* `height_axis: 'width'`
+    passes through unchanged; anything older gets normalized - exact mirror of
+    `lib/overlays.js`'s `migrateOverlay` (see that function's own docstring).
+
+    `height_axis: 'width'` marks the newer convention where `height_pct`, like
+    `width_pct`, is a percentage of the canvas's own *width* (not its height) -
+    deliberately the same reference axis for both, so their ratio always
+    encodes the overlay's true pixel aspect ratio regardless of which shape
+    the canvas itself is (`canvas_orientation` can switch between a 9:16
+    portrait and 16:9 landscape canvas after an overlay was already placed;
+    two percentages measured against two *different* axes don't survive that
+    switch undistorted, which is exactly the "logo comes out squished/
+    stretched" bug this fixes). An overlay saved before this convention
+    existed has `height_pct` as a percentage of canvas *height* instead -
+    converted here by rescaling with `canvas_height/canvas_width` so its real
+    pixel size (and therefore its real aspect ratio) doesn't jump the first
+    time it's re-resolved.
+
+    An old-shape overlay (`position` + bare `width_pct`, no `height_pct`/
+    `rotation_deg` at all) gets `x_pct`/`y_pct` derived from the legacy anchor
+    and `height_pct == width_pct` - already a square in *pixel* terms once
+    both are read as "percentage of canvas width", so it needs no rescaling,
+    only the `height_axis` stamp."""
     if overlay.get('x_pct') is not None and overlay.get('y_pct') is not None:
-        return overlay
+        if overlay.get('height_axis') == 'width':
+            return overlay
+        height_pct = overlay.get('height_pct') or overlay.get('width_pct') or _OVERLAY_DEFAULT_WIDTH_PCT
+        return {
+            **overlay,
+            'height_pct': height_pct * (canvas_height / canvas_width) if canvas_width > 0 else height_pct,
+            'height_axis': 'width',
+        }
     anchor_x, anchor_y = _LEGACY_POSITION_PCT.get(overlay.get('position'), _LEGACY_POSITION_PCT[_LEGACY_DEFAULT_POSITION])
     width_pct = overlay.get('width_pct') or _OVERLAY_DEFAULT_WIDTH_PCT
     height_pct = width_pct
@@ -217,13 +250,14 @@ def _migrate_overlay_position(overlay: dict) -> dict:
         'width_pct': width_pct,
         'height_pct': height_pct,
         'rotation_deg': overlay.get('rotation_deg') or 0,
+        'height_axis': 'width',
     }
 
 
-def _resolve_overlays(project: dict, settings: dict, video_edit: dict) -> list[dict]:
+def _resolve_overlays(project: dict, settings: dict, video_edit: dict, canvas_width: int, canvas_height: int) -> list[dict]:
     resolved = []
     for raw_overlay in video_edit.get('overlays') or []:
-        overlay = _migrate_overlay_position(raw_overlay)
+        overlay = _migrate_overlay_position(raw_overlay, canvas_width, canvas_height)
         file_path = _resolve_overlay_source(project, settings, video_edit, overlay)
         duration_ms = overlay.get('duration_ms') or 0
         if duration_ms <= 0:
@@ -350,7 +384,13 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
     all_portrait = True
     for clip in clips:
         video = _resolve_clip_video(project, clip['scene_index'], clip['video_id'])
-        if video.get('aspect_ratio') != '9:16':
+        # `None` (a manually uploaded/imported clip - see the
+        # `duration_seconds` comment just below, same convention) doesn't
+        # veto portrait: an unknown aspect ratio isn't evidence the clip is
+        # landscape, and treating it as one silently forced every timeline
+        # with even a single uploaded clip to landscape regardless of what
+        # the footage actually was. Only an *explicit* non-9:16 clip does.
+        if video.get('aspect_ratio') not in (None, '9:16'):
             all_portrait = False
         # `duration_seconds` is `None` for a manually uploaded/imported clip
         # (`video.save_uploaded_video`/`import_video_batch` never probe the
@@ -417,10 +457,16 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
     if pad_s > 0:
         resolved_clips[-1]['tpad_s'] = pad_s
 
-    width, height = _PORTRAIT_CANVAS if all_portrait else _DEFAULT_CANVAS
+    orientation = video_edit.get('canvas_orientation') or 'auto'
+    if orientation == 'portrait':
+        width, height = _PORTRAIT_CANVAS
+    elif orientation == 'landscape':
+        width, height = _DEFAULT_CANVAS
+    else:
+        width, height = _PORTRAIT_CANVAS if all_portrait else _DEFAULT_CANVAS
     return {
         'clips': resolved_clips,
-        'overlays': _resolve_overlays(project, settings or {}, video_edit),
+        'overlays': _resolve_overlays(project, settings or {}, video_edit, width, height),
         'audio_file_path': track['file_path'],
         'audio_duration_s': audio_duration_s,
         'target_width': width,
@@ -670,11 +716,16 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
         cur = f'[{concat_label}]'
         for i, overlay in enumerate(overlays):
             idx = overlay_base_index + i
-            # Independently scaled to `width_pct`/`height_pct` of the canvas
-            # (no forced aspect lock - matches `CanvasLayer`'s free corner-
-            # resize) rather than the old aspect-preserved auto-height.
+            # Both scaled against the canvas's own *width* (`w`, not `h` for
+            # `oh_px`) - `height_pct` is a percentage of canvas width, same
+            # axis as `width_pct` (see `_migrate_overlay_position`'s
+            # docstring), so their ratio always reproduces the overlay's real
+            # pixel aspect ratio regardless of the canvas's own w:h shape. Not
+            # aspect-locked to the *source image's* own aspect ratio though -
+            # matches `CanvasLayer`'s free corner-resize, a deliberate
+            # non-uniform stretch is still possible by design.
             ow_px = max(1, round(w * overlay['width_pct'] / 100))
-            oh_px = max(1, round(h * overlay['height_pct'] / 100))
+            oh_px = max(1, round(w * overlay['height_pct'] / 100))
             rotation_deg = overlay['rotation_deg']
             x_px = w * overlay['x_pct'] / 100
             y_px = h * overlay['y_pct'] / 100
@@ -762,13 +813,23 @@ def save_overlay_video_source(slug: str, content: bytes, ext: str) -> dict:
 
 def _run_ffmpeg_render(cmd: list[str]) -> None:
     result = subprocess.run(cmd, capture_output=True, check=False)
+    if result.returncode != 0 and not result.stdout and not result.stderr:
+        # ffmpeg.exe killed before it could write anything at all (observed
+        # returncode 3221225794 / 0xC0000142 = STATUS_DLL_INIT_FAILED on
+        # Windows) is a known antivirus real-time-scan pattern against a
+        # freshly spawned process, not a real ffmpeg/filtergraph failure -
+        # gone on a second try almost every time, so retry once before
+        # treating it as a real error.
+        time.sleep(1.0)
+        result = subprocess.run(cmd, capture_output=True, check=False)
     if result.returncode != 0:
         stderr = result.stderr.decode(errors='replace').strip()
         stdout = result.stdout.decode(errors='replace').strip()
         detail = stderr or stdout or (
-            'ffmpeg ничего не вывел, хотя завершился с ошибкой - вероятно, процесс '
-            'был прерван до запуска (например, антивирусом). Проверьте лог backend '
-            'в терминале и попробуйте ещё раз.'
+            'ffmpeg ничего не вывел, хотя завершился с ошибкой, и повторная попытка '
+            'тоже не помогла - вероятно, процесс был прерван до запуска (например, '
+            'антивирусом). Проверьте лог backend в терминале и добавьте ffmpeg.exe '
+            'в исключения антивируса.'
         )
         console_log.log_error(
             'ffmpeg render',

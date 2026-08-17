@@ -17,7 +17,7 @@ import { applyOverlayEdgeResize, applyOverlayMove } from '../lib/overlays.js';
  * effect's own `[drag, scale]` dependency array re-subscribes when it
  * changes, exactly as when this lived inline in EditorTimeline.jsx). */
 export function useTimelineDrag({
-  actions, scenes, clips, scale, onRangeSelected,
+  actions, scenes, clips, scale,
 }) {
   const contentRef = useRef(null);
   const clipsRef = useRef(clips);
@@ -40,7 +40,7 @@ export function useTimelineDrag({
         return;
       }
       const dx = e.clientX - drag.startX;
-      if (drag.mode === 'move' || drag.mode === 'marquee' || drag.mode === 'overlay-move' || drag.mode === 'range-select') {
+      if (drag.mode === 'move' || drag.mode === 'marquee' || drag.mode === 'overlay-move') {
         setDragDx(dx);
         return;
       }
@@ -76,13 +76,6 @@ export function useTimelineDrag({
           .filter((c) => c.startMs < toMs && c.startMs + c.durationMs > fromMs)
           .map((c) => c.clip_id);
         actions.setSelection(ids);
-      } else if (drag.mode === 'range-select') {
-        const endMs = pointerToMs(e.clientX);
-        const fromMs = Math.min(drag.startMs, endMs);
-        const toMs = Math.max(drag.startMs, endMs);
-        // A plain click (no real drag) would otherwise set a degenerate
-        // zero-width range - only commit one past a small minimum width.
-        if (toMs - fromMs >= 50) onRangeSelected?.(fromMs, toMs);
       }
       setDrag(null);
       setDragDx(0);
@@ -162,20 +155,6 @@ export function useTimelineDrag({
     });
   }
 
-  /** Drag on the timeline ruler defines an ephemeral test-render range
-   * (`EditorTimeline.jsx`'s `testRange`, threaded up to `EditorStage.jsx`'s
-   * "Собрать тестовое видео" button) - a dedicated gesture on `.tl-ruler`
-   * rather than reusing `startContentPointerDown`'s scrub/marquee (the
-   * ruler sits outside `.tl-track`, so it already falls through to that
-   * handler's scrub-by-default path; this needs `stopPropagation` to take
-   * priority there instead). */
-  function startRangeSelect(e) {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    setDrag({ mode: 'range-select', startX: e.clientX, startMs: pointerToMs(e.clientX) });
-    setDragDx(0);
-  }
-
   function startOverlayDrag(e, overlay) {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -202,6 +181,5 @@ export function useTimelineDrag({
     contentRef, drag, dragDx,
     startScrub, startContentPointerDown, startClipDrag, onClipKeyDown,
     startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown,
-    startRangeSelect,
   };
 }

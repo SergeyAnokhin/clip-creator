@@ -126,21 +126,37 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
 
    An overlay's position/size/rotation are set by **dragging it directly on
    the program monitor** - `EditorPreview.jsx` renders active overlays on a
-   `react-konva` `Stage` sized and positioned to exactly the video's own real
-   (non-letterboxed) content rect (`lib/videoFrameRect.js`'s
-   `computeContentRect`, replicating the `<video>`'s own `object-fit: contain`
-   math, since the frame's own box can have a different aspect ratio than the
-   video), via the shared `components/shared/CanvasLayer.jsx` primitive - the
-   same Konva `Group`+`Transformer` drag/resize/rotate wrapper the Poster
-   constructor's layers use (`PosterCanvasLayers.jsx`'s `OverlayImage` was
-   refactored onto it), so both editors share one interaction model instead of
-   two parallel implementations. A dashed `.editor-frame-bounds` outline marks
-   that same content rect so it's visible even with no overlay selected.
-   `TimelineOverlayInspector.jsx` is a numeric fallback for the same fields
-   (x/y/width/height/rotation %, opacity, fade in/out), not a second source of
-   truth. The real render composites overlays with ffmpeg's `overlay` filter,
-   each gated to its own window via `enable='between(t,…)'`
-   (`providers/editor.py::build_ffmpeg_command`).
+   `react-konva` `Stage` sized and positioned to exactly the **output canvas**
+   (`canvasSize`, from `EditorStage.jsx`'s `resolveCanvasSize`) letterboxed to
+   fit the frame (`lib/videoFrameRect.js`'s `computeContentRect`, reused
+   against `canvasSize` instead of the `<video>`'s own natural size), via the
+   shared `components/shared/CanvasLayer.jsx` primitive - the same Konva
+   `Group`+`Transformer` drag/resize/rotate wrapper the Poster constructor's
+   layers use (`PosterCanvasLayers.jsx`'s `OverlayImage` was refactored onto
+   it), so both editors share one interaction model instead of two parallel
+   implementations. Anchoring to the canvas (not the currently playing clip's
+   own content rect) matters because `providers/editor.py` always scales an
+   overlay's `width_pct`/`height_pct` against that same fixed canvas - the two
+   only agreed by coincidence whenever the visible clip's aspect ratio
+   happened to match the canvas, and otherwise produced a visibly
+   squished/stretched overlay in the real render (e.g. a landscape clip
+   pillarboxed inside a portrait canvas). A second, independent distortion:
+   `height_pct` used to be a percentage of the canvas's own *height* while
+   `width_pct` was a percentage of its *width* - two different axes, so the
+   same stored overlay came out a different real shape depending on which
+   way `canvas_orientation` happened to be set, distorting on every switch
+   even with the above fixed. `height_pct` is now a percentage of canvas
+   width too (`height_axis: 'width'`, `docs/data-model.md`'s `VideoEdit`
+   section), so an overlay's real pixel aspect ratio - once correctly set by
+   dragging - survives an orientation switch undistorted. A dashed
+   `.editor-frame-bounds` outline still marks the *clip's* own real
+   (non-letterboxed) content rect,
+   now computed inside the canvas rect - informational only, not where
+   overlays are placed. `TimelineOverlayInspector.jsx` is a numeric fallback
+   for the same fields (x/y/width/height/rotation %, opacity, fade in/out),
+   not a second source of truth. The real render composites overlays with
+   ffmpeg's `overlay` filter, each gated to its own window via
+   `enable='between(t,…)'` (`providers/editor.py::build_ffmpeg_command`).
 
    Every boundary between two clips carries a small `TimelineTransitionMarker`
    (a `+` that fills in once a transition is set) - click to open
@@ -805,6 +821,17 @@ lives in the button's own component state.
   observer only for later resizes. Any future container-filling Konva editor
   should do the same — `PosterConstructor.jsx` is exempt, its size is
   background-driven.
+- **Running `npm test` while a `npm run dev` preview is up can take the dev
+  server down with it.** `npm run dev` is `concurrently -k ...` — `-k` kills
+  every sibling process the moment any one of them exits, and a `vitest` run
+  sharing the same `frontend/node_modules` has been observed (Windows,
+  2026-08) to coincide with the `dev:frontend` process exiting, tearing down
+  `dev:backend` too. The browser tab then keeps serving Vite's now-stale
+  module graph — an edit that's correct on disk can still throw a
+  `ReferenceError` for an identifier that no longer exists in the source, a
+  false "bug" that costs real time to chase. Fix: stop the preview server,
+  delete `frontend/node_modules/.vite`, and restart the preview rather than
+  just reloading the page.
 
 ## Testing
 

@@ -112,7 +112,7 @@ probed**, so `duration_seconds`/`resolution`/`aspect_ratio`/`generation_ms` are
 `null` on it — which matters for the Editor stage's trim math below.
 
 **VideoEdit** (Editor stage, `providers/editor.py`): `{mureka_track_id, clips[],
-overlays[], overlay_video_sources[], renders[]}`. Lazily seeded the first time
+overlays[], overlay_video_sources[], renders[], canvas_orientation}`. Lazily seeded the first time
 the stage opens (one clip per scene that has an `is_selected` video, in scene
 order; `mureka_track_id` from whichever `MurekaTrack.is_selected`), but —
 unlike `TitleCard.text_block` — persisted immediately, so a reload right after
@@ -161,8 +161,24 @@ against this same `VideoEdit`'s own `overlay_video_sources[]` (below) -
 project-scoped, like a title card, not global like a logo.
 
 `x_pct`/`y_pct` place the overlay's own **top-left corner** (of its
-*unrotated* bounding box) as a percentage of the canvas; `width_pct`/
-`height_pct` scale it independently (no forced aspect lock); `rotation_deg`
+*unrotated* bounding box) as a percentage of the canvas (`x_pct` of width,
+`y_pct` of height); `width_pct`/`height_pct` scale it independently at the
+data level (no forced source-aspect lock) - the UI only ever moves them
+together (the program monitor's `Transformer` keeps corner-drags
+aspect-locked, and `TimelineOverlayInspector.jsx`'s "Масштаб" slider scales
+both by the same factor), so nothing writes a distorted `width_pct`/
+`height_pct` *pair* through the normal UI. Both are a percentage of the
+canvas's own **width** - `height_pct` deliberately shares `width_pct`'s axis
+rather than being read against canvas height, so their ratio always
+reproduces the overlay's true pixel aspect ratio no matter which shape the
+canvas itself is (`canvas_orientation` can reshape it after an overlay was
+already placed; two percentages measured against two *different* axes don't
+survive that reshape undistorted). `height_axis: 'width'` marks an overlay
+already in this convention; `providers/editor.py`'s `_migrate_overlay_
+position` / `lib/overlays.js`'s `migrateOverlay` lazily rescale anything
+saved before it existed (`height_pct` was a percentage of canvas height then)
+the first time it's read, same lazy-on-read spirit as the older 9-point-grid
+migration below. `rotation_deg`
 (0-360) rotates it about that same top-left corner - mirrors exactly how the
 shared `CanvasLayer.jsx`/Konva `Group` places and rotates a node (translate
 to `(x,y)`, then rotate, offset always `(0,0)`), so the program monitor's live
@@ -184,7 +200,12 @@ source of truth. An overlay saved before this existed only has the old
 (`lib/overlays.js`'s `migrateOverlay`) and backend
 (`providers/editor.py`'s `_migrate_overlay_position`) derive the new fields
 from those the first time such an overlay is read/rendered, so old projects
-open and render unchanged without a migration pass.
+open and render unchanged without a migration pass. `migrateOverlay` also
+recovers overlays corrupted by a since-fixed bug where dragging on the
+program monitor wrote `CanvasLayer.jsx`'s own camelCase pct fields
+(`xPct`/`yPct`/`widthPct`/`heightPct`/`rotationDeg` - the shape
+`PosterCanvasLayers.jsx` uses natively) straight onto the overlay instead of
+converting them to this shape's snake_case fields first.
 
 **`overlay_video_sources[]`** (`VideoEdit`, alongside `overlays[]`) is
 `[{id, file_path, duration_seconds}]` - uploaded video files usable as a
@@ -217,8 +238,13 @@ never exceed the content they'd apply to (see `providers/editor.py`'s
 
 `renders[]` is server-managed and append-only: `{render_id, file_path,
 created_at, duration_ms, clip_count, mureka_track_id, kind: 'final'|'test',
-range: {start_ms, end_ms}|null}`. Output canvas is a fixed 1920×1080 (or
-1080×1920 if every clip's `aspect_ratio` is `9:16`); each clip fills it per
+range: {start_ms, end_ms}|null}`. Output canvas is 1920×1080 or 1080×1920,
+picked by `VideoEdit.canvas_orientation` (`'auto'` by default, or `'portrait'`/
+`'landscape'` to force it regardless of the clips - a manual override next to
+the render buttons, `EditorStage.jsx`). In `'auto'`, the canvas is 1080×1920
+unless some clip's own `aspect_ratio` is *explicitly* not `9:16` - a clip with
+no probed `aspect_ratio` (a manually uploaded/imported video, `null` per
+above) doesn't force landscape on its own. Each clip fills the canvas per
 its own `fit` (above) - `cover`-by-default crops overflow to fill the frame,
 `contain` letterboxes. If the clips run **shorter** than the audio the last
 clip is frozen (ffmpeg `tpad`) to fill the remainder; if **longer**, the

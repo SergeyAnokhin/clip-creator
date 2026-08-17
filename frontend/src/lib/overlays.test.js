@@ -1,15 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
   MIN_OVERLAY_MS, activeOverlaysAt, applyOverlayEdgeResize, applyOverlayMove, assignOverlayLanes,
-  defaultOverlayTransform, migrateOverlay, overlayOpacityAt,
+  canvasLayerHeightPct, defaultOverlayTransform, migrateOverlay, overlayOpacityAt, overlayPatchFromCanvasLayer,
 } from './overlays.js';
 
 describe('migrateOverlay', () => {
   it('passes an already-migrated overlay through unchanged', () => {
     const overlay = {
+      overlay_id: 'a', x_pct: 12, y_pct: 34, width_pct: 20, height_pct: 15, rotation_deg: 90, height_axis: 'width',
+    };
+    expect(migrateOverlay(overlay, 1920, 1080)).toBe(overlay);
+  });
+
+  it('rescales height_pct onto the canvas-width axis for an overlay saved before height_axis existed', () => {
+    // 15% of canvas height (1080) restated as a percentage of canvas width
+    // (1920) - same real pixel height, just expressed on width_pct's axis so
+    // it survives a later canvas_orientation switch undistorted.
+    const overlay = {
       overlay_id: 'a', x_pct: 12, y_pct: 34, width_pct: 20, height_pct: 15, rotation_deg: 90,
     };
-    expect(migrateOverlay(overlay)).toBe(overlay);
+    const migrated = migrateOverlay(overlay, 1920, 1080);
+    expect(migrated.height_pct).toBeCloseTo(15 * (1080 / 1920));
+    expect(migrated.height_axis).toBe('width');
+    // width_pct/x_pct/y_pct/rotation_deg are untouched by the rescale.
+    expect(migrated.width_pct).toBe(20);
+    expect(migrated.x_pct).toBe(12);
   });
 
   it('anchors "top-left" at the point itself (no back-translate)', () => {
@@ -44,13 +59,36 @@ describe('migrateOverlay', () => {
     expect(migrated.width_pct).toBe(20);
     expect(migrated.height_pct).toBe(20);
   });
+
+  it('recovers an overlay corrupted by the camelCase onChange bug instead of re-deriving a square legacy guess', () => {
+    // A CanvasLayer drag once wrote its own {xPct,yPct,widthPct,heightPct,
+    // rotationDeg} straight onto the overlay (see EditorPreview.jsx's
+    // OverlayCanvasNode) - x_pct/y_pct are still absent, so without this
+    // recovery branch this would fall through to the legacy position-anchor
+    // guess and force heightPct = widthPct, distorting a non-square image.
+    const overlay = {
+      overlay_id: 'a', position: 'bottom-center', width_pct: 42, opacity: 1,
+      xPct: 27.72, yPct: 54.6, widthPct: 42, heightPct: 18, rotationDeg: 15,
+    };
+    const migrated = migrateOverlay(overlay);
+    expect(migrated.x_pct).toBe(27.72);
+    expect(migrated.y_pct).toBe(54.6);
+    expect(migrated.width_pct).toBe(42);
+    expect(migrated.height_pct).toBe(18);
+    expect(migrated.rotation_deg).toBe(15);
+  });
+
+  it('falls back to width_pct for height when the corrupted overlay has no heightPct either', () => {
+    const migrated = migrateOverlay({ xPct: 10, yPct: 10, widthPct: 30 });
+    expect(migrated.height_pct).toBe(30);
+  });
 });
 
 describe('defaultOverlayTransform', () => {
   it('matches migrating a fresh bottom-right/default-width legacy overlay', () => {
     const t = defaultOverlayTransform();
     expect(t).toEqual({
-      x_pct: 80, y_pct: 80, width_pct: 20, height_pct: 20, rotation_deg: 0,
+      x_pct: 80, y_pct: 80, width_pct: 20, height_pct: 20, rotation_deg: 0, height_axis: 'width',
     });
   });
 });
@@ -197,5 +235,43 @@ describe('applyOverlayEdgeResize', () => {
 
   it('the start edge cannot go negative', () => {
     expect(applyOverlayEdgeResize({ start_ms: 100, duration_ms: 2000 }, 'start', -9000).startMs).toBe(0);
+  });
+});
+
+describe('overlayPatchFromCanvasLayer', () => {
+  it('renames CanvasLayer.jsx\'s camelCase onChange patch to this file\'s snake_case fields', () => {
+    const patch = {
+      xPct: 12, yPct: 34, widthPct: 20, heightPct: 15, rotationDeg: 90,
+    };
+    // Square container (containerH/containerW = 1) - heightPct passes through
+    // the axis rescale unchanged, isolating the field-renaming behavior.
+    expect(overlayPatchFromCanvasLayer(patch, 1000, 1000)).toEqual({
+      x_pct: 12, y_pct: 34, width_pct: 20, height_pct: 15, rotation_deg: 90, height_axis: 'width',
+    });
+  });
+
+  it('rescales heightPct from container-height-relative onto the canvas-width axis', () => {
+    const patch = {
+      xPct: 0, yPct: 0, widthPct: 20, heightPct: 15, rotationDeg: 0,
+    };
+    // A 1080-tall, 1920-wide container (portrait canvas pillarboxed by a
+    // wider frame, or a landscape canvas outright): 15% of containerH (1080)
+    // restated as a percentage of containerW (1920).
+    const patched = overlayPatchFromCanvasLayer(patch, 1920, 1080);
+    expect(patched.height_pct).toBeCloseTo(15 * (1080 / 1920));
+    expect(patched.height_axis).toBe('width');
+  });
+});
+
+describe('canvasLayerHeightPct', () => {
+  it('is the exact inverse of overlayPatchFromCanvasLayer\'s height_pct rescale', () => {
+    const containerW = 1920;
+    const containerH = 1080;
+    const original = 15; // CanvasLayer's own container-height-relative heightPct
+    const stored = overlayPatchFromCanvasLayer({
+      xPct: 0, yPct: 0, widthPct: 20, heightPct: original, rotationDeg: 0,
+    }, containerW, containerH);
+    const backToCanvasLayer = canvasLayerHeightPct({ height_pct: stored.height_pct }, containerW, containerH);
+    expect(backToCanvasLayer).toBeCloseTo(original);
   });
 });

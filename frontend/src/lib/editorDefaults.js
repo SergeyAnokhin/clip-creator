@@ -14,7 +14,7 @@ function randomId(prefix) {
 // loading - shared by `useEditorStage.js` and `useEditorRender.js` so both
 // agree on it without one importing internals from the other.
 export const EMPTY_VIDEO_EDIT = {
-  mureka_track_id: null, clips: [], overlays: [], overlay_video_sources: [], renders: [],
+  mureka_track_id: null, clips: [], overlays: [], overlay_video_sources: [], renders: [], canvas_orientation: 'auto',
 };
 
 /** One clip per scene that already has an `is_selected` video, in scene

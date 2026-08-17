@@ -3201,8 +3201,16 @@
   justify-content: center;
 }
 
-.editor-side-title {
-  padding: 12px 14px;
+.editor-side-footer-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.editor-side-footer-buttons .btn {
+  flex: 1;
+  min-width: 0;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .editor-side-block {
@@ -3217,9 +3225,12 @@
 }
 
 .editor-side-renders {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  /* No flex:1/overflow-y here - .editor-side-scroll (the parent) already
+     scrolls the whole panel. A flex:1 child inside an overflow:auto flex
+     column with more content than fits collapses toward min-content instead
+     of taking its natural height, which is what made this block shrink to a
+     sliver with its own cramped inner scrollbar whenever an overlay/clip
+     inspector above it grew tall (e.g. a selected overlay's full field set). */
 }
 
 .editor-side-warn {
@@ -3673,18 +3684,19 @@
   pointer-events: none;
 }
 
-/* The test-render range - dragged on `.tl-ruler` (top: 0, spans the whole
-   ruler+tracks height, see EditorTimeline.jsx's `allTracksHeight`), a
-   distinct cool tint so it reads apart from the marquee's warm accent (that
-   one selects clips; this one bounds what "Собрать тестовое видео" renders,
-   an unrelated concern). */
-.tl-test-range {
+/* The test-render range picked in TestRangeModal.jsx - a thin marker
+   confined to `.tl-ruler` itself (not the whole timeline height, unlike the
+   old drag-on-the-ruler version this replaced) so it never sits on top of
+   the overlay/video/audio tracks and never intercepts a click meant to
+   scrub. `pointer-events: none` - it's purely informational, the modal is
+   the only way to change it. Same cool accent as before so it still reads
+   apart from the marquee's warm one (unrelated concern - clip selection). */
+.tl-test-range-tick {
   position: absolute;
-  top: 0;
-  z-index: 5;
-  border-left: 1px solid #5eaaff;
-  border-right: 1px solid #5eaaff;
-  background: rgba(94, 170, 255, 0.12);
+  bottom: 0;
+  height: 3px;
+  z-index: 2;
+  background: #5eaaff;
   pointer-events: none;
 }
 
