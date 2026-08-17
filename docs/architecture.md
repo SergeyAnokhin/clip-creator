@@ -103,13 +103,21 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    - see `applyEdgeSpeed` in `lib/timeline.js`), drag the ruler to scrub, the
    razor button (or `S`) to split the clip under the playhead, ctrl+wheel /
    the toolbar to zoom. The clip inspector strip below the toolbar mirrors
-   both gestures as exact-value fields and adds a reset button (back to "full
-   source clip, 1x") per clip. `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every
+   both gestures as exact-value fields, adds a **reverse** toggle next to the
+   speed field (plays the trimmed window back to front - a real ffmpeg
+   `reverse` filter at render time, not simulated by the in-browser preview,
+   see `docs/data-model.md`'s `EditorClip` section), and a reset button (back
+   to "full source clip, forward, 1x") per clip. Right-clicking the program
+   monitor itself opens `EditorPreviewContextMenu.jsx`, a shortcut to the same
+   split/copy/paste/duplicate/speed/reverse/reset actions for whichever clip
+   is currently selected, or - if none is - whichever sits under the playhead
+   (`lib/timeline.js`'s `findActiveClip`), so the user doesn't have to go find
+   the clip on the timeline first. `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every
    `video_edit` edit (`useEditorStage.js`'s `past`/`future` history, coalescing
    rapid edits - a drag's continuous pointermoves, a fast run of keystrokes -
    into one step the same way `PosterConstructor.jsx`'s `commit()` does;
    renders aren't part of the undoable document, only clip order/trim/speed/
-   transitions/fades, overlays, and the picked track). Above the clip row sits
+   reverse/transitions/fades, overlays, and the picked track). Above the clip row sits
    a track for **overlays** - title-card variants, global logos, or an
    uploaded video, placed over the video for their own
    `[start_ms, start_ms+duration_ms)` window, added from a collapsible picker
@@ -154,7 +162,9 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    now computed inside the canvas rect - informational only, not where
    overlays are placed. `TimelineOverlayInspector.jsx` is a numeric fallback
    for the same fields (x/y/width/height/rotation %, opacity, fade in/out),
-   not a second source of truth. The real render composites overlays with
+   not a second source of truth - it also shows a **reverse** toggle, but
+   only for a `kind: 'video'` overlay (meaningless for a still image, see
+   `docs/data-model.md`'s overlay section). The real render composites overlays with
    ffmpeg's `overlay` filter, each gated to its own window via
    `enable='between(t,…)'` (`providers/editor.py::build_ffmpeg_command`).
 
@@ -177,8 +187,9 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    black/white, entirely within that one clip's own duration, no effect on
    neighbours).
 
-   Reorder/trim/split/speed/overlays (image or video, freely
-   placed/resized/rotated, with fade in/out)/transitions/fades/per-clip fit.
+   Reorder/trim/split/speed/reverse/overlays (image or video, freely
+   placed/resized/rotated, with fade in/out and, for a video overlay, its own
+   reverse toggle)/transitions/fades/per-clip fit.
    **The timeline has no gaps**: clips are always
    concatenated back to back, so a
    horizontal drag means "reorder", not "move to this exact time". The

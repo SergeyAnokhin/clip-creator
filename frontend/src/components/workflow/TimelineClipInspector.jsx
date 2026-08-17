@@ -1,4 +1,6 @@
-import { Copy, RotateCcw, Trash2 } from 'lucide-react';
+import {
+  Copy, Rewind, RotateCcw, Trash2,
+} from 'lucide-react';
 import {
   DEFAULT_FADE_MS, DEFAULT_FIT, MAX_FIT_ZOOM, MAX_SPEED, MIN_FIT_ZOOM, MIN_SPEED, clampTrim,
 } from '../../lib/timeline.js';
@@ -139,7 +141,7 @@ export default function TimelineClipInspector({
     }
   }
 
-  const isDefault = (clip.trim_start_ms || 0) === 0 && clip.trim_end_ms == null && (clip.speed || 1) === 1;
+  const isDefault = (clip.trim_start_ms || 0) === 0 && clip.trim_end_ms == null && (clip.speed || 1) === 1 && !clip.reverse;
 
   return (
     <div className="tl-inspector">
@@ -179,6 +181,13 @@ export default function TimelineClipInspector({
           onChange={(e) => actions.setClipSpeed(clip.clip_id, Math.min(MAX_SPEED, Math.max(MIN_SPEED, Number(e.target.value) || 1)))}
         />
         <span className="tl-inspector-arrow">×</span>
+        <button
+          type="button" className={`icon-btn${clip.reverse ? ' is-active' : ''}`}
+          title={L.editor_clipReverseTooltip} aria-pressed={!!clip.reverse}
+          onClick={() => actions.setClipReverse(clip.clip_id, !clip.reverse)}
+        >
+          <Rewind size={14} />
+        </button>
       </label>
 
       <ClipFitRow L={L} fit={clip.fit} onChange={(fit) => actions.setClipFit(clip.clip_id, fit)} />

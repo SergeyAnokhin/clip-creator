@@ -129,6 +129,12 @@
   border-color: rgba(248, 113, 113, 0.3);
 }
 
+.icon-btn.is-active {
+  background: rgba(255, 157, 92, 0.18);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -3103,6 +3109,68 @@
 
 .editor-fullscreen-btn:hover {
   background: rgba(0, 0, 0, 0.75);
+}
+
+/* Right-click menu on the program monitor (EditorPreviewContextMenu.jsx) -
+   `position: fixed` at the click's own viewport coordinates, set inline via
+   `left`/`top` (EditorPreview.jsx). Deliberately a sibling of the frame's
+   other absolutely-positioned children rather than a portal: neither
+   .editor-preview-frame (overflow: hidden) nor .editor-stage.editor-
+   fullscreen (position: fixed) establish a containing block for a fixed
+   descendant (no transform/filter/will-change on either), so `fixed` here
+   still resolves against the real viewport either way. */
+.editor-ctxmenu {
+  position: fixed;
+  z-index: 90;
+  min-width: 210px;
+  background: rgba(30, 26, 22, 0.96);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.editor-ctxmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-ctxmenu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.editor-ctxmenu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.editor-ctxmenu-item.is-active {
+  color: var(--accent);
+}
+
+.editor-ctxmenu-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 2px;
+}
+
+.editor-ctxmenu-hint {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 /* In-app "maximize" - covers the workflow header/sidebar visually with a

@@ -11,10 +11,11 @@ other rating/`is_selected`/`karaoke_sync` edit elsewhere in this app) - this
 module never decides the EDL, only renders whatever `video_edit` currently
 holds and appends the result to `renders[]`.
 
-v1 supports reorder/trim/speed against a single audio track, image and video
-overlays (title card variants / logos / uploaded video-overlay sources) on
-their own free-floating lane, a crossfade/black/white transition at any clip
-boundary, and a per-clip fade-in/fade-out (black or white). AI-generated
+v1 supports reorder/trim/speed/reverse against a single audio track, image
+and video overlays (title card variants / logos / uploaded video-overlay
+sources, a video overlay also reversible the same way) on their own
+free-floating lane, a crossfade/black/white transition at any clip boundary,
+and a per-clip fade-in/fade-out (black or white). AI-generated
 clips are silent by convention in this app, so the render is always
 muted-video + Mureka-audio, never a mix of both - an overlay video is muted
 the same way (see `build_ffmpeg_command`'s overlay-input setup).
@@ -285,6 +286,7 @@ def _resolve_overlays(project: dict, settings: dict, video_edit: dict, canvas_wi
             'file_path': file_path,
             'start_s': start_ms / 1000,
             'duration_s': duration_ms / 1000,
+            'reverse': bool(overlay.get('reverse')),
             'x_pct': x_pct,
             'y_pct': y_pct,
             'width_pct': width_pct,
@@ -426,6 +428,7 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
             'trim_start_s': trim_start_ms / 1000,
             'trim_end_s': trim_end_ms / 1000 if trim_end_ms is not None else None,
             'speed': speed,
+            'reverse': bool(clip.get('reverse')),
             'tpad_s': 0.0,
             'transition_in': None,
             'fade_in': _resolve_fade(clip.get('fade_in'), effective_ms),
@@ -641,10 +644,17 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
                 f"crop={w}:{h}:(in_w-{w})*{fit['offset_x_pct']:.3f}/100:(in_h-{h})*{fit['offset_y_pct']:.3f}/100"
             )
             fit_chain = f"scale={scale_expr},{crop_expr}"
+        # `reverse` buffers the whole trimmed segment and emits it frame-order-
+        # reversed - placed right after the speed/PTS-reset (which the filter
+        # itself requires: it needs presentation timestamps starting at 0, the
+        # same reason the video-overlay branch below resets PTS before its own
+        # reverse) and before the scale/crop `fit_chain`, which doesn't care
+        # about frame order either way.
+        reverse_part = 'reverse,' if clip['reverse'] else ''
         chain = (
             f"[{i}:v]trim=start={clip['trim_start_s']:.3f}{trim_end_part},"
             f"setpts=(PTS-STARTPTS)/{clip['speed']:.4f},"
-            f"{fit_chain},setsar=1,fps={fps}"
+            f"{reverse_part}{fit_chain},setsar=1,fps={fps}"
         )
         content_duration_s = None
         if clip['trim_end_s'] is not None:
@@ -741,6 +751,15 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
             # makes every frame identical), so only applied for `kind:
             # 'video'`.
             pre_filter = f"setpts=PTS+{overlay['start_s']:.3f}/TB," if overlay['kind'] == 'video' else ''
+            # Same `reverse` filter the main clip chain above uses, gated to
+            # `kind: 'video'` like `pre_filter` - applying it to an image
+            # overlay's `-loop 1` stream (infinite) would hang, since `reverse`
+            # needs a stream with a real end to buffer. Ordered *before*
+            # `pre_filter`: `reverse` resets its output's own PTS to start at
+            # 0 (buffers the whole clip, replays it back to front), so the
+            # frame-0 realignment shift has to apply to *that* new PTS axis,
+            # not the original one.
+            reverse_filter = 'reverse,' if overlay['kind'] == 'video' and overlay.get('reverse') else ''
             if rotation_deg:
                 # Rotates the overlay about its own *top-left* corner (not
                 # its center) - exactly what Konva's `Group.rotation` does
@@ -757,7 +776,7 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
                 rotw_px = max(1, round(abs(padded_w * math.cos(rad)) + abs(padded_h * math.sin(rad))))
                 roth_px = max(1, round(abs(padded_w * math.sin(rad)) + abs(padded_h * math.cos(rad))))
                 filter_parts.append(
-                    f"[{idx}:v]{pre_filter}scale={ow_px}:{oh_px},format=rgba,"
+                    f"[{idx}:v]{reverse_filter}{pre_filter}scale={ow_px}:{oh_px},format=rgba,"
                     f"pad={padded_w}:{padded_h}:{ow_px}:{oh_px}:color=0x00000000,"
                     f"rotate={rad:.6f}:ow={rotw_px}:oh={roth_px}:c=none,"
                     f"{_overlay_alpha_filters(overlay)}[ovl{i}]",
@@ -771,7 +790,7 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
                 y_expr = f'{round(y_px - roth_px / 2)}'
             else:
                 filter_parts.append(
-                    f"[{idx}:v]{pre_filter}scale={ow_px}:{oh_px},format=rgba,{_overlay_alpha_filters(overlay)}[ovl{i}]",
+                    f"[{idx}:v]{reverse_filter}{pre_filter}scale={ow_px}:{oh_px},format=rgba,{_overlay_alpha_filters(overlay)}[ovl{i}]",
                 )
                 x_expr = f'{round(x_px)}'
                 y_expr = f'{round(y_px)}'

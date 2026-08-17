@@ -3,8 +3,15 @@
  * unit tested without mounting React or touching <video>/<audio> elements.
  *
  * An `EditorClip` is `{clip_id, scene_index, video_id, trim_start_ms,
- * trim_end_ms, speed, transition_in?, fade_in?, fade_out?}` (`trim_end_ms:
- * null` means "to the end of the source clip"). All functions here work in
+ * trim_end_ms, speed, reverse?, transition_in?, fade_in?, fade_out?}`
+ * (`trim_end_ms: null` means "to the end of the source clip"; `reverse` -
+ * absent/`false` by default - plays the trimmed content back to front,
+ * resolved into a real ffmpeg `reverse` filter at render time
+ * (`providers/editor.py`) and, like `transition_in`/fades, **not** simulated
+ * by the in-browser preview: a native `<video>` element has no negative
+ * `playbackRate`, so a reversed clip just plays forward here, same
+ * "approximate, non-blocking" tolerance the rest of this preview already
+ * has). All functions here work in
  * the *output* timeline's millisecond coordinate space (post-speed), not the
  * source clip's own.
  *
@@ -148,6 +155,22 @@ export function dropIndexForStart(timelineClips, fromIndex, newStartMs) {
 // and applies equally to the Ctrl+drag gesture in applyEdgeSpeed below.
 export const MIN_SPEED = 0.25;
 export const MAX_SPEED = 4;
+
+// Quick-cycle presets for the program monitor's right-click context menu
+// (EditorPreviewContextMenu.jsx) - the precise numeric field stays in
+// TimelineClipInspector.jsx; this is just a fast way to try a common speed
+// without leaving the preview.
+const SPEED_PRESETS = [0.5, 1, 1.5, 2];
+
+/** The next speed in `SPEED_PRESETS` after `currentSpeed`, wrapping back to
+ * the first once past the last - the exact value if `currentSpeed` doesn't
+ * match a preset (e.g. a custom value typed into the inspector) is treated
+ * as sitting just before the smallest preset it's less than, or wraps to the
+ * first preset if it's >= the largest. */
+export function nextSpeedPreset(currentSpeed) {
+  const next = SPEED_PRESETS.find((preset) => preset > (currentSpeed || 1) + 1e-9);
+  return next ?? SPEED_PRESETS[0];
+}
 
 // `transition_in.type` - a deliberately small, curated set (not ffmpeg
 // xfade's full catalogue of wipes/slides/etc.), mirrors

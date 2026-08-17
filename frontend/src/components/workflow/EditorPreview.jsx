@@ -7,9 +7,11 @@ import {
 } from '../../lib/overlays.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
 import { computeContentRect } from '../../lib/videoFrameRect.js';
+import { findActiveClip } from '../../lib/timeline.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import { useVideoFirstFrame } from '../../hooks/useClipThumbnails.js';
 import CanvasLayer from '../shared/CanvasLayer.jsx';
+import EditorPreviewContextMenu from './EditorPreviewContextMenu.jsx';
 
 /** One active overlay's Konva node - its own component (rather than inline
  * in the `.map` below) purely so each can call `useHtmlImage`/
@@ -36,11 +38,18 @@ import CanvasLayer from '../shared/CanvasLayer.jsx';
  * `providers/editor.py`'s conditional `colorchannelmixer` expression
  * produces in the real render. */
 function OverlayCanvasNode({
-  overlay, src, containerW, containerH, playheadMs, isSelected, isPlaying, onSelect, onChange,
+  overlay, src, containerW, containerH, playheadMs, isSelected, isPlaying, onSelect, onChange, onNaturalSize,
 }) {
   const videoFrame = useVideoFirstFrame(overlay.kind === 'video' ? src : null);
   const imageSrc = overlay.kind === 'video' ? videoFrame : src;
   const { image, width: naturalW, height: naturalH } = useHtmlImage(imageSrc);
+  // Reports the source's real pixel size up to useEditorStage.js's
+  // resolveOverlayNaturalAspect, which corrects a freshly-created overlay's
+  // square placeholder box to this aspect ratio - see that function's own
+  // comment. A no-op for any overlay that isn't the one just created.
+  useEffect(() => {
+    if (naturalW && naturalH) onNaturalSize(overlay.overlay_id, naturalW, naturalH);
+  }, [overlay.overlay_id, naturalW, naturalH, onNaturalSize]);
   if (!image) return null;
   return (
     <CanvasLayer
@@ -94,16 +103,41 @@ function OverlayCanvasNode({
  * use. Position/timing edits still commit through `useEditorStage.js`'s
  * normal undo history; this preview stays otherwise approximate (see
  * `editor_previewDisclaimer` - it doesn't replicate a clip's own `fit`/zoom/
- * crop) - the real render composites overlays with ffmpeg's `overlay` filter
- * instead (`providers/editor.py`). */
+ * crop, or a `reverse`d clip's actual reversed playback - see lib/timeline.js's
+ * own docstring on why) - the real render composites overlays with ffmpeg's
+ * `overlay` filter instead (`providers/editor.py`).
+ *
+ * Right-clicking the frame opens `EditorPreviewContextMenu.jsx`, a shortcut
+ * to clip actions that already exist elsewhere (the toolbar, the clip
+ * inspector) for whichever clip the menu should act on: the single selected
+ * clip if there's exactly one (`selectedClipIds`, matching what the side
+ * panel's own inspector already shows), else whichever clip sits under the
+ * current playhead (`findActiveClip`) - so right-clicking the monitor "just
+ * works" without the user having to go select the clip on the timeline
+ * first. */
 export default function EditorPreview({
   L, videoRef, audioRef, projectId, selectedTrack, overlays, playheadMs, isPlaying,
   titleCardVariants, logos, overlayVideoSources, canvasSize, isFullscreen, onToggleFullscreen,
-  selectedOverlayId, actions,
+  selectedOverlayId, actions, clips, selectedClipIds,
 }) {
   const frameRef = useRef(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [videoNaturalSize, setVideoNaturalSize] = useState({ width: 0, height: 0 });
+  const [contextMenu, setContextMenu] = useState(null);
+
+  function openContextMenu(e) {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }
+  const contextMenuClip = contextMenu
+    ? (
+      (selectedClipIds && selectedClipIds.size === 1
+        ? (clips || []).find((c) => selectedClipIds.has(c.clip_id))
+        : null)
+      || findActiveClip(clips || [], playheadMs)?.clip
+      || null
+    )
+    : null;
 
   useEffect(() => {
     const el = frameRef.current;
@@ -148,7 +182,7 @@ export default function EditorPreview({
   const activeOverlays = activeOverlaysAt(overlays, playheadMs);
   return (
     <div className="editor-preview">
-      <div className="editor-preview-frame" ref={frameRef}>
+      <div className="editor-preview-frame" ref={frameRef} onContextMenu={openContextMenu}>
         <video
           ref={videoRef} muted playsInline
           style={containerSize.width > 0 ? {
@@ -181,6 +215,7 @@ export default function EditorPreview({
                     isSelected={selectedOverlayId === overlay.overlay_id} isPlaying={isPlaying}
                     onSelect={() => actions.selectOverlay(overlay.overlay_id)}
                     onChange={(patch) => actions.setOverlayTransform(overlay.overlay_id, patch)}
+                    onNaturalSize={actions.resolveOverlayNaturalAspect}
                   />
                 );
               })}
@@ -195,6 +230,12 @@ export default function EditorPreview({
         >
           {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
+        {contextMenu && (
+          <EditorPreviewContextMenu
+            L={L} x={contextMenu.x} y={contextMenu.y} clip={contextMenuClip} actions={actions}
+            onClose={() => setContextMenu(null)}
+          />
+        )}
       </div>
       <audio ref={audioRef} src={selectedTrack ? mediaUrl(`projects/${projectId}/${selectedTrack.file_path}`) : undefined} style={{ display: 'none' }} />
     </div>

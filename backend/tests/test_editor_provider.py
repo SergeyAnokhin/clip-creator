@@ -27,11 +27,11 @@ def _track(track_id='trk_1', duration_ms=8000):
     return {'track_id': track_id, 'file_path': 'music/trk_1.mp3', 'duration_ms': duration_ms}
 
 
-def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, speed=1.0,
+def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, speed=1.0, reverse=False,
           transition_in=None, fade_in=None, fade_out=None, fit=None):
     clip = {
         'scene_index': scene_index, 'video_id': video_id,
-        'trim_start_ms': trim_start_ms, 'trim_end_ms': trim_end_ms, 'speed': speed,
+        'trim_start_ms': trim_start_ms, 'trim_end_ms': trim_end_ms, 'speed': speed, 'reverse': reverse,
     }
     if transition_in is not None:
         clip['transition_in'] = transition_in
@@ -46,7 +46,7 @@ def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, sp
 
 def _overlay(kind='logo', source_id='logo_1', start_ms=0, duration_ms=2000,
              x_pct=80, y_pct=80, width_pct=20, height_pct=20, rotation_deg=0, opacity=1.0,
-             fade_in_ms=0, fade_out_ms=0):
+             fade_in_ms=0, fade_out_ms=0, reverse=False):
     """`height_pct` is already in the current `height_axis: 'width'`
     convention (percentage of canvas width, same axis as `width_pct` - see
     `_migrate_overlay_position`'s docstring) - `test_build_render_plan_
@@ -57,7 +57,7 @@ def _overlay(kind='logo', source_id='logo_1', start_ms=0, duration_ms=2000,
         'start_ms': start_ms, 'duration_ms': duration_ms,
         'x_pct': x_pct, 'y_pct': y_pct, 'width_pct': width_pct, 'height_pct': height_pct,
         'rotation_deg': rotation_deg, 'opacity': opacity,
-        'fade_in_ms': fade_in_ms, 'fade_out_ms': fade_out_ms, 'height_axis': 'width',
+        'fade_in_ms': fade_in_ms, 'fade_out_ms': fade_out_ms, 'height_axis': 'width', 'reverse': reverse,
     }
 
 
@@ -134,6 +134,24 @@ def test_build_render_plan_speed_scales_effective_duration():
 
     # 4s of source at 2x plays back in 2s, so a 4s track needs 2s of padding.
     assert plan['clips'][0]['tpad_s'] == pytest.approx(2.0)
+
+
+def test_build_render_plan_resolves_reverse_flag():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip(reverse=True)]}
+
+    plan = editor.build_render_plan(project, video_edit)
+
+    assert plan['clips'][0]['reverse'] is True
+
+
+def test_build_render_plan_defaults_reverse_to_false():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()]}
+
+    plan = editor.build_render_plan(project, video_edit)
+
+    assert plan['clips'][0]['reverse'] is False
 
 
 def test_build_render_plan_no_padding_when_clips_cover_the_track():
@@ -668,6 +686,28 @@ def test_build_ffmpeg_command_fade_in_and_out_shape():
     assert 'tpad=stop_mode=clone:stop_duration=4.000' in filter_complex
 
 
+def test_build_ffmpeg_command_reverse_inserts_reverse_filter_after_setpts():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip(reverse=True)]}
+    plan = editor.build_render_plan(project, video_edit)
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    joined = ' '.join(cmd)
+
+    assert 'setpts=(PTS-STARTPTS)/1.0000,reverse,' in joined
+
+
+def test_build_ffmpeg_command_no_reverse_filter_by_default():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()]}
+    plan = editor.build_render_plan(project, video_edit)
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    joined = ' '.join(cmd)
+
+    assert 'reverse' not in joined
+
+
 # ---------- build_ffmpeg_command ----------
 
 def test_build_ffmpeg_command_shape():
@@ -934,6 +974,42 @@ def test_build_ffmpeg_command_video_overlay_shifts_pts_and_is_never_mapped_for_a
     # Silent-overlay invariant - the overlay video's own audio stream (index
     # 2, after the one clip [0] and the audio track [1]) is never mapped.
     assert '2:a' not in joined
+
+
+def test_build_ffmpeg_command_reversed_video_overlay_reverses_before_the_pts_shift():
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [_overlay(kind='video', source_id='ovv_1', start_ms=1500, duration_ms=2000, reverse=True)],
+        'overlay_video_sources': [{'id': 'ovv_1', 'file_path': 'editor/overlay_sources/ovv_1.mp4', 'duration_seconds': None}],
+    }
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    assert 'reverse,setpts=PTS+1.500/TB,scale=' in filter_complex
+
+
+def test_build_ffmpeg_command_reverse_on_an_image_overlay_is_ignored():
+    """`reverse: true` only ever means anything for `kind: 'video'` - an
+    image overlay's `-loop 1` stream is infinite, so applying `reverse` to it
+    would hang ffmpeg (the filter needs a stream with a real end to buffer).
+    A stray `reverse: true` on a logo/title-card overlay (never settable
+    through the UI, but not guarded against on the data side either) must be
+    silently ignored, not passed through to the filtergraph."""
+    project = _project(_video(duration_seconds=4), _track(duration_ms=8000))
+    settings = {'logos': [{'id': 'logo_1', 'file_path': 'logos/logo_1.png'}]}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'overlays': [_overlay(reverse=True)],
+    }
+    plan = editor.build_render_plan(project, video_edit, settings)
+
+    cmd = editor.build_ffmpeg_command(plan, Path('/proj'), Path('/proj/editor/out.mp4'))
+    filter_complex = cmd[cmd.index('-filter_complex') + 1]
+
+    assert 'reverse' not in filter_complex
 
 
 def test_build_ffmpeg_command_image_overlay_has_no_pts_shift():
@@ -1482,6 +1558,86 @@ def test_render_to_file_real_ffmpeg_with_faded_overlay(tmp_path, monkeypatch):
     dest = project_dir / 'editor' / 'out.mp4'
 
     result = asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest, settings))
+
+    assert dest.is_file()
+    assert dest.stat().st_size > 0
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_render_to_file_real_ffmpeg_with_reversed_clip(tmp_path):
+    """`reverse` buffers the whole trimmed clip and re-emits it frame-order-
+    reversed (`build_ffmpeg_command`'s new `reverse,` filter, dropped in right
+    after the speed/PTS-reset) - a real run is the only thing that proves the
+    filter graph is actually valid, not just plausible-looking."""
+    project_dir = tmp_path / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True)
+
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=2', str(videos_dir / 'a.mp4')],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', str(music_dir / 'trk_1.mp3')],
+        check=True, capture_output=True,
+    )
+
+    project = {'id': 'poem-a', 'scenes': [{'videos': [_video('a', 2)]}], 'mureka': {'tracks': [_track(duration_ms=2000)]}}
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip(scene_index=0, video_id='a', reverse=True)]}
+    dest = project_dir / 'editor' / 'out.mp4'
+
+    result = asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest))
+
+    assert dest.is_file()
+    assert dest.stat().st_size > 0
+    assert result['clip_count'] == 1
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_render_to_file_real_ffmpeg_with_reversed_video_overlay(tmp_path):
+    """Same real-run proof as the reversed-clip test above, but for a video
+    overlay's own `reverse,` (placed before its frame-0 `setpts` realignment,
+    not after - see `build_ffmpeg_command`'s comment on why the order
+    matters)."""
+    project_dir = tmp_path / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True)
+    overlay_sources_dir = project_dir / 'editor' / 'overlay_sources'
+    overlay_sources_dir.mkdir(parents=True)
+
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=2', str(videos_dir / 'a.mp4')],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', str(music_dir / 'trk_1.mp3')],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        [
+            'ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:d=2',
+            '-f', 'lavfi', '-i', 'sine=frequency=880:duration=2',
+            '-shortest', str(overlay_sources_dir / 'ovv_1.mp4'),
+        ],
+        check=True, capture_output=True,
+    )
+
+    project = {'id': 'poem-a', 'scenes': [{'videos': [_video('a', 2)]}], 'mureka': {'tracks': [_track(duration_ms=2000)]}}
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip(scene_index=0, video_id='a')],
+        'overlays': [_overlay(
+            kind='video', source_id='ovv_1', start_ms=500, duration_ms=1000,
+            x_pct=20, y_pct=20, width_pct=30, height_pct=30, reverse=True,
+        )],
+        'overlay_video_sources': [{'id': 'ovv_1', 'file_path': 'editor/overlay_sources/ovv_1.mp4', 'duration_seconds': None}],
+    }
+    dest = project_dir / 'editor' / 'out.mp4'
+
+    result = asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest, {}))
 
     assert dest.is_file()
     assert dest.stat().st_size > 0

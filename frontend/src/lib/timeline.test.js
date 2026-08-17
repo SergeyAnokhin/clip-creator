@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_SPEED, MIN_CLIP_MS, MIN_SPEED, UNKNOWN_DURATION_FALLBACK_MS, applyEdgeSpeed, applyEdgeTrim, clampTrim,
   computeClipDurationMs, computeTimelineClips, dropIndexForStart, findActiveClip, getTotalDurationMs, moveClip,
-  resolveTrimEndMs, splitClipsAt,
+  nextSpeedPreset, resolveTrimEndMs, splitClipsAt,
 } from './timeline.js';
 
 describe('resolveTrimEndMs', () => {
@@ -234,6 +234,29 @@ describe('applyEdgeSpeed', () => {
   it('clamps to MIN_SPEED/MAX_SPEED', () => {
     expect(applyEdgeSpeed(clip, 5000, 'end', 999999).speed).toBe(MIN_SPEED);
     expect(applyEdgeSpeed(clip, 5000, 'end', -2900).speed).toBe(MAX_SPEED);
+  });
+});
+
+describe('nextSpeedPreset', () => {
+  it('steps to the next preset above the current speed', () => {
+    expect(nextSpeedPreset(0.5)).toBe(1);
+    expect(nextSpeedPreset(1)).toBe(1.5);
+    expect(nextSpeedPreset(1.5)).toBe(2);
+  });
+
+  it('wraps back to the smallest preset once past the largest', () => {
+    expect(nextSpeedPreset(2)).toBe(0.5);
+    expect(nextSpeedPreset(4)).toBe(0.5);
+  });
+
+  it('treats a missing/falsy speed as the default 1x', () => {
+    expect(nextSpeedPreset(undefined)).toBe(1.5);
+    expect(nextSpeedPreset(0)).toBe(1.5);
+  });
+
+  it('steps up from a non-preset custom value to the next preset above it', () => {
+    expect(nextSpeedPreset(0.75)).toBe(1);
+    expect(nextSpeedPreset(3)).toBe(0.5);
   });
 });
 

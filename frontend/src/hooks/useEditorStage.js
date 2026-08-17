@@ -65,6 +65,15 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   // no permission prompt, and "paste" only ever means "append a copy of
   // these clips to this timeline".
   const clipboardRef = useRef([]);
+  // The overlay `addOverlay` just created, if any - `defaultOverlayTransform`
+  // has to start every new overlay as a width_pct/height_pct square (no
+  // source image is loaded yet at creation time to know its real aspect
+  // ratio), so `resolveOverlayNaturalAspect` below corrects it to the real
+  // aspect once EditorPreview.jsx's OverlayCanvasNode finishes loading the
+  // source image. Scoped to only the just-created overlay (not every overlay
+  // on every mount/playhead-scrub) so it never silently undoes a later
+  // manual resize.
+  const pendingAspectFitOverlayIdRef = useRef(null);
 
   const videoEdit = activeProject?.video_edit || EMPTY_VIDEO_EDIT;
   const clips = videoEdit.clips || [];
@@ -294,7 +303,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       ...edit,
       clips: [...edit.clips, {
         clip_id: randomId('clip'), scene_index: sceneIndex, video_id: videoId,
-        trim_start_ms: 0, trim_end_ms: null, speed: 1.0,
+        trim_start_ms: 0, trim_end_ms: null, speed: 1.0, reverse: false,
       }],
     }));
   }
@@ -317,6 +326,16 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, speed } : c)),
     }), { immediate: false });
   }
+  /** Toggles a clip's `reverse` flag - plays its trimmed content back to
+   * front (`providers/editor.py`'s `build_ffmpeg_command`), independent of
+   * `speed`. Not simulated by the in-browser preview (nothing to invalidate
+   * there) - see lib/timeline.js's own docstring on why. */
+  function setClipReverse(clipId, reverse) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, reverse } : c)),
+    }), { immediate: false });
+  }
   /** How a clip whose own aspect ratio doesn't match the render canvas fills
    * it - `fit: {mode:'cover'|'contain', zoom, offset_x_pct, offset_y_pct}`.
    * Absent/`null` means `cover` at `zoom:1`, centered (today's default -
@@ -329,14 +348,16 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, fit } : c)),
     }), { immediate: false });
   }
-  /** Reverts one clip's trim window and speed back to "the whole source clip,
-   * at 1x" - the same shape a freshly added clip starts in (see
-   * addSceneClip above). */
+  /** Reverts one clip's trim window, speed and reverse flag back to "the
+   * whole source clip, forward, at 1x" - the same shape a freshly added clip
+   * starts in (see addSceneClip above). */
   function resetClip(clipId) {
     invalidatePreviewClip();
     commitVideoEdit((edit) => ({
       ...edit,
-      clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, trim_start_ms: 0, trim_end_ms: null, speed: 1.0 } : c)),
+      clips: edit.clips.map((c) => (
+        c.clip_id === clipId ? { ...c, trim_start_ms: 0, trim_end_ms: null, speed: 1.0, reverse: false } : c
+      )),
     }));
   }
   function setMurekaTrackId(trackId) {
@@ -389,8 +410,29 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       start_ms: Math.round(preview.playheadMs), duration_ms: DEFAULT_OVERLAY_DURATION_MS,
       ...defaultOverlayTransform(), opacity: 1, fade_in_ms: 0, fade_out_ms: 0,
     };
+    pendingAspectFitOverlayIdRef.current = overlay.overlay_id;
     commitVideoEdit((edit) => ({ ...edit, overlays: [...(edit.overlays || []), overlay] }));
     setSelectedOverlayId(overlay.overlay_id);
+  }
+  /** Corrects the just-created overlay's square placeholder size to the
+   * source image's real aspect ratio, once it's known - see
+   * `pendingAspectFitOverlayIdRef`'s own comment above. `width_pct` stays as
+   * placed; `height_pct` is recomputed from it (both are already fractions
+   * of the canvas's own width - see lib/overlays.js's docstring - so their
+   * ratio is exactly naturalH/naturalW regardless of canvas size), and
+   * `y_pct` shifts to keep the box's bottom-right corner anchored where the
+   * placeholder left it instead of only growing/shrinking downward. */
+  function resolveOverlayNaturalAspect(overlayId, naturalW, naturalH) {
+    if (pendingAspectFitOverlayIdRef.current !== overlayId || !naturalW || !naturalH) return;
+    pendingAspectFitOverlayIdRef.current = null;
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => {
+        if (o.overlay_id !== overlayId) return o;
+        const heightPct = o.width_pct * (naturalH / naturalW);
+        return { ...o, y_pct: o.y_pct + (o.height_pct - heightPct), height_pct: heightPct };
+      }),
+    }), { immediate: false });
   }
   function setOverlayTiming(overlayId, startMs, durationMs) {
     commitVideoEdit((edit) => ({
@@ -416,6 +458,17 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     commitVideoEdit((edit) => ({
       ...edit,
       overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, opacity } : o)),
+    }), { immediate: false });
+  }
+  /** Toggles a `kind: 'video'` overlay's `reverse` flag, same meaning as a
+   * clip's own (`setClipReverse` above) - meaningless for an image overlay
+   * (`_resolve_overlays`/`build_ffmpeg_command` on the render side only ever
+   * read it for `kind: 'video'`), so `TimelineOverlayInspector.jsx` only
+   * exposes this control there. */
+  function setOverlayReverse(overlayId, reverse) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (o.overlay_id === overlayId ? { ...o, reverse } : o)),
     }), { immediate: false });
   }
   function setOverlayFade(overlayId, fadeInMs, fadeOutMs) {
@@ -483,10 +536,11 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     resetForProject,
     actions: {
       reorderClip, splitAtPlayhead, removeClips, addSceneClip, changeClipVideo,
-      setClipTrim, setClipSpeed, setClipFit, resetClip, setMurekaTrackId, setCanvasOrientation, selectClip, setSelection, selectAll,
+      setClipTrim, setClipSpeed, setClipReverse, setClipFit, resetClip, setMurekaTrackId, setCanvasOrientation,
+      selectClip, setSelection, selectAll,
       duplicateClips, copyClips, pasteClips, undo, redo,
-      addOverlay, setOverlayTiming, setOverlayTransform, setOverlayOpacity, setOverlayFade,
-      removeOverlay, selectOverlay, uploadOverlayVideo, deleteOverlayVideo,
+      addOverlay, setOverlayTiming, setOverlayTransform, setOverlayOpacity, setOverlayReverse, setOverlayFade,
+      removeOverlay, selectOverlay, uploadOverlayVideo, deleteOverlayVideo, resolveOverlayNaturalAspect,
       setClipTransition, setClipFadeIn, setClipFadeOut, selectTransition,
       play: preview.play, pause: preview.pause, seek: preview.seek,
       startRender: render.startRender, deleteRender: render.deleteRender, downloadRender: render.downloadRender,

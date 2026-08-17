@@ -165,6 +165,7 @@ export default function EditorStage({
           overlayVideoSources={overlayVideoSources} canvasSize={canvasSize}
           isFullscreen={isFullscreen} onToggleFullscreen={() => setIsFullscreen((v) => !v)}
           selectedOverlayId={selectedOverlayId} actions={actions}
+          clips={clips} selectedClipIds={selectedClipIds}
         />
 
         {!isMobile && (

@@ -162,6 +162,18 @@ describe('useEditorStage clip mutations', () => {
     expect(project.video_edit.clips[3].video_id).toBe('va');
     expect(result.current.state.selectedClipIds).toEqual(new Set([ids[3]]));
   });
+
+  it('setClipReverse toggles just that clip, independent of speed', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.setClipReverse('clip_a', true); });
+
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_a')).toMatchObject({ reverse: true });
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_b').reverse).toBeFalsy();
+
+    act(() => { result.current.actions.setClipReverse('clip_a', false); });
+    expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_a')).toMatchObject({ reverse: false });
+  });
 });
 
 describe('useEditorStage history (undo/redo)', () => {
@@ -211,15 +223,16 @@ describe('useEditorStage history (undo/redo)', () => {
 });
 
 describe('useEditorStage resetClip', () => {
-  it("reverts a clip's trim and speed back to the full source at 1x", () => {
+  it("reverts a clip's trim, speed and reverse flag back to the full source, forward, at 1x", () => {
     const { result, project } = setupMultiClip();
     act(() => { result.current.actions.setClipSpeed('clip_a', 2); });
     act(() => { result.current.actions.setClipTrim('clip_a', 500, 3000); });
+    act(() => { result.current.actions.setClipReverse('clip_a', true); });
 
     act(() => { result.current.actions.resetClip('clip_a'); });
 
     expect(project.video_edit.clips.find((c) => c.clip_id === 'clip_a')).toMatchObject({
-      trim_start_ms: 0, trim_end_ms: null, speed: 1.0,
+      trim_start_ms: 0, trim_end_ms: null, speed: 1.0, reverse: false,
     });
   });
 });
@@ -238,6 +251,44 @@ describe('useEditorStage overlays', () => {
     expect(result.current.state.selectedOverlayId).toBe(overlay.overlay_id);
     // Picking an overlay clears any clip selection - the inspector shows one or the other.
     expect(result.current.state.selectedClipIds).toEqual(new Set());
+  });
+
+  it('resolveOverlayNaturalAspect fixes the fresh square placeholder to the source\'s real aspect ratio', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('title_card', 'tcv_1'); });
+    const overlay = project.video_edit.overlays[0];
+    expect(overlay.width_pct).toBe(overlay.height_pct); // the pre-fix square placeholder
+
+    // A wide (2:1) source image, e.g. a title-card text overlay.
+    act(() => { result.current.actions.resolveOverlayNaturalAspect(overlay.overlay_id, 400, 200); });
+
+    const fixed = project.video_edit.overlays[0];
+    expect(fixed.width_pct).toBe(overlay.width_pct); // width untouched
+    expect(fixed.height_pct).toBeCloseTo(overlay.width_pct * 0.5, 5); // height follows naturalH/naturalW
+    // Bottom-right corner stays put instead of only growing/shrinking downward.
+    expect(fixed.y_pct + fixed.height_pct).toBeCloseTo(overlay.y_pct + overlay.height_pct, 5);
+  });
+
+  it('resolveOverlayNaturalAspect is a no-op for an overlay that was not the one just created', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('logo', 'logo_1'); });
+    const overlay = project.video_edit.overlays[0];
+
+    act(() => { result.current.actions.resolveOverlayNaturalAspect('some-other-overlay-id', 400, 200); });
+
+    expect(project.video_edit.overlays[0]).toEqual(overlay);
+  });
+
+  it('setOverlayReverse toggles just that overlay', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addOverlay('video', 'ovv_1'); });
+    const id = project.video_edit.overlays[0].overlay_id;
+
+    act(() => { result.current.actions.setOverlayReverse(id, true); });
+    expect(project.video_edit.overlays[0]).toMatchObject({ reverse: true });
+
+    act(() => { result.current.actions.setOverlayReverse(id, false); });
+    expect(project.video_edit.overlays[0]).toMatchObject({ reverse: false });
   });
 
   it('setOverlayTiming/setOverlayTransform/setOverlayOpacity patch just that overlay', () => {

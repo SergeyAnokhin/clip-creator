@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react';
+import { Rewind, Trash2 } from 'lucide-react';
 import { EffectSlider } from './PosterPanels.jsx';
 import { MAX_OVERLAY_WIDTH_PCT, MIN_OVERLAY_MS, MIN_OVERLAY_WIDTH_PCT } from '../../lib/overlays.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
@@ -109,6 +109,15 @@ export default function TimelineOverlayInspector({
       </span>
 
       <div className="tl-inspector-actions">
+        {overlay.kind === 'video' && (
+          <button
+            className={`icon-btn${overlay.reverse ? ' is-active' : ''}`}
+            title={L.overlay_reverseLabel} aria-pressed={!!overlay.reverse}
+            onClick={() => actions.setOverlayReverse(overlay.overlay_id, !overlay.reverse)}
+          >
+            <Rewind size={14} />
+          </button>
+        )}
         <button
           className="icon-btn icon-btn-danger" title={L.overlay_remove}
           onClick={() => actions.removeOverlay(overlay.overlay_id)}

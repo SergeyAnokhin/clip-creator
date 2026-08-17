@@ -122,12 +122,20 @@ overlay video and rendering are the only real job/API calls (see the route
 table below).
 
 An **`EditorClip`** is `{clip_id, scene_index, video_id, trim_start_ms,
-trim_end_ms, speed, fit?}` — `video_id` must resolve inside
+trim_end_ms, speed, reverse?, fit?}` — `video_id` must resolve inside
 `scenes[scene_index].videos[]` but need **not** be unique across `clips[]`: the
 timeline's razor (`lib/timeline.js`'s `splitClipsAt`) turns one clip into two
 entries over the same source video with adjacent trim windows, and the render
 resolves every clip independently. `speed` is an ffmpeg `setpts` multiplier; video
-clips are always muted, the picked track being the only audio.
+clips are always muted, the picked track being the only audio. `reverse`
+(absent/`false` by default) plays the trimmed window back to front - an
+ffmpeg `reverse` filter placed right after the speed/PTS-reset
+(`providers/editor.py::build_ffmpeg_command`), independent of `speed`;
+editable via `TimelineClipInspector.jsx`'s toggle next to the speed field or
+the program monitor's right-click menu (`EditorPreviewContextMenu.jsx`). The
+in-browser preview does **not** simulate it (a native `<video>` has no
+negative `playbackRate`) - a reversed clip just plays forward there, same
+"approximate, non-blocking" tolerance the rest of this preview already has.
 `trim_end_ms: null` means "to the end of the source", falling back to that
 video's `duration_seconds` — **except when that duration is itself unknown** (an
 uploaded/imported clip), where the render leaves the end genuinely unbounded
@@ -147,8 +155,9 @@ rest), an explicit opt-in for a clip the user deliberately wants letterboxed.
 
 An **overlay** entry in `overlays[]` is `{overlay_id, kind:
 'title_card'|'logo'|'video', source_id, start_ms, duration_ms, x_pct, y_pct,
-width_pct, height_pct, rotation_deg, opacity, fade_in_ms, fade_out_ms}` —
-shown over the video for `[start_ms, start_ms+duration_ms)` on the output
+width_pct, height_pct, rotation_deg, opacity, fade_in_ms, fade_out_ms,
+reverse?}` — shown over the video for `[start_ms, start_ms+duration_ms)` on
+the output
 timeline (same millisecond axis as a clip's own `startMs`/`durationMs`).
 Unlike clips, overlays don't tile back to back: they float freely, can
 overlap each other, or leave gaps, and live on their own track above the
@@ -206,6 +215,17 @@ program monitor wrote `CanvasLayer.jsx`'s own camelCase pct fields
 (`xPct`/`yPct`/`widthPct`/`heightPct`/`rotationDeg` - the shape
 `PosterCanvasLayers.jsx` uses natively) straight onto the overlay instead of
 converting them to this shape's snake_case fields first.
+
+`reverse` (absent/`false` by default) only ever means anything for `kind:
+'video'` - same meaning and same ffmpeg `reverse` filter as `EditorClip.
+reverse` above, but placed *before* the video overlay's own frame-0 `setpts`
+realignment rather than after (`build_ffmpeg_command`'s video-overlay
+branch: `reverse` resets the stream's PTS to start at 0, so the realignment
+shift has to apply to that new axis). Silently ignored for an image overlay
+(`kind: 'title_card'|'logo'`) even if somehow set - applying `reverse` to
+that kind's `-loop 1` infinite still-image stream would hang ffmpeg, since
+the filter needs a stream with a real end to buffer.
+`TimelineOverlayInspector.jsx` only shows the toggle for a video overlay.
 
 **`overlay_video_sources[]`** (`VideoEdit`, alongside `overlays[]`) is
 `[{id, file_path, duration_seconds}]` - uploaded video files usable as a
