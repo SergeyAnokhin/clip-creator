@@ -279,12 +279,19 @@ A **test render** (`kind: 'test'`, `range` set) renders only a
 picked by dragging the timeline ruler in the frontend, an ephemeral selection
 that's never itself part of `VideoEdit` (see `docs/architecture.md`).
 `providers/editor.py`'s `_trim_plan_to_range` post-processes the normal,
-fully-resolved render plan: clips entirely outside the range are dropped, the
-new first/last clip's own trim points are tightened to their own content
-inside the range, a transition into the new first clip is cleared, overlays
-are kept only if they intersect the range (shifted so the range's own start
-becomes the new timeline zero), and the audio track is trimmed to the same
-window (`atrim`/`asetpts` in `build_ffmpeg_command`).
+fully-resolved render plan: if the requested start lands inside a
+transition's own blend window, the *effective* start is first pulled back to
+where that transition begins (up to its own `duration_ms` earlier than
+requested) so the clip it blends from is kept and the transition still
+renders, rather than silently turning into a hard cut - the frontend
+timeline draws clip blocks back-to-back with no visual cue for the overlap,
+so a range typed against that display can easily land right on such a
+boundary. Clips entirely outside the (possibly pulled-back) range are
+dropped, the new first/last clip's own trim points are tightened to their
+own content inside the range, overlays are kept only if they intersect the
+range (shifted so the range's own start becomes the new timeline zero), and
+the audio track is trimmed to the same window (`atrim`/`asetpts` in
+`build_ffmpeg_command`).
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` —
 `text_block` is one free-text field the user edits directly (not separate

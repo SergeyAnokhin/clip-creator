@@ -204,17 +204,22 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    breakpoint — a keyboard alternative (Tab to a clip, arrow keys between
    clips, Enter/Space to select) covers non-mouse desktop use instead.
 
-   Dragging on the timeline's **ruler** (`useTimelineDrag.js`'s
-   `startRangeSelect`, a dedicated gesture that takes priority there over the
-   ruler's usual scrub-by-background click) picks an ephemeral time range,
-   shown as a translucent band spanning the whole timeline height - not part
-   of `video_edit`, just render-time input local to `EditorStage.jsx`. With a
-   range picked, "Собрать тестовое видео" renders only that window
-   (`providers/editor.py`'s `_trim_plan_to_range`, applied after the normal
-   full-EDL plan is resolved) instead of the whole timeline - cheap iteration
-   on one overlay/effect without paying for a full render. Its `renders[]`
-   entry is tagged `kind: 'test'` (vs. `'final'`) with its own `range`, shown
-   with a badge in the renders list.
+   `TestRangeModal.jsx` (opened by the "Собрать тестовое видео" button in
+   `EditorStage.jsx`, not a ruler gesture) picks an ephemeral `{startMs,
+   endMs}` test range - mm:ss From/To inputs, shown on the ruler as a thin
+   `.tl-test-range-tick` marker. Not part of `video_edit`, just render-time
+   input local to `EditorStage.jsx` (persisted per-project to `localStorage`,
+   key `editorTestRange_{projectId}`). With a range picked, it renders only
+   that window (`providers/editor.py`'s `_trim_plan_to_range`, applied after
+   the normal full-EDL plan is resolved) instead of the whole timeline -
+   cheap iteration on one overlay/effect without paying for a full render.
+   Its `renders[]` entry is tagged `kind: 'test'` (vs. `'final'`) with its own
+   `range`, shown with a badge in the renders list. Because the timeline
+   layout doesn't model a transition's overlap (previous paragraph), a range
+   typed right on a clip boundary can land inside that transition's blend
+   window - `_trim_plan_to_range` pulls the effective start back to where the
+   blend actually begins so the transition still renders, rather than
+   silently dropping it.
 
 Scenes and Images are two stages because they are two independent AI calls with
 independent model choices — you can reroll a scene's images without re-running
@@ -824,6 +829,16 @@ lives in the button's own component state.
   succeeded and the job/`renders[]` entry is already correct. Retrying the
   probe a few seconds later (or just re-running it) clears up on its own; it's
   a filesystem-timing artifact of manual verification, not a real render bug.
+- **Verifying an Editor-stage render (transitions, fades, overlays) needs
+  actual frame sampling, not just "the file exists."** `ffmpeg`'s own exit
+  code says nothing about whether a filtergraph produced the intended visual
+  result. `tests/test_editor_provider.py`'s real-ffmpeg tests build solid-
+  color `lavfi` clips (`ffmpeg -f lavfi -i color=c=red:s=64x64:d=2 …`) so the
+  expected output at any timestamp is known in advance, then decode one frame
+  at a given time to a 1×1 `rawvideo rgb24` pixel to check it (`ffmpeg -ss <t>
+  -i out.mp4 -frames:v 1 -vf scale=1:1 -f rawvideo -pix_fmt rgb24 -`) — cheap,
+  exact, and scriptable across a range of timestamps to confirm a
+  crossfade/fade-through-color actually blended where expected.
 - **A Konva `Stage` filling a dynamic container needs its first size read
   synchronously.** `ResizeObserver`'s first callback isn't guaranteed to land in
   the mount frame (it has failed to fire at all in an automated browser, leaving

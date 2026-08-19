@@ -1163,7 +1163,16 @@ def test_trim_plan_to_range_drops_clips_entirely_outside_it():
     assert trimmed['clips'][0]['file_path'] == 'videos/vid_b.mp4'
 
 
-def test_trim_plan_to_range_clears_transition_on_the_new_first_clip():
+def test_trim_plan_to_range_pulls_start_back_to_keep_a_transition_on_the_boundary():
+    """The frontend timeline draws clip 0/clip 1 back-to-back with the
+    boundary at 4000 (see this module's own top docstring - it doesn't model
+    the transition's overlap), so a range typed as "start at 4000" is the
+    obvious way a user would try to preview the transition sitting on that
+    boundary. Naively that would drop clip 0 (its real content ends exactly
+    at 4000) and, with it, clip 1's incoming transition (nothing left to
+    blend from) - `_trim_plan_to_range` must instead pull the effective start
+    back to 3500 (where the transition's own blend actually begins) so both
+    clips are kept and the transition still renders."""
     project = _two_clip_project(duration_a=4, duration_b=4, track_duration_ms=8000)
     video_edit = {
         'mureka_track_id': 'trk_1',
@@ -1177,13 +1186,13 @@ def test_trim_plan_to_range_clears_transition_on_the_new_first_clip():
     }
     plan = editor.build_render_plan(project, video_edit)
     assert plan['clips'][1]['transition_in'] is not None  # sanity check on the untrimmed plan
-    # Range starts after clip 0 ends (clip 1's transition pulls its own start
-    # to 3500) - only clip 1 is kept, so its incoming transition is now
-    # meaningless (there's no clip 0 left to blend from).
+
     trimmed = editor._trim_plan_to_range(plan, 4000, 6000)
 
-    assert len(trimmed['clips']) == 1
-    assert trimmed['clips'][0]['transition_in'] is None
+    assert len(trimmed['clips']) == 2
+    assert trimmed['clips'][1]['transition_in'] is not None
+    assert trimmed['clips'][0]['trim_start_s'] == pytest.approx(3.5)  # 4.0 - the 0.5s transition
+    assert trimmed['audio_offset_s'] == pytest.approx(3.5)
 
 
 def test_trim_plan_to_range_drops_overlay_fully_outside_it():

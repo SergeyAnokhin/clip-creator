@@ -484,13 +484,30 @@ def _trim_plan_to_range(plan: dict, range_start_ms: float, range_end_ms: float) 
     its output timeline - the backend half of "Собрать тестовое видео"
     (`start_editor_render` -> `start_render_job` -> here).
 
-    Clips entirely outside the range are dropped; the new first/last clip's
-    own `trim_start_s`/`trim_end_s` are tightened to whatever part of their
-    own content falls inside the range (the shift is converted from output-
-    timeline ms to source-time via `* speed`, same direction
-    `build_render_plan` already trims by); a transition into the new first
-    clip is cleared (a transition from a clip that's no longer there is
-    meaningless); the tail freeze-pad (`tpad_s`) is cleared from every kept
+    If `range_start_ms` lands inside (or right after) a transition's own
+    blend window, the effective start is first pulled back to that
+    transition's own start so the preceding clip is kept and the blend
+    actually renders - the frontend timeline draws clip blocks back-to-back
+    (see this module's own top docstring), so a range typed against that
+    display can land exactly on a boundary that, once the transition's real
+    overlap is accounted for, already ate into the previous clip; dropping
+    that clip would silently turn the transition into a hard cut. The
+    rendered test video may then start up to that transition's `duration_ms`
+    earlier than what was typed into `TestRangeModal.jsx` - the same "real
+    render may differ slightly from the requested range" tolerance transitions
+    already have elsewhere in this module.
+
+    Clips entirely outside the (possibly pulled-back) range are dropped; the
+    new first/last clip's own `trim_start_s`/`trim_end_s` are tightened to
+    whatever part of their own content falls inside the range (the shift is
+    converted from output-timeline ms to source-time via `* speed`, same
+    direction `build_render_plan` already trims by); a transition into the
+    new first clip is cleared as defense-in-depth, in practice never reached
+    given `build_render_plan` already refuses to resolve a `transition_in`
+    against an unbounded (unknown-duration) neighbour in the first place - the
+    pull-back above otherwise guarantees the new first clip's own
+    transition_in, if still set, always has its blend partner kept alongside
+    it; the tail freeze-pad (`tpad_s`) is cleared from every kept
     clip except recomputed on the new last one, only if the range's own end
     reaches past that clip's real content into what would have been padding.
     Overlays are kept only if they intersect the range, with `start_s`
@@ -529,6 +546,22 @@ def _trim_plan_to_range(plan: dict, range_start_ms: float, range_end_ms: float) 
         ends_ms.append(cursor_ms + c_ms if c_ms is not None else cursor_ms)
         if c_ms is not None:
             cursor_ms += c_ms + clip['tpad_s'] * 1000
+
+    # Pull `range_start_ms` back to the start of whichever transition's own
+    # blend window it lands inside, repeating (bounded by `len(clips)`) since
+    # pulling back can expose another transition immediately before it (a run
+    # of very short clips each transitioning into the next). Stops as soon as
+    # the first still-relevant clip's own transition already starts at or
+    # after the current effective start - fully inside the kept range, no
+    # further pull-back needed.
+    for _ in clips:
+        first_idx = next((i for i, end in enumerate(ends_ms) if end > range_start_ms), None)
+        if first_idx is None:
+            break
+        transition = clips[first_idx]['transition_in']
+        if not transition or starts_ms[first_idx] >= range_start_ms:
+            break
+        range_start_ms = max(0.0, starts_ms[first_idx])
 
     trimmed_clips = []
     kept_end_ms = []
