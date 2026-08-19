@@ -839,6 +839,17 @@ lives in the button's own component state.
   -i out.mp4 -frames:v 1 -vf scale=1:1 -f rawvideo -pix_fmt rgb24 -`) — cheap,
   exact, and scriptable across a range of timestamps to confirm a
   crossfade/fade-through-color actually blended where expected.
+- **A `transition_in`/`fade_out` on a clip with an unknown length used to
+  silently no-op.** `xfade`'s `offset` and `fade`'s `st` are both absolute-
+  seconds positions - impossible to compute for a clip whose real duration
+  `build_render_plan` doesn't know (an uploaded/imported clip - see
+  `docs/data-model.md`'s `EditorClip` section). Found against a real project
+  where *every* clip was an upload: every transition and every `fade_out`
+  vanished with no error, confirmed only by the frame-sampling technique
+  above (the render "succeeded" - a valid non-empty mp4, just a hard cut
+  where a crossfade should've been). Fixed by having `build_render_plan`
+  `ffprobe` the real file as a fallback (`_probe_duration_ms`) - see
+  `docs/data-model.md`.
 - **A Konva `Stage` filling a dynamic container needs its first size read
   synchronously.** `ResizeObserver`'s first callback isn't guaranteed to land in
   the mount frame (it has failed to fire at all in an automated browser, leaving

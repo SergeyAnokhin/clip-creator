@@ -244,34 +244,36 @@ export default function EditorStage({
                 </div>
               ))}
             </div>
+
+            <div className="editor-side-block">
+              <span className="tl-inspector-label tl-inspector-row">
+                <span className="tl-inspector-rowlabel">{L.editor_canvasSizeLabel}</span>
+                <span className="tl-timecode">{canvasSize.width}×{canvasSize.height}</span>
+              </span>
+              <div className="tl-inspector-row tl-transition-types">
+                <button
+                  type="button" className={`tl-transition-chip${canvasOrientation === 'auto' ? ' is-selected' : ''}`}
+                  onClick={() => actions.setCanvasOrientation('auto')}
+                >
+                  {L.editor_canvasOrientationAuto}
+                </button>
+                <button
+                  type="button" className={`tl-transition-chip${canvasOrientation === 'portrait' ? ' is-selected' : ''}`}
+                  onClick={() => actions.setCanvasOrientation('portrait')}
+                >
+                  {L.editor_canvasOrientationPortrait}
+                </button>
+                <button
+                  type="button" className={`tl-transition-chip${canvasOrientation === 'landscape' ? ' is-selected' : ''}`}
+                  onClick={() => actions.setCanvasOrientation('landscape')}
+                >
+                  {L.editor_canvasOrientationLandscape}
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="editor-side-footer">
-            <span className="tl-inspector-label tl-inspector-row">
-              <span className="tl-inspector-rowlabel">{L.editor_canvasSizeLabel}</span>
-              <span className="tl-timecode">{canvasSize.width}×{canvasSize.height}</span>
-            </span>
-            <div className="tl-inspector-row tl-transition-types">
-              <button
-                type="button" className={`tl-transition-chip${canvasOrientation === 'auto' ? ' is-selected' : ''}`}
-                onClick={() => actions.setCanvasOrientation('auto')}
-              >
-                {L.editor_canvasOrientationAuto}
-              </button>
-              <button
-                type="button" className={`tl-transition-chip${canvasOrientation === 'portrait' ? ' is-selected' : ''}`}
-                onClick={() => actions.setCanvasOrientation('portrait')}
-              >
-                {L.editor_canvasOrientationPortrait}
-              </button>
-              <button
-                type="button" className={`tl-transition-chip${canvasOrientation === 'landscape' ? ' is-selected' : ''}`}
-                onClick={() => actions.setCanvasOrientation('landscape')}
-              >
-                {L.editor_canvasOrientationLandscape}
-              </button>
-            </div>
-
             {!renderLoading && renderError && <div className="editor-side-error">⚠️ {renderError}</div>}
             <div className="editor-side-footer-buttons">
               <button

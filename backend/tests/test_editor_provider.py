@@ -1807,3 +1807,124 @@ def test_render_to_file_real_ffmpeg_with_fade_in_out(tmp_path):
 
     assert dest.is_file()
     assert dest.stat().st_size > 0
+
+
+# ---------- unbounded-clip fallback (`_probe_duration_ms`) ----------
+# A manually uploaded/imported clip's `Video.duration_seconds` is never
+# probed at import time (see this module's own top docstring) - `trim_end_ms:
+# None` + unknown source duration leaves a clip genuinely "unbounded" to
+# `build_render_plan`. Without a real-file fallback, `xfade`'s `offset` and
+# `fade_out`'s `st` (both absolute-seconds positions) can't be computed, so a
+# transition or fade_out touching such a clip silently vanishes - confirmed
+# against a real project where every clip was `model: 'upload'` (2026-08-19).
+
+def _frame_rgb(video_path, t: float) -> tuple[int, int, int]:
+    """Decodes one frame at time `t` to a single averaged pixel (`scale=1:1`)
+    - cheap, exact way to check what a render actually looks like at a given
+    moment, without eyeballing it by hand (see docs/architecture.md's
+    "Conventions and gotchas")."""
+    result = subprocess.run(
+        ['ffmpeg', '-y', '-ss', f'{t:.3f}', '-i', str(video_path),
+         '-frames:v', '1', '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+        check=True, capture_output=True,
+    )
+    data = result.stdout
+    assert len(data) >= 3, 'no frame decoded at this timestamp'
+    return data[0], data[1], data[2]
+
+
+def test_probe_duration_ms_reads_a_real_file(tmp_path):
+    if shutil.which('ffprobe') is None:
+        pytest.skip('ffprobe not installed in this environment')
+    path = tmp_path / 'a.mp4'
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=2.5', str(path)],
+        check=True, capture_output=True,
+    )
+    assert editor._probe_duration_ms(path) == pytest.approx(2500, abs=50)
+
+
+def test_probe_duration_ms_returns_none_for_a_missing_file(tmp_path):
+    assert editor._probe_duration_ms(tmp_path / 'does-not-exist.mp4') is None
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_build_render_plan_probes_an_unbounded_clip_only_when_project_dir_given(tmp_path):
+    """The exact fallback every other test in this section exercises through
+    a full render - isolated here at the `build_render_plan` level: omitting
+    `project_dir` (every pre-existing caller) must keep leaving the clip
+    unbounded, so this fix can't have silently changed behavior for the ~80
+    other calls to this function throughout this file."""
+    project_dir = tmp_path / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=3', str(videos_dir / 'a.mp4')],
+        check=True, capture_output=True,
+    )
+    project = _project(_video('a', duration_seconds=None), _track(duration_ms=3000))
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip(video_id='a', trim_end_ms=None)]}
+
+    plan_without_probe = editor.build_render_plan(project, video_edit)
+    assert plan_without_probe['clips'][0]['trim_end_s'] is None
+
+    plan_with_probe = editor.build_render_plan(project, video_edit, project_dir=project_dir)
+    assert plan_with_probe['clips'][0]['trim_end_s'] == pytest.approx(3.0, abs=0.1)
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed in this environment')
+def test_render_to_file_real_ffmpeg_transition_between_two_unbounded_clips(tmp_path):
+    """The exact scenario that silently dropped every transition/fade_out in
+    a real project (2026-08-19): both clips are `model: 'upload'` with
+    `duration_seconds: None` and no explicit `trim_end_ms` - `xfade`'s
+    `offset` can't be computed without a real duration for the clip the
+    transition blends *into*, so `build_ffmpeg_command` fell back to a hard
+    `concat` and the transition never rendered. `render_to_file` passing
+    `project_dir` into `build_render_plan` now probes the real file as a
+    fallback - checked here by sampling actual frames, not just checking the
+    file exists, since a hard-cut fallback still produces a valid non-empty
+    mp4."""
+    project_dir = tmp_path / 'poem-a'
+    videos_dir = project_dir / 'videos'
+    videos_dir.mkdir(parents=True)
+    music_dir = project_dir / 'music'
+    music_dir.mkdir(parents=True)
+
+    for name, color in (('a.mp4', 'red'), ('b.mp4', 'blue')):
+        subprocess.run(
+            ['ffmpeg', '-y', '-f', 'lavfi', '-i', f'color=c={color}:s=64x64:d=2', str(videos_dir / name)],
+            check=True, capture_output=True,
+        )
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3.5', str(music_dir / 'trk_1.mp3')],
+        check=True, capture_output=True,
+    )
+
+    project = {
+        'id': 'poem-a',
+        'scenes': [
+            {'videos': [_video('a', duration_seconds=None)]},
+            {'videos': [_video('b', duration_seconds=None)]},
+        ],
+        'mureka': {'tracks': [_track(duration_ms=3500)]},
+    }
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='a', trim_end_ms=None),
+            _clip(scene_index=1, video_id='b', trim_end_ms=None,
+                  transition_in={'type': 'fadeblack', 'duration_ms': 500}),
+        ],
+    }
+    dest = project_dir / 'editor' / 'out.mp4'
+
+    asyncio.run(editor.render_to_file(project, video_edit, project_dir, dest))
+
+    # Clip 'a' is 2s red; the 500ms fadeblack transition blends [1.5, 2.0),
+    # dipping through black early in that window (fadeblack ramps down to
+    # black then back up, not a linear crossfade - the darkest frame sits
+    # well before the window's midpoint).
+    r0, g0, b0 = _frame_rgb(dest, 1.0)  # still plain red, before the blend
+    assert r0 > 240 and g0 < 15 and b0 < 15, f'expected plain red, got {(r0, g0, b0)}'
+    r, g, b = _frame_rgb(dest, 1.6)
+    assert r < 60 and g < 60 and b < 60, f'expected a near-black blend frame, got {(r, g, b)}'

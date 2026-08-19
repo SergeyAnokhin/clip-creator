@@ -138,10 +138,20 @@ negative `playbackRate`) - a reversed clip just plays forward there, same
 "approximate, non-blocking" tolerance the rest of this preview already has.
 `trim_end_ms: null` means "to the end of the source", falling back to that
 video's `duration_seconds` — **except when that duration is itself unknown** (an
-uploaded/imported clip), where the render leaves the end genuinely unbounded
-(ffmpeg runs to EOF) rather than collapsing the clip to zero length; the
-frontend, which can't probe the file, lays such a clip out with a fixed 5s
-stand-in (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) purely for display.
+uploaded/imported clip), where `build_render_plan` falls back to `ffprobe`ing
+the real file on disk (`_probe_duration_ms`, only when it's given a
+`project_dir` - every render caller has one, but this keeps the function pure
+for the ~80 plan-only tests that don't) before finally leaving the end
+genuinely unbounded (ffmpeg runs to EOF) if even that fails (file missing,
+`ffprobe` erroring). This probe is what makes a `transition_in`/`fade_out`
+touching such a clip actually render at all - both need a real known length
+to compute `xfade`'s `offset`/`fade`'s `st`, an absolute-seconds position -
+without it, a transition against an unbounded clip silently degrades to a
+hard cut and a `fade_out` on one silently doesn't apply (confirmed against a
+real project where every clip was an upload, 2026-08-19). The frontend, which
+never probes anything itself, still lays such a clip out with a fixed 5s
+stand-in purely for display (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) -
+the real probed duration only exists render-side.
 
 `fit` (`{mode: 'cover'|'contain', zoom, offset_x_pct, offset_y_pct}`,
 absent/`null` = `{mode: 'cover', zoom: 1, offset_x_pct: 50, offset_y_pct: 50}`)

@@ -165,6 +165,26 @@ def _resolve_clip_video(project: dict, scene_index: int, video_id: str) -> dict:
     return video
 
 
+def _probe_duration_ms(path: Path) -> float | None:
+    """Best-effort real file duration via `ffprobe`, in ms - `None` on any
+    failure (`ffprobe`/the file missing, a non-numeric or empty result,
+    `ffprobe` erroring on a corrupt file). Only ever called as a fallback for
+    a clip whose `Video.duration_seconds` is unknown (a manually uploaded/
+    imported clip - see `build_render_plan`'s docstring), so a probe failure
+    just leaves that clip unbounded exactly like before this existed -
+    never raises, never blocks a render on a probe going wrong."""
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', str(path)],
+            capture_output=True, check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return float(result.stdout.decode(errors='replace').strip()) * 1000
+    except (OSError, ValueError):
+        return None
+
+
 def _resolve_track(project: dict, track_id: str) -> dict:
     tracks = (project.get('mureka') or {}).get('tracks') or []
     track = next((t for t in tracks if t.get('track_id') == track_id), None)
@@ -349,14 +369,19 @@ def _resolve_fit(raw: dict | None) -> dict:
     return {'mode': 'contain'}
 
 
-def _resolve_fade(raw: dict | None, max_ms: float) -> dict | None:
+def _resolve_fade(raw: dict | None, max_ms: float | None) -> dict | None:
     """`{color, duration_s}` for a `fade_in`/`fade_out` spec, or `None` if
     it's absent/zero-duration. `duration_ms` is clamped to `max_ms` (the
     clip's own resolved content length) - fading longer than the clip itself
-    doesn't mean anything."""
+    doesn't mean anything. `max_ms: None` (the clip's own length is unknown -
+    an unbounded upload/import clip, see `build_render_plan`) skips the
+    clamp rather than treating unknown as zero-length, which would silently
+    drop every fade on such a clip regardless of the requested duration."""
     if not raw:
         return None
-    duration_ms = min(raw.get('duration_ms') or 0, max_ms)
+    duration_ms = raw.get('duration_ms') or 0
+    if max_ms is not None:
+        duration_ms = min(duration_ms, max_ms)
     if duration_ms <= 0:
         return None
     color = raw.get('color')
@@ -365,10 +390,25 @@ def _resolve_fade(raw: dict | None, max_ms: float) -> dict | None:
     return {'color': color, 'duration_s': duration_ms / 1000}
 
 
-def build_render_plan(project: dict, video_edit: dict, settings: dict | None = None) -> dict:
-    """Pure resolution of an EDL against the project's actual scenes/tracks
-    into everything `build_ffmpeg_command` needs - no ffmpeg, no disk I/O
-    beyond what the caller already loaded into `project`/`video_edit`."""
+def build_render_plan(
+    project: dict, video_edit: dict, settings: dict | None = None, project_dir: Path | None = None,
+) -> dict:
+    """Resolution of an EDL against the project's actual scenes/tracks into
+    everything `build_ffmpeg_command` needs. Pure (no disk I/O beyond what
+    the caller already loaded into `project`/`video_edit`) when `project_dir`
+    is omitted - every existing caller that doesn't need real-file fallback
+    duration (every test in `test_editor_provider.py`) keeps working
+    unchanged. When given, a clip whose length is otherwise unknown (a
+    manually uploaded/imported clip - `Video.duration_seconds` is `None`, no
+    explicit `trim_end_ms` either) gets one `ffprobe` call against its real
+    file as a fallback (`_probe_duration_ms`) - without it, that clip stays
+    "unbounded" exactly like before this existed, which silently breaks any
+    transition or `fade_out` touching it: `xfade`'s `offset` and `fade_out`'s
+    `st` are both absolute-seconds positions `build_ffmpeg_command` cannot
+    compute without knowing where the clip's content actually ends. `ffprobe`
+    is a blocking subprocess call - `render_to_file` runs this whole function
+    inside `asyncio.to_thread` for exactly that reason, same as
+    `_run_ffmpeg_render`'s own ffmpeg call."""
     clips = video_edit.get('clips') or []
     if not clips:
         raise RenderPlanError('Таймлайн пуст — добавьте хотя бы один клип')
@@ -382,6 +422,7 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
 
     resolved_clips = []
     effective_ms_list = []
+    known_ms_list = []  # `None` where the clip's own length is unknown (unbounded)
     total_ms = 0.0
     all_portrait = True
     for clip in clips:
@@ -407,6 +448,10 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
         trim_end_ms = clip.get('trim_end_ms')
         if trim_end_ms is None and source_duration_ms > 0:
             trim_end_ms = source_duration_ms
+        if trim_end_ms is None and project_dir is not None:
+            probed_ms = _probe_duration_ms(project_dir / video['file_path'])
+            if probed_ms:
+                trim_end_ms = probed_ms
         if trim_end_ms is not None and trim_end_ms <= trim_start_ms:
             raise RenderPlanError(
                 f'Некорректная обрезка клипа сцены {clip["scene_index"]}: '
@@ -421,7 +466,9 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
         # mismatch case (the global `-t` cap on the final command still
         # keeps the overall output correct regardless).
         effective_ms = (trim_end_ms - trim_start_ms) / speed if trim_end_ms is not None else 0.0
+        known_ms = effective_ms if trim_end_ms is not None else None
         effective_ms_list.append(effective_ms)
+        known_ms_list.append(known_ms)
         total_ms += effective_ms
         resolved_clips.append({
             'file_path': video['file_path'],
@@ -431,8 +478,8 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
             'reverse': bool(clip.get('reverse')),
             'tpad_s': 0.0,
             'transition_in': None,
-            'fade_in': _resolve_fade(clip.get('fade_in'), effective_ms),
-            'fade_out': _resolve_fade(clip.get('fade_out'), effective_ms),
+            'fade_in': _resolve_fade(clip.get('fade_in'), known_ms),
+            'fade_out': _resolve_fade(clip.get('fade_out'), known_ms),
             'fit': _resolve_fit(clip.get('fit')),
         })
 
@@ -446,10 +493,20 @@ def build_render_plan(project: dict, video_edit: dict, settings: dict | None = N
         xfade_name = _TRANSITION_XFADE_NAME.get((raw or {}).get('type'))
         if not xfade_name:
             continue
-        # Clamped to whichever neighbour has less content to spare - a
-        # transition can never outlast the clip it's blending into or out of.
-        max_ms = min(effective_ms_list[i - 1], effective_ms_list[i])
-        duration_ms = min(raw.get('duration_ms') or 0, max_ms)
+        # Clamped to whichever neighbour has less *known* content to spare -
+        # a transition can never outlast the clip it's blending into or out
+        # of. A neighbour with an unknown length (unbounded upload/import
+        # clip - `known_ms_list[i] is None`) imposes no clamp from that side
+        # rather than collapsing the whole transition to zero: `effective_
+        # ms_list`'s "unknown counts as 0" convention is only meant for the
+        # tail-pad size estimate below, not as a real upper bound here - an
+        # unbounded clip's own trim omits `end=` in `build_ffmpeg_command`
+        # (runs to the file's real EOF), which is virtually always long
+        # enough to cover a sub-few-second transition.
+        known_neighbours = [v for v in (known_ms_list[i - 1], known_ms_list[i]) if v is not None]
+        duration_ms = raw.get('duration_ms') or 0
+        if known_neighbours:
+            duration_ms = min(duration_ms, min(known_neighbours))
         if duration_ms / 1000 < _TRANSITION_MIN_S:
             continue
         resolved_clips[i]['transition_in'] = {'type': xfade_name, 'duration_s': duration_ms / 1000}
@@ -899,7 +956,10 @@ async def render_to_file(
             'ffmpeg не найден в PATH - он нужен, чтобы собрать финальное видео. '
             'Установите ffmpeg (ffmpeg.org) и перезапустите backend.',
         )
-    plan = build_render_plan(project, video_edit, settings)
+    # `build_render_plan` may probe an unbounded clip's real file via
+    # `ffprobe` (a blocking subprocess call) when given `project_dir` - runs
+    # in a thread for the same reason `_run_ffmpeg_render` below does.
+    plan = await asyncio.to_thread(build_render_plan, project, video_edit, settings, project_dir)
     if range_start_ms is not None and range_end_ms is not None:
         if range_end_ms <= range_start_ms:
             raise RenderPlanError('Некорректный диапазон теста')
