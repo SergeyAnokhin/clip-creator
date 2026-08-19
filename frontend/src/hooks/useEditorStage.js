@@ -307,6 +307,27 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       }],
     }));
   }
+  function addAllSceneClips() {
+    const usedSceneIndices = new Set(clips.map((c) => c.scene_index));
+    const addable = scenes
+      .map((scene, sceneIndex) => ({ scene, sceneIndex }))
+      .filter(({ scene, sceneIndex }) => !usedSceneIndices.has(sceneIndex) && (scene.videos || []).length > 0);
+    if (!addable.length) return;
+    invalidatePreviewClip();
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: [
+        ...edit.clips,
+        ...addable.map(({ scene, sceneIndex }) => {
+          const video = (scene.videos || []).find((v) => v.is_selected) || scene.videos[0];
+          return {
+            clip_id: randomId('clip'), scene_index: sceneIndex, video_id: video.video_id,
+            trim_start_ms: 0, trim_end_ms: null, speed: 1.0, reverse: false,
+          };
+        }),
+      ],
+    }));
+  }
   function changeClipVideo(clipId, videoId) {
     invalidatePreviewClip();
     commitVideoEdit((edit) => ({
@@ -535,7 +556,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     },
     resetForProject,
     actions: {
-      reorderClip, splitAtPlayhead, removeClips, addSceneClip, changeClipVideo,
+      reorderClip, splitAtPlayhead, removeClips, addSceneClip, addAllSceneClips, changeClipVideo,
       setClipTrim, setClipSpeed, setClipReverse, setClipFit, resetClip, setMurekaTrackId, setCanvasOrientation,
       selectClip, setSelection, selectAll,
       duplicateClips, copyClips, pasteClips, undo, redo,

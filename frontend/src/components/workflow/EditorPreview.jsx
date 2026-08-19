@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2 } from 'lucide-react';
-import { Image as KonvaImage, Layer, Stage } from 'react-konva';
+import { Magnet, Maximize2, Minimize2 } from 'lucide-react';
+import {
+  Image as KonvaImage, Layer, Line, Stage,
+} from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
 import {
   activeOverlaysAt, canvasLayerHeightPct, overlayOpacityAt, overlayPatchFromCanvasLayer,
@@ -8,10 +10,12 @@ import {
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
 import { computeContentRect } from '../../lib/videoFrameRect.js';
 import { findActiveClip } from '../../lib/timeline.js';
+import { snapNodeToCanvas } from '../../lib/snapping.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import { useVideoFirstFrame } from '../../hooks/useClipThumbnails.js';
 import CanvasLayer from '../shared/CanvasLayer.jsx';
 import EditorPreviewContextMenu from './EditorPreviewContextMenu.jsx';
+import EditorFloatingTransport from './EditorFloatingTransport.jsx';
 
 /** One active overlay's Konva node - its own component (rather than inline
  * in the `.map` below) purely so each can call `useHtmlImage`/
@@ -39,6 +43,7 @@ import EditorPreviewContextMenu from './EditorPreviewContextMenu.jsx';
  * produces in the real render. */
 function OverlayCanvasNode({
   overlay, src, containerW, containerH, playheadMs, isSelected, isPlaying, onSelect, onChange, onNaturalSize,
+  snapEnabled, setGuides,
 }) {
   const videoFrame = useVideoFirstFrame(overlay.kind === 'video' ? src : null);
   const imageSrc = overlay.kind === 'video' ? videoFrame : src;
@@ -59,7 +64,11 @@ function OverlayCanvasNode({
       naturalW={naturalW} naturalH={naturalH} containerW={containerW} containerH={containerH}
       isSelected={isSelected} showOutline={!isPlaying}
       onSelect={onSelect}
-      onChange={(patch) => onChange(overlayPatchFromCanvasLayer(patch, containerW, containerH))}
+      onDragMove={(e) => { if (snapEnabled) setGuides(snapNodeToCanvas(e.target, containerW, containerH)); }}
+      onChange={(patch) => {
+        setGuides({ v: null, h: null });
+        onChange(overlayPatchFromCanvasLayer(patch, containerW, containerH));
+      }}
     >
       <KonvaImage image={image} width={naturalW} height={naturalH} opacity={overlayOpacityAt(overlay, playheadMs)} />
     </CanvasLayer>
@@ -116,7 +125,7 @@ function OverlayCanvasNode({
  * works" without the user having to go select the clip on the timeline
  * first. */
 export default function EditorPreview({
-  L, videoRef, audioRef, projectId, selectedTrack, overlays, playheadMs, isPlaying,
+  L, videoRef, audioRef, projectId, selectedTrack, overlays, playheadMs, timelineMs, isPlaying,
   titleCardVariants, logos, overlayVideoSources, canvasSize, isFullscreen, onToggleFullscreen,
   selectedOverlayId, actions, clips, selectedClipIds,
 }) {
@@ -124,6 +133,12 @@ export default function EditorPreview({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [videoNaturalSize, setVideoNaturalSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState(null);
+  // A per-session UI preference (not part of the EDL, see setOverlayTransform
+  // in useEditorStage.js) - whether dragging an overlay snaps to the
+  // canvas's center/edges (lib/snapping.js). `guides` is the line(s) to draw
+  // for the current drag frame, reset on drag end/change-commit.
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [guides, setGuides] = useState({ v: null, h: null });
 
   function openContextMenu(e) {
     e.preventDefault();
@@ -216,12 +231,38 @@ export default function EditorPreview({
                     onSelect={() => actions.selectOverlay(overlay.overlay_id)}
                     onChange={(patch) => actions.setOverlayTransform(overlay.overlay_id, patch)}
                     onNaturalSize={actions.resolveOverlayNaturalAspect}
+                    snapEnabled={snapEnabled} setGuides={setGuides}
                   />
                 );
               })}
+              {guides.v != null && (
+                <Line
+                  points={[guides.v, 0, guides.v, canvasFitRect.height]}
+                  stroke="#ff3b6f" strokeWidth={1.5} dash={[8, 6]} listening={false}
+                />
+              )}
+              {guides.h != null && (
+                <Line
+                  points={[0, guides.h, canvasFitRect.width, guides.h]}
+                  stroke="#ff3b6f" strokeWidth={1.5} dash={[8, 6]} listening={false}
+                />
+              )}
             </Layer>
           </Stage>
         )}
+        <EditorFloatingTransport
+          L={L} playheadMs={playheadMs} timelineMs={timelineMs} isPlaying={isPlaying}
+          selectedTrack={selectedTrack} actions={actions}
+        />
+        <div className="editor-preview-disclaimer">{L.editor_previewDisclaimer}</div>
+        <button
+          type="button"
+          className={`icon-btn editor-snap-toggle${snapEnabled ? ' is-active' : ''}`}
+          title={snapEnabled ? L.editor_snapToggleOn : L.editor_snapToggleOff}
+          onClick={() => setSnapEnabled((v) => !v)}
+        >
+          <Magnet size={14} />
+        </button>
         <button
           type="button"
           className="icon-btn editor-fullscreen-btn"

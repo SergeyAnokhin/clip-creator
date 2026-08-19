@@ -83,17 +83,42 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    local `ffmpeg` (no external API). Laid out like a real NLE app rather than a
    scrolling page: the program monitor fills whatever height is left after the
    timeline, which is docked to the very bottom and pared down to just its
-   three scale-locked rows — time ruler, clip blocks, the track's waveform,
-   and a playhead across all three. Every other control (playback transport,
-   split/zoom toolbar, the clip properties strip, add-scene chips, and the
-   render CTA) lives in the right-hand panel instead of crowding the monitor
-   or the timeline — `EditorTimeline.jsx` still owns the timeline's own DOM/
-   scroll/zoom state, it just portals `EditorTimelineTools.jsx`'s toolbar/
-   inspector/pickers markup into a slot `EditorStage.jsx` renders in that
-   panel (the drag/trim/marquee gesture state machine is its own
-   `useTimelineDrag.js` hook - both split out of `EditorTimeline.jsx` once it
-   grew past ~600 lines covering zoom, gestures, and side-panel JSX all at
-   once; see `docs/code-map.md`). Clip blocks show actual sampled
+   three scale-locked rows — time ruler, clip blocks, the track's waveform
+   (linear by default; the **Клип** tab's waveform-scale picker can reshape
+   the bar-height mapping to log or sqrt instead, to make quiet-vs-loud
+   passages easier to see when picking cut points - `TimelineAudioTrack.jsx`,
+   purely a viewing preference persisted to `localStorage`, doesn't touch the
+   decode/bucket pipeline), and a playhead across all three. Playback transport (rewind/play/time) is a
+   floating overlay centered over the program monitor, hidden until the
+   monitor is hovered/focused (`EditorPreview.jsx` → `EditorFloatingTransport.jsx`,
+   CSS-only reveal) — CapCut-style, instead of a permanently-visible block.
+   The right-hand panel (`EditorSidePanel.jsx`) is a 3-tab shell instead of one
+   tall scrolling stack: **Свойства объекта** (the selected clip/overlay/
+   transition's properties — auto-opens on any new selection), **Клип** (audio
+   track picker + canvas-size/orientation picker + the waveform display-scale
+   picker, grouped as project-level settings), and **Готовые видео** (the
+   renders list — auto-opens whenever a render finishes). Below the tabs sits
+   one icon-only bottom toolbar (`EditorBottomToolbar.jsx`, tooltip on hover):
+   split, undo, redo, test-render, final-render — consolidating what used to
+   be a separate timeline toolbar row plus a footer, and visible regardless of
+   which tab is active. Nothing but `EditorTimeline.jsx` itself ever sits
+   directly under the program monitor: the timeline's own toolbar (zoom,
+   keyboard-shortcuts button, the test-range chip, add-scene chips, the
+   add-overlay picker) lives inside the **Клип** tab's body instead of a strip
+   between the monitor and the timeline, still portaled from
+   `EditorTimeline.jsx` (which continues to own the timeline's own
+   DOM/scroll/zoom state) via `EditorTimelineTools.jsx` into a target
+   `EditorClipSettingsTab.jsx` renders — `EditorSidePanel.jsx` keeps that one
+   tab's body mounted at all times (hidden with CSS, not unmounted, on the
+   other two tabs) specifically so the portal target doesn't disappear out
+   from under it on a tab switch. Split/undo/redo and the clip/overlay/
+   transition inspector moved out of that portaled content into the tab shell
+   above (`EditorBottomToolbar.jsx`/`EditorObjectPropertiesTab.jsx`) once the
+   panel became tabbed (the drag/
+   trim/marquee gesture state machine is its own `useTimelineDrag.js` hook -
+   both split out of `EditorTimeline.jsx` once it grew past ~600 lines
+   covering zoom, gestures, and side-panel JSX all at once; see
+   `docs/code-map.md`). Clip blocks show actual sampled
    frames from *that clip's own* trimmed source window (`useClipThumbnails`,
    more frames as the block gets wider), not scene text — extraction runs
    through one shared hidden `<video>`, serialized and cached, so many clips
@@ -164,7 +189,15 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    for the same fields (x/y/width/height/rotation %, opacity, fade in/out),
    not a second source of truth - it also shows a **reverse** toggle, but
    only for a `kind: 'video'` overlay (meaningless for a still image, see
-   `docs/data-model.md`'s overlay section). The real render composites overlays with
+   `docs/data-model.md`'s overlay section). While dragging, an overlay
+   magnet-snaps to the canvas's center or edges (`lib/snapping.js`'s
+   `snapNodeToCanvas`, a screen-px threshold read against the dragged Konva
+   node's own client rect, mutating its position directly rather than through
+   React state so it doesn't spam re-renders mid-drag - the same technique
+   `lib/posterLayers.js`'s `snapGroupToCenter` uses for the Poster
+   constructor, generalized here to edges too), with a dashed guide line drawn
+   for whichever axis snapped and a magnet icon-button in the monitor's corner
+   to turn it off. The real render composites overlays with
    ffmpeg's `overlay` filter, each gated to its own window via
    `enable='between(t,…)'` (`providers/editor.py::build_ffmpeg_command`).
 
@@ -204,8 +237,8 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    breakpoint — a keyboard alternative (Tab to a clip, arrow keys between
    clips, Enter/Space to select) covers non-mouse desktop use instead.
 
-   `TestRangeModal.jsx` (opened by the "Собрать тестовое видео" button in
-   `EditorStage.jsx`, not a ruler gesture) picks an ephemeral `{startMs,
+   `TestRangeModal.jsx` (opened by the test-render icon button in
+   `EditorBottomToolbar.jsx`, not a ruler gesture) picks an ephemeral `{startMs,
    endMs}` test range - mm:ss From/To inputs, shown on the ruler as a thin
    `.tl-test-range-tick` marker. Not part of `video_edit`, just render-time
    input local to `EditorStage.jsx` (persisted per-project to `localStorage`,

@@ -3111,6 +3111,66 @@
   background: rgba(0, 0, 0, 0.75);
 }
 
+.editor-snap-toggle {
+  position: absolute;
+  top: 8px;
+  right: 46px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.editor-snap-toggle:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.editor-snap-toggle.is-active {
+  background: rgba(255, 157, 92, 0.28);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Playback transport over the program monitor, CapCut-style: hidden until
+   the frame is hovered/focused instead of a permanently-visible block in the
+   side panel. */
+.editor-floating-transport {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.editor-preview-frame:hover .editor-floating-transport,
+.editor-floating-transport:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.editor-preview-disclaimer {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  max-width: calc(100% - 90px);
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+
 /* Right-click menu on the program monitor (EditorPreviewContextMenu.jsx) -
    `position: fixed` at the click's own viewport coordinates, set inline via
    `left`/`top` (EditorPreview.jsx). Deliberately a sibling of the frame's
@@ -3184,12 +3244,6 @@
   padding: 6px;
 }
 
-.editor-preview-transport {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .editor-preview-time {
   font-size: 12.5px;
   font-weight: 700;
@@ -3200,12 +3254,6 @@
 .editor-preview-time span {
   color: var(--text-faint);
   font-weight: 400;
-}
-
-.editor-preview-note {
-  font-size: 11px;
-  color: var(--text-faint);
-  margin-top: 6px;
 }
 
 .editor-side {
@@ -3246,6 +3294,16 @@
   background: var(--accent);
 }
 
+/* CapCut-style tab bar for EditorSidePanel.jsx - same `.chip`-based
+   convention as SettingsScreen.jsx's `.settings-tabs`, its own class in case
+   the two ever need to diverge (narrower column here). */
+.editor-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
 .editor-side-scroll {
   flex: 1;
   min-height: 0;
@@ -3257,28 +3315,29 @@
   padding-right: 2px;
 }
 
-.editor-side-footer {
+/* EditorBottomToolbar.jsx - split/undo/redo/test-render/render, icon-only,
+   consolidated out of the old separate toolbar + footer. */
+.editor-bottom-toolbar {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
-.editor-side-footer .btn {
-  width: 100%;
-  justify-content: center;
-}
-
-.editor-side-footer-buttons {
+.editor-bottom-toolbar-row {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
 }
 
-.editor-side-footer-buttons .btn {
-  flex: 1;
-  min-width: 0;
-  padding-left: 8px;
-  padding-right: 8px;
+.icon-btn-accent {
+  background: var(--accent-grad);
+  color: var(--accent-ink);
+  border: none;
+}
+
+.icon-btn-accent:hover {
+  filter: brightness(1.08);
 }
 
 .editor-side-block {
@@ -3288,6 +3347,10 @@
   padding: 14px;
 }
 
+/* The portaled timeline-tools target (EditorTimelineTools.jsx's remaining
+   zoom/shortcuts/pickers content, see EditorClipSettingsTab.jsx's
+   `onToolsSlotRef`) - hidden while empty (nothing portaled into it yet on
+   first mount, before EditorStage.jsx's ref callback fires). */
 .editor-side-tools:empty {
   display: none;
 }

@@ -1,12 +1,9 @@
 import { useRef } from 'react';
 import {
-  Film, Keyboard, Maximize2, Plus, Redo2, Scissors, Undo2, Upload, X, ZoomIn, ZoomOut,
+  Film, Keyboard, Maximize2, Plus, Upload, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { sceneLabel } from '../../lib/editorClipLabel.js';
-import TimelineClipInspector from './TimelineClipInspector.jsx';
-import TimelineOverlayInspector from './TimelineOverlayInspector.jsx';
-import TimelineTransitionInspector from './TimelineTransitionInspector.jsx';
 import { PickerRow, PickerThumb } from './PosterPanels.jsx';
 
 function formatTimecode(ms) {
@@ -14,18 +11,20 @@ function formatTimecode(ms) {
   return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
 }
 
-/** The Editor timeline's portaled side-panel content - toolbar, the
- * three-way inspector switch (overlay / transition / clip), and the
- * add-scene/add-overlay pickers. Split out of EditorTimeline.jsx, which
- * still owns the timeline's own DOM/gesture state and just portals this into
- * EditorStage.jsx's side panel via `toolsSlotNode`; purely presentational
- * here - every value is a prop, every edit goes through `actions`. Zoom is
- * exposed as `onZoomIn`/`onZoomOut`/`onZoomFit` callbacks (not `applyZoom`
- * + a zoom factor) so this component doesn't need to know `ZOOM_FACTOR`. */
+/** The Editor timeline's portaled toolbar-strip content: zoom, the test-range
+ * chip, and the add-scene/add-overlay pickers - what's left here after the
+ * split/undo/redo buttons and the object inspector moved into
+ * EditorBottomToolbar.jsx/EditorObjectPropertiesTab.jsx (EditorSidePanel.jsx's
+ * tab shell). Split out of EditorTimeline.jsx, which still owns the
+ * timeline's own DOM/gesture state and just portals this above it via
+ * `toolsSlotNode`; purely presentational here - every value is a prop, every
+ * edit goes through `actions`. Zoom is exposed as
+ * `onZoomIn`/`onZoomOut`/`onZoomFit` callbacks (not `applyZoom` + a zoom
+ * factor) so this component doesn't need to know `ZOOM_FACTOR`. */
 export default function EditorTimelineTools({
-  L, projectId, scenes, clips, overlays, selectedClipIds, selectedOverlayId, selectedTransitionClipId,
-  titleCardVariants, logos, overlayVideoSources, actions, playheadMs, contentDurationMs, scale, fitScale, maxScale,
-  testRange, onClearTestRange, onZoomIn, onZoomOut, onZoomFit, onOpenShortcuts, canUndo, canRedo,
+  L, projectId, scenes, clips, titleCardVariants, logos, overlayVideoSources, actions,
+  playheadMs, contentDurationMs, scale, fitScale, maxScale,
+  testRange, onClearTestRange, onZoomIn, onZoomOut, onZoomFit, onOpenShortcuts,
 }) {
   const overlayVideoInputRef = useRef(null);
   async function handleOverlayVideoFile(e) {
@@ -35,21 +34,6 @@ export default function EditorTimelineTools({
     const source = await actions.uploadOverlayVideo(file);
     if (source) actions.addOverlay('video', source.id);
   }
-  // The inspector only shows editable fields for an exact single selection -
-  // 0 or 2+ selected clips get their own summary states there instead.
-  const selectedClip = selectedClipIds.size === 1
-    ? clips.find((c) => selectedClipIds.has(c.clip_id)) || null
-    : null;
-  const selectedScene = selectedClip ? scenes?.[selectedClip.scene_index] : null;
-  const selectedSourceMs = selectedClip
-    ? ((selectedScene?.videos || []).find((v) => v.video_id === selectedClip.video_id)?.duration_seconds || 0) * 1000
-    : 0;
-  const selectedOverlay = selectedOverlayId
-    ? (overlays || []).find((o) => o.overlay_id === selectedOverlayId) || null
-    : null;
-  const selectedTransitionClip = selectedTransitionClipId
-    ? clips.find((c) => c.clip_id === selectedTransitionClipId) || null
-    : null;
 
   const usedSceneIndices = new Set(clips.map((c) => c.scene_index));
   const addableScenes = (scenes || [])
@@ -60,15 +44,6 @@ export default function EditorTimelineTools({
     <>
       <div className="tl-toolbar">
         <span className="tl-timecode">{formatTimecode(playheadMs)}<span className="tl-timecode-total"> / {formatTimecode(contentDurationMs)}</span></span>
-        <button className="icon-btn" title={L.editor_toolSplit} onClick={actions.splitAtPlayhead} disabled={!clips.length}>
-          <Scissors size={14} />
-        </button>
-        <button className="icon-btn" title={L.editor_undo} onClick={actions.undo} disabled={!canUndo}>
-          <Undo2 size={14} />
-        </button>
-        <button className="icon-btn" title={L.editor_redo} onClick={actions.redo} disabled={!canRedo}>
-          <Redo2 size={14} />
-        </button>
         <div className="tl-toolbar-spacer" />
         <button className="icon-btn" title={L.editor_toolZoomOut} onClick={onZoomOut} disabled={scale <= fitScale}>
           <ZoomOut size={14} />
@@ -95,23 +70,17 @@ export default function EditorTimelineTools({
         </span>
       )}
 
-      {selectedOverlayId ? (
-        <TimelineOverlayInspector
-          L={L} overlay={selectedOverlay} projectId={projectId}
-          titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources} actions={actions}
-        />
-      ) : selectedTransitionClipId ? (
-        <TimelineTransitionInspector L={L} clip={selectedTransitionClip} actions={actions} />
-      ) : (
-        <TimelineClipInspector
-          L={L} clip={selectedClip} scene={selectedScene} sourceDurationMs={selectedSourceMs}
-          selectedCount={selectedClipIds.size} selectedClipIds={selectedClipIds} actions={actions}
-        />
-      )}
-
       {!!addableScenes.length && (
         <div className="tl-add-row">
           <span className="tl-hint">{L.editor_addSceneLabel}</span>
+          {addableScenes.length > 1 && (
+            <button
+              className="btn-ghost tl-add-chip"
+              onClick={() => actions.addAllSceneClips()}
+            >
+              <Plus size={12} /> {L.editor_addAllScenesLabel}
+            </button>
+          )}
           {addableScenes.map(({ scene, sceneIndex }) => (
             <button
               key={sceneIndex} className="btn-ghost tl-add-chip"

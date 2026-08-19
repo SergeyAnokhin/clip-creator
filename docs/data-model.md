@@ -270,8 +270,8 @@ never exceed the content they'd apply to (see `providers/editor.py`'s
 created_at, duration_ms, clip_count, mureka_track_id, kind: 'final'|'test',
 range: {start_ms, end_ms}|null}`. Output canvas is 1920×1080 or 1080×1920,
 picked by `VideoEdit.canvas_orientation` (`'auto'` by default, or `'portrait'`/
-`'landscape'` to force it regardless of the clips - a manual override next to
-the render buttons, `EditorStage.jsx`). In `'auto'`, the canvas is 1080×1920
+`'landscape'` to force it regardless of the clips - a manual override in the
+Editor stage's **Клип** tab, `EditorClipSettingsTab.jsx`). In `'auto'`, the canvas is 1080×1920
 unless some clip's own `aspect_ratio` is *explicitly* not `9:16` - a clip with
 no probed `aspect_ratio` (a manually uploaded/imported video, `null` per
 above) doesn't force landscape on its own. Each clip fills the canvas per

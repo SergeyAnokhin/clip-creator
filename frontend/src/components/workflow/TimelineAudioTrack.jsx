@@ -6,14 +6,28 @@ import { mediaUrl } from '../../api/client.js';
 // whatever width the current zoom asks for.
 const PEAK_BUCKETS = 4000;
 
+// Reshapes a 0..1 peak amplitude before it's drawn as a bar height - 'log'/
+// 'sqrt' both raise quiet sections relative to loud ones (compressing the
+// loud end), which is the point: it's easier to see where a quiet passage
+// ends and a loud one begins when picking a cut point, at the cost of
+// exaggerating background noise. 'linear' (the old, only behavior) draws the
+// peak as-is.
+function scalePeak(v, mode) {
+  if (mode === 'log') return Math.log1p(v * 9) / Math.log1p(9);
+  if (mode === 'sqrt') return Math.sqrt(v);
+  return v;
+}
+
 /** The Editor timeline's audio row: the picked Mureka track drawn as a
  * waveform across the same millisecond->pixel scale the clip row uses, so a
  * cut visually lines up with the beat it sits on. Decoding is the same Web
  * Audio + <canvas> technique as ReferenceAudioTrimmer.jsx; the canvas is
  * deliberately *not* repainted per playhead frame (it can be tens of
  * thousands of pixels wide when zoomed in) - the playhead line on top of it
- * carries the position instead. */
-export default function TimelineAudioTrack({ projectId, track, widthPx, heightPx }) {
+ * carries the position instead. `scaleMode` ('linear'/'log'/'sqrt', see
+ * EditorClipSettingsTab.jsx) only changes the bar-height formula, not the
+ * decode/bucket pipeline above. */
+export default function TimelineAudioTrack({ projectId, track, widthPx, heightPx, scaleMode = 'linear' }) {
   const canvasRef = useRef(null);
   const [peaks, setPeaks] = useState(null);
 
@@ -59,10 +73,10 @@ export default function TimelineAudioTrack({ projectId, track, widthPx, heightPx
     const barWidth = canvas.width / peaks.length;
     ctx.fillStyle = 'rgba(255, 157, 92, 0.65)';
     for (let i = 0; i < peaks.length; i++) {
-      const h = Math.max(1, peaks[i] * (mid - 2));
+      const h = Math.max(1, scalePeak(peaks[i], scaleMode) * (mid - 2));
       ctx.fillRect(i * barWidth, mid - h, Math.max(1, barWidth - 0.5), h * 2);
     }
-  }, [peaks, widthPx, heightPx]);
+  }, [peaks, widthPx, heightPx, scaleMode]);
 
   return (
     <canvas

@@ -79,7 +79,7 @@ function rulerStepMs(scale) {
 export default function EditorTimeline({
   L, projectId, scenes, clips, overlays, totalDurationMs, selectedTrack, playheadMs, isPlaying,
   selectedClipIds, selectedOverlayId, selectedTransitionClipId, titleCardVariants, logos, overlayVideoSources,
-  actions, toolsSlotNode, testRange, onClearTestRange, onOpenShortcuts, canUndo, canRedo,
+  actions, toolsSlotNode, testRange, onClearTestRange, onOpenShortcuts, waveformScale,
 }) {
   const scrollRef = useRef(null);
   const clipNodesRef = useRef({});
@@ -238,15 +238,13 @@ export default function EditorTimeline({
 
   const toolsContent = (
     <EditorTimelineTools
-      L={L} projectId={projectId} scenes={scenes} clips={clips} overlays={overlays}
-      selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
-      selectedTransitionClipId={selectedTransitionClipId}
+      L={L} projectId={projectId} scenes={scenes} clips={clips}
       titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources} actions={actions}
       playheadMs={playheadMs} contentDurationMs={contentDurationMs}
       scale={scale} fitScale={fitScale} maxScale={maxScale}
       onZoomIn={zoomIn} onZoomOut={zoomOut} onZoomFit={zoomFit}
       testRange={testRange} onClearTestRange={onClearTestRange}
-      onOpenShortcuts={onOpenShortcuts} canUndo={canUndo} canRedo={canRedo}
+      onOpenShortcuts={onOpenShortcuts}
     />
   );
 
@@ -353,7 +351,7 @@ export default function EditorTimeline({
           <div className="tl-track tl-track-audio" style={{ height: AUDIO_TRACK_H }}>
             {selectedTrack ? (
               <TimelineAudioTrack
-                projectId={projectId} track={selectedTrack}
+                projectId={projectId} track={selectedTrack} scaleMode={waveformScale}
                 widthPx={audioDurationMs * scale} heightPx={AUDIO_TRACK_H}
               />
             ) : (

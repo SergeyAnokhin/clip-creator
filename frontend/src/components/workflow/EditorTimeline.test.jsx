@@ -52,10 +52,9 @@ describe('EditorTimeline layout', () => {
     expect(parseFloat(b.style.left)).toBeCloseTo(5000 * SCALE, 3);
   });
 
-  it('shows the empty-timeline hint and disables split with no clips', () => {
-    const { container, getByTitle } = renderTimeline({ clips: [] });
+  it('shows the empty-timeline hint with no clips', () => {
+    const { container } = renderTimeline({ clips: [] });
     expect(container.querySelector('.tl-track-empty')).not.toBeNull();
-    expect(getByTitle(L.editor_toolSplit)).toBeDisabled();
   });
 });
 
