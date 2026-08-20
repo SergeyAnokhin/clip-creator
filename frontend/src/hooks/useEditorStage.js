@@ -307,26 +307,29 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       }],
     }));
   }
+  /** Appends every scene video not already on the timeline - not just one
+   * per scene like `addSceneClip`. Within a scene the selected (or first)
+   * video goes first, then its remaining variants, so a scene's clips land
+   * back-to-back in the timeline in generation order. */
   function addAllSceneClips() {
-    const usedSceneIndices = new Set(clips.map((c) => c.scene_index));
-    const addable = scenes
-      .map((scene, sceneIndex) => ({ scene, sceneIndex }))
-      .filter(({ scene, sceneIndex }) => !usedSceneIndices.has(sceneIndex) && (scene.videos || []).length > 0);
-    if (!addable.length) return;
+    const usedVideoIds = new Set(clips.map((c) => c.video_id));
+    const newClips = [];
+    scenes.forEach((scene, sceneIndex) => {
+      const videos = scene.videos || [];
+      if (!videos.length) return;
+      const selected = videos.find((v) => v.is_selected) || videos[0];
+      const ordered = [selected, ...videos.filter((v) => v !== selected)];
+      ordered.forEach((video) => {
+        if (usedVideoIds.has(video.video_id)) return;
+        newClips.push({
+          clip_id: randomId('clip'), scene_index: sceneIndex, video_id: video.video_id,
+          trim_start_ms: 0, trim_end_ms: null, speed: 1.0, reverse: false,
+        });
+      });
+    });
+    if (!newClips.length) return;
     invalidatePreviewClip();
-    commitVideoEdit((edit) => ({
-      ...edit,
-      clips: [
-        ...edit.clips,
-        ...addable.map(({ scene, sceneIndex }) => {
-          const video = (scene.videos || []).find((v) => v.is_selected) || scene.videos[0];
-          return {
-            clip_id: randomId('clip'), scene_index: sceneIndex, video_id: video.video_id,
-            trim_start_ms: 0, trim_end_ms: null, speed: 1.0, reverse: false,
-          };
-        }),
-      ],
-    }));
+    commitVideoEdit((edit) => ({ ...edit, clips: [...edit.clips, ...newClips] }));
   }
   function changeClipVideo(clipId, videoId) {
     invalidatePreviewClip();

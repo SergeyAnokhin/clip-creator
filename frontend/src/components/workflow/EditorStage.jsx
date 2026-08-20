@@ -14,6 +14,7 @@ const MAX_SIDE_WIDTH = 560;
 const TEST_RANGE_STORAGE_KEY_PREFIX = 'editorTestRange_';
 const DEFAULT_TEST_RANGE_MS = 10000;
 const WAVEFORM_SCALE_STORAGE_KEY = 'editorWaveformScale';
+const WAVEFORM_COLOR_STORAGE_KEY = 'editorWaveformColorByFreq';
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -49,6 +50,14 @@ function loadStoredWaveformScale() {
   }
 }
 
+function loadStoredWaveformColor() {
+  try {
+    return localStorage.getItem(WAVEFORM_COLOR_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 /** Editor stage - the final step: assembles the project's picked scene
  * video clips into one rendered file, synced to the project's selected
  * Mureka track. Laid out like a real NLE app, not a scrolling page: the
@@ -80,6 +89,10 @@ export default function EditorStage({
   // part of the EDL (see EditorClipSettingsTab.jsx's own comment) -
   // persisted the same way `sideWidthPx` is.
   const [waveformScale, setWaveformScale] = useState(loadStoredWaveformScale);
+  // Whether TimelineAudioTrack.jsx tints bars by bass/mid/treble energy
+  // share instead of the flat accent color - same kind of viewing
+  // preference as waveformScale, persisted the same way.
+  const [colorByFrequency, setColorByFrequency] = useState(loadStoredWaveformColor);
   // The test-render range picked in TestRangeModal.jsx - a render-time
   // input, not part of the EDL, so it's plain local state here (persisted to
   // localStorage per project, not `video_edit`/undo history - see
@@ -154,6 +167,10 @@ export default function EditorStage({
     try { localStorage.setItem(WAVEFORM_SCALE_STORAGE_KEY, waveformScale); } catch { /* ignore */ }
   }, [waveformScale]);
 
+  useEffect(() => {
+    try { localStorage.setItem(WAVEFORM_COLOR_STORAGE_KEY, String(colorByFrequency)); } catch { /* ignore */ }
+  }, [colorByFrequency]);
+
   const scenes = project.scenes || [];
   const titleCardVariants = project.title_card?.variants || [];
   const canRender = clips.length > 0 && !!selectedTrack;
@@ -196,6 +213,7 @@ export default function EditorStage({
             renderLoading={renderLoading} renderError={renderError} elapsedSeconds={elapsedSeconds} canRender={canRender}
             onOpenTestRangeModal={() => setTestRangeModalOpen(true)}
             waveformScale={waveformScale} onSetWaveformScale={setWaveformScale}
+            colorByFrequency={colorByFrequency} onToggleColorByFrequency={setColorByFrequency}
             onToolsSlotRef={setToolsSlot}
           />
         </div>
@@ -207,7 +225,7 @@ export default function EditorStage({
         selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
         selectedTransitionClipId={selectedTransitionClipId}
         titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources}
-        actions={actions} toolsSlotNode={toolsSlot} waveformScale={waveformScale}
+        actions={actions} toolsSlotNode={toolsSlot} waveformScale={waveformScale} colorByFrequency={colorByFrequency}
         testRange={testRange} onClearTestRange={() => setTestRange(null)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
       />

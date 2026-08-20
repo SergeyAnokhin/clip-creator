@@ -6,15 +6,15 @@ function formatSeconds(ms) {
   return (ms / 1000).toFixed(1);
 }
 
-export const WAVEFORM_SCALE_MODES = ['linear', 'log', 'sqrt'];
+export const WAVEFORM_SCALE_MODES = ['linear', 'db', 'adaptive'];
 
 /** "Клип" tab: project-wide settings that used to be two separate
  * always-visible blocks (audio track picker, canvas size) - grouped
  * together per the redesign since neither is "this selected object's
  * properties", they're both project-level. Also owns the waveform
- * display-scale picker, a pure viewing preference for
- * TimelineAudioTrack.jsx (state lives in EditorStage.jsx, see
- * `waveformScale`).
+ * display-scale picker and the frequency-color toggle, both pure viewing
+ * preferences for TimelineAudioTrack.jsx (state lives in EditorStage.jsx,
+ * see `waveformScale`/`colorByFrequency`).
  *
  * Also hosts `onToolsSlotRef` - the portal target `EditorTimeline.jsx`
  * portals `EditorTimelineTools.jsx`'s toolbar (zoom, shortcuts, test-range
@@ -26,7 +26,7 @@ export const WAVEFORM_SCALE_MODES = ['linear', 'log', 'sqrt'];
  * so this ref target never disappears out from under the portal. */
 export default function EditorClipSettingsTab({
   L, videoEdit, tracks, selectedTrack, totalDurationMs, canvasOrientation, canvasSize, actions,
-  waveformScale, onSetWaveformScale, onToolsSlotRef,
+  waveformScale, onSetWaveformScale, colorByFrequency, onToggleColorByFrequency, onToolsSlotRef,
 }) {
   const mismatchMs = selectedTrack ? totalDurationMs - selectedTrack.duration_ms : 0;
   const showMismatch = selectedTrack && Math.abs(mismatchMs) > DURATION_MISMATCH_THRESHOLD_MS;
@@ -70,6 +70,12 @@ export default function EditorClipSettingsTab({
               {L[`editor_waveformScale${mode[0].toUpperCase()}${mode.slice(1)}`]}
             </button>
           ))}
+          <button
+            type="button" className={`tl-transition-chip${colorByFrequency ? ' is-selected' : ''}`}
+            onClick={() => onToggleColorByFrequency(!colorByFrequency)}
+          >
+            🎨 {L.editor_waveformColorByFreq}
+          </button>
         </div>
       </div>
 

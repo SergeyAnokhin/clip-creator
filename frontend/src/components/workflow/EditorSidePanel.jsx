@@ -25,7 +25,7 @@ export default function EditorSidePanel({
   selectedClipIds, selectedOverlayId, selectedTransitionClipId,
   tracks, selectedTrack, totalDurationMs, canvasOrientation, canvasSize,
   actions, canUndo, canRedo, renderLoading, renderError, elapsedSeconds, canRender,
-  onOpenTestRangeModal, waveformScale, onSetWaveformScale, onToolsSlotRef,
+  onOpenTestRangeModal, waveformScale, onSetWaveformScale, colorByFrequency, onToggleColorByFrequency, onToolsSlotRef,
 }) {
   const [activeTab, setActiveTab] = useState('clip');
   const prevSelectionKeyRef = useRef('none');
@@ -80,6 +80,7 @@ export default function EditorSidePanel({
             L={L} videoEdit={videoEdit} tracks={tracks} selectedTrack={selectedTrack}
             totalDurationMs={totalDurationMs} canvasOrientation={canvasOrientation} canvasSize={canvasSize}
             actions={actions} waveformScale={waveformScale} onSetWaveformScale={onSetWaveformScale}
+            colorByFrequency={colorByFrequency} onToggleColorByFrequency={onToggleColorByFrequency}
             onToolsSlotRef={onToolsSlotRef}
           />
         </div>

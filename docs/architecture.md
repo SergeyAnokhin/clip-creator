@@ -85,10 +85,15 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    timeline, which is docked to the very bottom and pared down to just its
    three scale-locked rows — time ruler, clip blocks, the track's waveform
    (linear by default; the **Клип** tab's waveform-scale picker can reshape
-   the bar-height mapping to log or sqrt instead, to make quiet-vs-loud
-   passages easier to see when picking cut points - `TimelineAudioTrack.jsx`,
-   purely a viewing preference persisted to `localStorage`, doesn't touch the
-   decode/bucket pipeline), and a playhead across all three. Playback transport (rewind/play/time) is a
+   the bar-height mapping to dB-with-floor or per-bucket adaptive/local
+   normalization instead, to make quiet-vs-loud passages easier to see when
+   picking cut points, plus an independent frequency-color toggle that tints
+   bars by bass/mid/treble energy share - `TimelineAudioTrack.jsx`, all
+   purely viewing preferences persisted to `localStorage`, none touching the
+   decode/bucket pipeline itself. Each bucket also carries both peak and RMS
+   energy, drawn as a faint outer/solid inner pair - RMS is what reads as
+   rhythm, peak alone only reacts to single transients), and a playhead
+   across all three. Playback transport (rewind/play/time) is a
    floating overlay centered over the program monitor, hidden until the
    monitor is hovered/focused (`EditorPreview.jsx` → `EditorFloatingTransport.jsx`,
    CSS-only reveal) — CapCut-style, instead of a permanently-visible block.

@@ -79,7 +79,7 @@ function rulerStepMs(scale) {
 export default function EditorTimeline({
   L, projectId, scenes, clips, overlays, totalDurationMs, selectedTrack, playheadMs, isPlaying,
   selectedClipIds, selectedOverlayId, selectedTransitionClipId, titleCardVariants, logos, overlayVideoSources,
-  actions, toolsSlotNode, testRange, onClearTestRange, onOpenShortcuts, waveformScale,
+  actions, toolsSlotNode, testRange, onClearTestRange, onOpenShortcuts, waveformScale, colorByFrequency,
 }) {
   const scrollRef = useRef(null);
   const clipNodesRef = useRef({});
@@ -352,6 +352,7 @@ export default function EditorTimeline({
             {selectedTrack ? (
               <TimelineAudioTrack
                 projectId={projectId} track={selectedTrack} scaleMode={waveformScale}
+                colorByFrequency={colorByFrequency}
                 widthPx={audioDurationMs * scale} heightPx={AUDIO_TRACK_H}
               />
             ) : (

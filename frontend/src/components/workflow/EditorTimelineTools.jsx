@@ -39,6 +39,9 @@ export default function EditorTimelineTools({
   const addableScenes = (scenes || [])
     .map((scene, sceneIndex) => ({ scene, sceneIndex }))
     .filter(({ scene, sceneIndex }) => !usedSceneIndices.has(sceneIndex) && (scene.videos || []).length > 0);
+  const usedVideoIds = new Set(clips.map((c) => c.video_id));
+  const hasAddableVariants = (scenes || [])
+    .some((scene) => (scene.videos || []).some((v) => !usedVideoIds.has(v.video_id)));
 
   return (
     <>
@@ -70,10 +73,10 @@ export default function EditorTimelineTools({
         </span>
       )}
 
-      {!!addableScenes.length && (
+      {(!!addableScenes.length || hasAddableVariants) && (
         <div className="tl-add-row">
           <span className="tl-hint">{L.editor_addSceneLabel}</span>
-          {addableScenes.length > 1 && (
+          {hasAddableVariants && (
             <button
               className="btn-ghost tl-add-chip"
               onClick={() => actions.addAllSceneClips()}
