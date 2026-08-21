@@ -56,6 +56,8 @@ app_data/
 | `video_edit` | VideoEdit \| absent/null | Editor stage state (final render) — absent/`null` until the stage is first opened, or if it's ever explicitly cleared; the frontend treats either the same and re-seeds a fresh default (see below) |
 | `magic_layer_groups` | MagicLayerGroup[] \| absent | Decomposed-image layer sets (see below) — absent until the first ✨ decomposition; every read site defaults it to `[]` |
 
+### Project rename
+
 **Project rename** (`app_data/projects/_redirects.json`): a `PATCH` that changes
 `title`/`author` moves the folder to the new slug (uniquified like
 `create_project`'s `-2`/`-3` suffix) and appends `{old_slug: new_slug}` to this
@@ -69,11 +71,15 @@ unique, so a vacated old slug can later be a wholly unrelated project's real
 address, and without that check opening it would silently load and overwrite the
 renamed one's data.
 
+### Block
+
 **Block**: `{id, type, importance, content}` — `type` is
 `intro|verse|chorus|bridge|outro|interlude`; `content` is plain multi-line text.
 `interlude` blocks hold a Suno meta-tag (e.g. `[Vocal Interlude]`) and render as
 a compact single-line card. `importance` (1-5) is **dead** — still written for
 backward compatibility, never read or edited.
+
+### Scene
 
 **Scene**: `{lyric_segment, static_prompt, motion_prompt, images[], videos[],
 animate_image_id?}` — `videos` is absent/`[]` until the Video stage first
@@ -85,6 +91,8 @@ animate never changes the scene's main picture elsewhere. Resolution order
 override on `POST .../scenes/{n}/videos`): `animate_image_id` match → the
 `is_selected` image → the first image → none.
 
+### Image
+
 **Image**: `{image_id, file_path, rating, is_selected, generated_at, model,
 aspect_ratio, cost, source_image_id?}` — `file_path` is relative to the project
 folder (`images/scene_1_a1b2c3d4.png`), `rating` 0-5, exactly one `is_selected`
@@ -94,6 +102,8 @@ outpainted one, or the usual `{provider}:{model_id}` composite. `source_image_id
 appears only on a crop/outpaint result and points at the original, which is left
 untouched — cropping always **appends**, mirroring
 `TitleCardVariant.source_variant_id` below.
+
+### Video
 
 **Video** (`providers/video.py`): `{video_id, file_path, rating, is_selected,
 generated_at, model, motion_prompt, aspect_ratio, resolution, duration_seconds,
@@ -111,7 +121,9 @@ Usage screen. `cost` follows `Image.cost`'s priority: a provider-reported price
 probed**, so `duration_seconds`/`resolution`/`aspect_ratio`/`generation_ms` are
 `null` on it — which matters for the Editor stage's trim math below.
 
-**VideoEdit** (Editor stage, `providers/editor.py`): `{mureka_track_id, clips[],
+### VideoEdit (Editor stage)
+
+**VideoEdit** (Editor stage, `providers/editor_plan.py`): `{mureka_track_id, clips[],
 overlays[], overlay_video_sources[], renders[], canvas_orientation, markers[],
 audio, export}`. Lazily seeded the first time
 the stage opens (one clip per scene that has an `is_selected` video, in scene
@@ -122,6 +134,8 @@ are edited only through the generic `PATCH /api/projects/{id}`; uploading an
 overlay video and rendering are the only real job/API calls (see the route
 table below).
 
+#### EditorClip
+
 An **`EditorClip`** is `{clip_id, scene_index, video_id, trim_start_ms,
 trim_end_ms, speed, reverse?, fit?, adjust?, freeze?}` — `video_id` must resolve inside
 `scenes[scene_index].videos[]` but need **not** be unique across `clips[]`: the
@@ -131,7 +145,7 @@ resolves every clip independently. `speed` is an ffmpeg `setpts` multiplier; vid
 clips are always muted, the picked track being the only audio. `reverse`
 (absent/`false` by default) plays the trimmed window back to front - an
 ffmpeg `reverse` filter placed right after the speed/PTS-reset
-(`providers/editor.py::build_ffmpeg_command`), independent of `speed`;
+(`providers/editor_ffmpeg.py::build_ffmpeg_command`), independent of `speed`;
 editable via `TimelineClipInspector.jsx`'s toggle next to the speed field or
 the program monitor's right-click menu (`EditorPreviewContextMenu.jsx`). The
 in-browser preview does **not** simulate it (a native `<video>` has no
@@ -154,6 +168,8 @@ never probes anything itself, still lays such a clip out with a fixed 5s
 stand-in purely for display (`lib/timeline.js`'s `UNKNOWN_DURATION_FALLBACK_MS`) -
 the real probed duration only exists render-side.
 
+#### `fit` / `adjust` / `freeze` — per-clip look
+
 `fit` (`{mode: 'cover'|'contain', zoom, offset_x_pct, offset_y_pct}`,
 absent/`null` = `{mode: 'cover', zoom: 1, offset_x_pct: 50, offset_y_pct: 50}`)
 is how a clip whose own aspect ratio doesn't match the render canvas fills it -
@@ -167,7 +183,7 @@ rest), an explicit opt-in for a clip the user deliberately wants letterboxed.
 `adjust` (`{brightness, contrast, saturation, gamma}`, absent/`null` = no
 correction) is per-clip colour correction in ffmpeg `eq` semantics — a single
 `eq=` filter appended after the scale/crop chain and before the fades
-(`providers/editor.py`), and **omitted entirely** when it is absent or every
+(`providers/editor_plan.py`), and **omitted entirely** when it is absent or every
 value is at its default, so an untouched clip's filter graph is byte-for-byte
 what it was before this field existed (`lib/timeline.js`'s `isDefaultAdjust`
 is the frontend mirror of that check). Edited in
@@ -187,97 +203,74 @@ between the halves — CapCut's "freeze" behaviour), reachable from the clip
 inspector and either right-click menu. `speed`/`reverse` are forced to their
 defaults on such a clip and are ignored by the render.
 
-An **overlay** entry in `overlays[]` is `{overlay_id, kind:
-'title_card'|'logo'|'video'|'text', source_id, start_ms, duration_ms, x_pct, y_pct,
-width_pct, height_pct, rotation_deg, opacity, fade_in_ms, fade_out_ms,
-reverse?}` — shown over the video for `[start_ms, start_ms+duration_ms)` on
-the output
-timeline (same millisecond axis as a clip's own `startMs`/`durationMs`).
-Unlike clips, overlays don't tile back to back: they float freely, can
-overlap each other, or leave gaps, and live on their own track above the
-video row (overlapping ones render on separate lanes - purely a timeline
-*display* concern, see `docs/architecture.md`). `kind: 'title_card'` resolves
-`source_id` against this same project's `title_card.variants[].variant_id`;
-`kind: 'logo'` resolves it against the *global* `settings.logos[].id`
-(`docs/architecture.md`'s Settings section); `kind: 'video'` resolves it
-against this same `VideoEdit`'s own `overlay_video_sources[]` (below) -
-project-scoped, like a title card, not global like a logo.
+#### `overlays[]`
 
-`kind: 'text'` has **no `source_id` at all** — it carries its own
-`text` block instead: `{content, font, color, outline_color, outline_width,
-align, line_spacing}`. It is rendered by rasterizing that block to a
-transparent PNG with Pillow (`providers/editor.py`'s `_render_text_png`) into
-a content-addressed cache at `editor/text_cache/{sha1}.png`, which then feeds
-the **existing image-overlay compositing path** — no `drawtext`, no new ffmpeg
-filter, and every other overlay property (placement, rotation, opacity, fades)
-works on it unchanged. The path is derived purely from the styling block, so
-`build_render_plan` resolves it with no disk access (the plan-only test mode)
-and only actually writes the file when it is given a `project_dir`; an
-unchanged overlay reuses the cached PNG. `font` is one of `lib/overlays.js`'s
-`TEXT_FONTS` — a deliberately small list of faces that exist **both** in the
-browser (the live Konva `Text` node in `EditorPreview.jsx`) **and** on the
-render host (`providers/editor.py`'s `_TEXT_FONT_FILES`, with DejaVu
-fallbacks), all Cyrillic-capable, so the preview and the render agree. There
-is no font-size field on purpose: how big the text appears is the overlay's
-own `width_pct`/`height_pct`, exactly like an image.
+An **overlay** entry is `{overlay_id, kind: 'title_card'|'logo'|'video'|'text',
+source_id, start_ms, duration_ms, x_pct, y_pct, width_pct, height_pct,
+rotation_deg, opacity, fade_in_ms, fade_out_ms, reverse?}` — shown over the
+video for `[start_ms, start_ms+duration_ms)` on the same millisecond axis as a
+clip's `startMs`/`durationMs`. Unlike clips, overlays don't tile back to back:
+they float freely, may overlap or leave gaps, and live on their own track
+(overlapping ones render on separate lanes — a *display* concern only, never
+stored). Array order is z-order, later entries on top (mirrors
+`Poster.layers`). Editing one only ever patches its own object — no cascading
+layout the way clip trim/speed can shift every later clip.
 
-`x_pct`/`y_pct` place the overlay's own **top-left corner** (of its
-*unrotated* bounding box) as a percentage of the canvas (`x_pct` of width,
-`y_pct` of height); `width_pct`/`height_pct` scale it independently at the
-data level (no forced source-aspect lock) - the UI only ever moves them
-together (the program monitor's `Transformer` keeps corner-drags
-aspect-locked, and `TimelineOverlayInspector.jsx`'s "Масштаб" slider scales
-both by the same factor), so nothing writes a distorted `width_pct`/
-`height_pct` *pair* through the normal UI. Both are a percentage of the
-canvas's own **width** - `height_pct` deliberately shares `width_pct`'s axis
-rather than being read against canvas height, so their ratio always
-reproduces the overlay's true pixel aspect ratio no matter which shape the
-canvas itself is (`canvas_orientation` can reshape it after an overlay was
-already placed; two percentages measured against two *different* axes don't
-survive that reshape undistorted). `height_axis: 'width'` marks an overlay
-already in this convention; `providers/editor.py`'s `_migrate_overlay_
-position` / `lib/overlays.js`'s `migrateOverlay` lazily rescale anything
-saved before it existed (`height_pct` was a percentage of canvas height then)
-the first time it's read, same lazy-on-read spirit as the older 9-point-grid
-migration below. `rotation_deg`
-(0-360) rotates it about that same top-left corner - mirrors exactly how the
-shared `CanvasLayer.jsx`/Konva `Group` places and rotates a node (translate
-to `(x,y)`, then rotate, offset always `(0,0)`), so the program monitor's live
-drag/resize/rotate canvas and the real ffmpeg render land on the same pixel.
-`opacity` (0-1) is the overlay's flat alpha; `fade_in_ms`/`fade_out_ms`
-(default `0`) ramp it from/to `0` at the start/end of its own window - both
-are clamped proportionally if their sum would outlast `duration_ms`. Array
-order is z-order, later entries painted on top (mirrors `Poster.layers`'s
-convention). Editing an overlay's timing/position/size/fade only ever patches
-its own object — no cascading layout the way clip trim/speed can shift every
-later clip.
+`source_id` resolves per `kind`: `'title_card'` against this project's
+`title_card.variants[].variant_id`, `'logo'` against the **global**
+`settings.logos[].id`, `'video'` against this same `VideoEdit`'s
+`overlay_video_sources[]` (project-scoped, like a title card, not global like
+a logo).
 
-Placement is set by **dragging the overlay directly on the program monitor**
-(`EditorPreview.jsx`, via `CanvasLayer.jsx` - the same primitive the Poster
-constructor's layers use), not a fixed grid; `TimelineOverlayInspector.jsx`'s
-numeric fields are a precise-entry fallback for the same data, not a second
-source of truth. An overlay saved before this existed only has the old
-`position` (one of a 9-point grid) + a bare `width_pct` - both frontend
-(`lib/overlays.js`'s `migrateOverlay`) and backend
-(`providers/editor.py`'s `_migrate_overlay_position`) derive the new fields
-from those the first time such an overlay is read/rendered, so old projects
-open and render unchanged without a migration pass. `migrateOverlay` also
-recovers overlays corrupted by a since-fixed bug where dragging on the
-program monitor wrote `CanvasLayer.jsx`'s own camelCase pct fields
-(`xPct`/`yPct`/`widthPct`/`heightPct`/`rotationDeg` - the shape
-`PosterCanvasLayers.jsx` uses natively) straight onto the overlay instead of
-converting them to this shape's snake_case fields first.
+`kind: 'text'` has **no `source_id` at all** — it carries its own `text` block
+instead: `{content, font, color, outline_color, outline_width, align,
+line_spacing}`. The render rasterizes that block to a transparent PNG cached
+content-addressed at `editor/text_cache/{sha1}.png`, which then feeds the
+existing image-overlay path, so every other overlay property works on it
+unchanged (see `architecture.md` for why not `drawtext`). The path derives
+purely from the styling block, so `build_render_plan` resolves it with no disk
+access and only writes the file when given a `project_dir`. `font` is one of
+`lib/overlays.js`'s `TEXT_FONTS` — a small list of Cyrillic-capable faces that
+exist **both** in the browser and on the render host
+(`providers/editor_plan.py`'s `_TEXT_FONT_FILES`, with DejaVu fallbacks), so
+preview and render agree. There is no font-size field on purpose: how big the
+text appears is `width_pct`/`height_pct`, exactly like an image.
 
-`reverse` (absent/`false` by default) only ever means anything for `kind:
-'video'` - same meaning and same ffmpeg `reverse` filter as `EditorClip.
-reverse` above, but placed *before* the video overlay's own frame-0 `setpts`
-realignment rather than after (`build_ffmpeg_command`'s video-overlay
-branch: `reverse` resets the stream's PTS to start at 0, so the realignment
-shift has to apply to that new axis). Silently ignored for an image overlay
-(`kind: 'title_card'|'logo'`) even if somehow set - applying `reverse` to
-that kind's `-loop 1` infinite still-image stream would hang ffmpeg, since
-the filter needs a stream with a real end to buffer.
-`TimelineOverlayInspector.jsx` only shows the toggle for a video overlay.
+`x_pct`/`y_pct` place the overlay's **top-left corner** (of its *unrotated*
+bounding box) as a percentage of the canvas. `rotation_deg` (0-360) rotates it
+about that same corner — mirroring how Konva places a `Group` (translate, then
+rotate, offset always `(0,0)`), so the live monitor and the ffmpeg render land
+on the same pixel.
+
+`width_pct`/`height_pct` are **both a percentage of canvas *width***.
+`height_pct` deliberately shares `width_pct`'s axis rather than being read
+against canvas height: two percentages measured against two different axes
+don't survive a `canvas_orientation` reshape undistorted, whereas this ratio
+always reproduces the overlay's true pixel aspect ratio. `height_axis: 'width'`
+marks an overlay already in this convention; anything saved before it is
+lazily rescaled on read by `providers/editor_plan.py`'s
+`_migrate_overlay_position` / `lib/overlays.js`'s `migrateOverlay`. The two
+scale independently at the data level (no forced aspect lock), but the UI only
+ever moves them together, so nothing writes a distorted pair through it.
+
+Those same two functions also derive `x_pct`/`y_pct`/`height_pct`/
+`rotation_deg` for an overlay saved before free placement existed (it has only
+`position`, one of a 9-point grid, plus a bare `width_pct`), so old projects
+open and render unchanged with no migration pass.
+
+`opacity` (0-1) is the flat alpha; `fade_in_ms`/`fade_out_ms` (default `0`)
+ramp it from/to `0` at the ends of its own window, clamped proportionally if
+their sum would outlast `duration_ms`.
+
+`reverse` (absent/`false`) only means anything for `kind: 'video'` — same
+ffmpeg `reverse` filter as `EditorClip.reverse`, but applied *before* the video
+overlay's frame-0 `setpts` realignment rather than after (`reverse` resets the
+stream's PTS to start at 0, so the shift has to apply to that new axis).
+Silently ignored for an image overlay: applying it to that kind's `-loop 1`
+infinite still-image stream would hang ffmpeg, which needs a stream with a real
+end to buffer.
+
+#### `markers[]`
 
 **`markers[]`** (`VideoEdit`) is `[{marker_id, at_ms, label?}]` — labelled
 moments on the timeline ruler. **The renderer never reads them**: they exist
@@ -290,6 +283,8 @@ bass envelope the waveform decode already produced (`hooks/useAudioPeaks.js`)
 — that batch **replaces** the whole set rather than appending, so pressing it
 twice doesn't double up and one undo takes it all back. Part of the undo
 history alongside `clips`/`overlays`.
+
+#### `audio`
 
 **`audio`** (`VideoEdit`) is `{volume, fade_in_ms, fade_out_ms, offset_ms}`,
 absent/`null` meaning exactly `{volume: 1, fade_in_ms: 0, fade_out_ms: 0,
@@ -309,6 +304,8 @@ Edited by selecting the waveform row itself on the timeline —
 `TimelineAudioInspector.jsx`, the fourth mutually-exclusive selection kind
 alongside clip/overlay/transition.
 
+#### `export`
+
 **`export`** (`VideoEdit`) is `{resolution: 'source'|'720p'|'1080p'|'4k',
 fps: 24|30|60, quality: 'high'|'medium'|'low'}`, absent/`null` meaning
 `{'source', 30, 'high'}`. It is resolved *after* `canvas_orientation`
@@ -318,6 +315,8 @@ libx264/yuv420p) and sets `fps` plus `-crf`/`-preset`
 (high=18/medium, medium=23/medium, low=28/veryfast). Unknown values fall back
 to the defaults rather than failing the render. Edited in the Editor stage's
 **Клип** tab next to the canvas orientation, since both are project-level.
+
+#### `overlay_video_sources[]`
 
 **`overlay_video_sources[]`** (`VideoEdit`, alongside `overlays[]`) is
 `[{id, file_path, duration_seconds}]` - uploaded video files usable as a
@@ -329,69 +328,72 @@ uploaded/imported clip; the overlay's own `start_ms`/`duration_ms` governs its
 on-timeline window regardless of the source video's real length. Managed via
 its own upload/delete routes (below), not the generic `PATCH`.
 
-An `EditorClip` can also carry `transition_in` (`{type, duration_ms}`, absent
-= a hard cut) and `fade_in`/`fade_out` (`{color: 'black'|'white',
-duration_ms}`, absent = no fade). `type` is one of the 16 entries in
-`lib/timeline.js`'s `TRANSITION_GROUPS` / `providers/editor.py`'s
-`_TRANSITION_XFADE_NAME` — `dissolve`/`fadeblack`/`fadewhite`, four wipes,
-four slides, and `circleopen`/`circleclose`/`radial`/`pixelize` — each mapping
-to the ffmpeg `xfade` transition of the same name (`dissolve` is the one
-alias: it maps to xfade's `fade`). An unrecognized type degrades to a hard cut
-rather than failing the render. The picker groups them
-(`TimelineTransitionInspector.jsx`) and offers "apply to every cut", which
-`setAllTransitions` writes across all clips but the first. `transition_in`
-describes the transition *into* this clip *from* the previous one (meaningless
-on the first clip) - it renders as a real ffmpeg `xfade`, so the two clips'
-actual frames overlap and blend for `duration_ms`, making the combined output
-that much *shorter* than the naive sum of both clips' own durations.
-`build_render_plan` accounts for that when sizing the tail freeze-pad, but the
-frontend timeline's own layout (`lib/timeline.js`) does **not** model the
-overlap - a transition marker sits on the boundary between two clips (not a
-resizable block, since it has no dedicated timeline space of its own), and the
-overlap is treated as just another source of the render-vs-timeline
-duration-mismatch tolerance this stage already has (see `renders[]`/`tpad`
-below). `fade_in`/`fade_out` are a plain ffmpeg `fade` filter applied to that
-one clip only, entirely within its own duration - no interaction with
-neighbours or the timeline layout at all. Both are clamped at render time to
-never exceed the content they'd apply to (see `providers/editor.py`'s
-`_resolve_fade` / the transition-duration clamp in `build_render_plan`).
+#### `transition_in`, `fade_in` / `fade_out`
+
+An `EditorClip` can also carry `transition_in` (`{type, duration_ms}`, absent =
+a hard cut) and `fade_in`/`fade_out` (`{color: 'black'|'white', duration_ms}`,
+absent = no fade).
+
+`type` is one of the 16 entries in `lib/timeline.js`'s `TRANSITION_GROUPS` /
+`providers/editor_plan.py`'s `_TRANSITION_XFADE_NAME` —
+`dissolve`/`fadeblack`/`fadewhite`, four wipes, four slides, and
+`circleopen`/`circleclose`/`radial`/`pixelize` — each mapping to the ffmpeg
+`xfade` transition of the same name (`dissolve` is the one alias: it maps to
+xfade's `fade`). An unrecognized type degrades to a hard cut rather than
+failing the render.
+
+`transition_in` describes the transition *into* this clip *from* the previous
+one, so it is meaningless on the first clip. It renders as a real `xfade`: the
+two clips' frames genuinely overlap and blend for `duration_ms`, making the
+output that much *shorter* than the naive sum of both durations.
+`build_render_plan` accounts for that when sizing the tail freeze-pad; the
+frontend timeline does **not** model the overlap, and treats it as one more
+source of the render-vs-timeline tolerance this stage already has (see
+`renders[]` below and `architecture.md`).
+
+`fade_in`/`fade_out` are a plain ffmpeg `fade` applied to that one clip only,
+entirely within its own duration — no interaction with neighbours or layout.
+Both they and a transition's duration are clamped at render time to never
+exceed the content they'd apply to (`providers/editor_plan.py`'s
+`_resolve_fade` and `build_render_plan`'s own transition clamp).
+
+#### `renders[]` and `canvas_orientation`
 
 `renders[]` is server-managed and append-only: `{render_id, file_path,
 created_at, duration_ms, clip_count, mureka_track_id, kind: 'final'|'test',
-range: {start_ms, end_ms}|null}`. Output canvas is 1920×1080 or 1080×1920,
-picked by `VideoEdit.canvas_orientation` (`'auto'` by default, or `'portrait'`/
-`'landscape'` to force it regardless of the clips - a manual override in the
-Editor stage's **Клип** tab, `EditorClipSettingsTab.jsx`). In `'auto'`, the canvas is 1080×1920
-unless some clip's own `aspect_ratio` is *explicitly* not `9:16` - a clip with
-no probed `aspect_ratio` (a manually uploaded/imported video, `null` per
-above) doesn't force landscape on its own. Each clip fills the canvas per
-its own `fit` (above) - `cover`-by-default crops overflow to fill the frame,
-`contain` letterboxes. If the clips run **shorter** than the audio the last
-clip is frozen (ffmpeg `tpad`) to fill the remainder; if **longer**, the
-render is hard-capped at the audio's length (`-t`), silently truncating the
-tail. The UI shows a non-blocking duration-mismatch warning for both,
-computed client-side. Overlays composite on top of the concatenated clips via
-ffmpeg's `overlay` filter, each gated to its own window with
-`enable='between(t,…)'` — see `providers/editor.py::build_ffmpeg_command`.
+range: {start_ms, end_ms}|null}`.
 
-A **test render** (`kind: 'test'`, `range` set) renders only a
-`[start_ms, end_ms)` window of the timeline instead of the whole thing -
-picked by dragging the timeline ruler in the frontend, an ephemeral selection
-that's never itself part of `VideoEdit` (see `docs/architecture.md`).
-`providers/editor.py`'s `_trim_plan_to_range` post-processes the normal,
-fully-resolved render plan: if the requested start lands inside a
-transition's own blend window, the *effective* start is first pulled back to
-where that transition begins (up to its own `duration_ms` earlier than
-requested) so the clip it blends from is kept and the transition still
-renders, rather than silently turning into a hard cut - the frontend
-timeline draws clip blocks back-to-back with no visual cue for the overlap,
-so a range typed against that display can easily land right on such a
-boundary. Clips entirely outside the (possibly pulled-back) range are
-dropped, the new first/last clip's own trim points are tightened to their
-own content inside the range, overlays are kept only if they intersect the
-range (shifted so the range's own start becomes the new timeline zero), and
-the audio track is trimmed to the same window (`atrim`/`asetpts` in
-`build_ffmpeg_command`).
+Output canvas is 1920×1080 or 1080×1920, picked by
+`VideoEdit.canvas_orientation`: `'auto'` (default) resolves to 1080×1920 unless
+some clip's `aspect_ratio` is *explicitly* not `9:16` — a clip with no probed
+`aspect_ratio` (a manual upload, `null` per above) doesn't force landscape on
+its own; `'portrait'`/`'landscape'` force that canvas regardless of the clips.
+Each clip fills it per its own `fit`.
+
+If the clips run **shorter** than the audio the last clip is frozen (ffmpeg
+`tpad`) to fill the remainder; if **longer**, the render is hard-capped at the
+audio's length (`-t`), silently truncating the tail. The UI shows a
+non-blocking duration-mismatch warning for both, computed client-side.
+Overlays composite on top of the concatenated clips via ffmpeg's `overlay`
+filter, each gated to its own window with `enable='between(t,…)'` — see
+`providers/editor_ffmpeg.py::build_ffmpeg_command`.
+
+A **test render** (`kind: 'test'`, `range` set) covers only a
+`[start_ms, end_ms)` window. The range is typed into `TestRangeModal.jsx` (from
+the Editor's bottom toolbar) and is never part of `VideoEdit` itself — the
+timeline ruler only draws it. `providers/editor_plan.py`'s
+`_trim_plan_to_range` post-processes the normal, fully-resolved plan: clips
+entirely outside the range are dropped, the new first/last clip's trim points
+are tightened to their content inside it, overlays are kept only if they
+intersect (shifted so the range's start becomes the new timeline zero), and the
+audio is trimmed to the same window (`atrim`/`asetpts`). If the requested start
+lands inside a transition's blend window, the *effective* start is first pulled
+back to where that blend begins so the clip it blends from is kept and the
+transition still renders, rather than silently turning into a hard cut — the
+timeline draws clip blocks back-to-back with no cue for the overlap, so a range
+typed against that display easily lands on such a boundary.
+
+### TitleCard
 
 **TitleCard**: `{text_block, reference_image_paths, variants, posters}` —
 `text_block` is one free-text field the user edits directly (not separate
@@ -401,6 +403,8 @@ title/author inputs the server wraps in quotes), lazily seeded to
 assembled prompt verbatim. `reference_image_paths` is up to 4 paths picked from
 `scenes[].images[].file_path` or `reference_images`, persisted so the picks
 survive a reload.
+
+### TitleCardVariant
 
 **TitleCardVariant**: `{variant_id, file_path, rating, is_selected,
 generated_at, model, aspect_ratio, cost, text_block, base_prompt,
@@ -414,6 +418,8 @@ the Export stage's own per-variant toggle: unlike `is_selected` (a single "main"
 pick used e.g. by the Poster constructor), **several variants can be marked at
 once**, and the final-export zip includes every marked one, falling back to the
 `is_selected` variant when none are.
+
+### Poster
 
 **Poster**: `{poster_id, file_path, background_path, title_card_variant_id,
 logo_id, canvas_size{width,height}, layers{title_card[{id,x,y,scaleX,scaleY,rotation,crop,effects}],
@@ -466,6 +472,8 @@ Alongside it, `layers.hide_background` / `layers.hide_title_card` (booleans,
 absent = `false`) record that the flat original a group was made from must stop
 rendering — see architecture.md.
 
+### MagicLayerGroup
+
 **MagicLayerGroup**: `{group_id, source_path, source_kind, canvas{width,height},
 method, model, num_layers, requested_layers, layers[{index, file_path,
 bbox{x,y,width,height}, is_background}], cost, generated_at}` — one
@@ -480,6 +488,8 @@ back after empty layers were dropped; `requested_layers` is what was asked for.
 `bbox` is the layer's opaque bounds in canvas pixels, kept so the UI can label a
 layer without decoding the PNG. Groups are project-level and reusable — a poster
 references one through `layers.magic[].src`, it does not copy it.
+
+### Mureka
 
 **Mureka**: `{style_input, lyrics_input, reference_audio[], reference_sources[],
 tracks[]}`. `style_input`/`lyrics_input` are seeded lazily (only if still
@@ -504,6 +514,8 @@ reference audio under 30s). **A source is never deleted by a successful or
 cancelled trim** — it stays so the same upload can be trimmed into another window
 later; only an explicit `DELETE .../reference-sources/{id}` removes it, so this
 array grows with every distinct upload.
+
+### MurekaTrack
 
 **MurekaTrack**: `{track_id, task_id, choice_index, file_path, duration_ms,
 model, style, lyrics, params{n, gender, reference_id}, rating, is_selected,
@@ -596,6 +608,8 @@ Mureka's ~1-month retention window; `describe` has no such constraint since it
 uploads the `.mp3` directly (base64 data URI, 10MB cap, same as `/stem`). None of
 the three has a `pricing.py` row — same "cost: unknown" convention as the rest of
 this file.
+
+### Legacy migration (wish libraries)
 
 **Legacy migration**: a project's *absence* of `active_wish_ids` marks it as
 predating the AI-wish library rework. The first time such a project loads through
@@ -760,69 +774,68 @@ reference-image upload (multipart).
 | `PATCH /api/projects/{id}` | Partial project (the frontend sends the **whole** object) → full project |
 | `DELETE /api/projects/{id}` | → 204 |
 | `GET /api/settings` / `PUT /api/settings` | Settings dict (merged over defaults) |
-| `GET /api/settings/models/{provider}` | `provider` = `google\|google_free\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Google/`google_free`/OpenRouter/DeepSeek query the provider's real API with the stored key (`google_free` hits the same Gemini endpoint as `google`, just with its own key); Replicate/FAL always return the curated fallback (see `code-map.md`). A non-`error` result is also upserted into the persisted model catalog (`app_data/model_catalog.json`) |
-| `GET /api/settings/image-models/{provider}` | Same shape as `/settings/models/{provider}`, plus `krea` as a valid `provider` (image/video-only, not accepted by `/settings/models/`) — Google queries the same "list models" endpoint filtered to `predict`-capable (Imagen) models; Replicate/FAL/OpenRouter/DeepSeek/Krea return a curated fallback ([`providers/image_models.py`](../backend/app/providers/image_models.py)). Also upserted into the persisted model catalog |
-| `GET /api/settings/video-models/{provider}` | Same shape, `provider ∈ google\|google_free\|openrouter` only — Google filtered to `predictLongRunning`-capable (Veo) models, OpenRouter via its dedicated `GET /api/v1/videos/models` discovery endpoint ([`providers/video_models.py`](../backend/app/providers/video_models.py)). Also upserted into the persisted model catalog (under its own `'video'` key, see below) |
-| `POST /api/settings/video-wish-library` | `{text, model?}` → `{video_wish_library, wish}`. Same shape/behaviour as `/settings/wish-library`, against `video_wish_library` instead |
-| `PATCH /api/settings/video-wish-library/{id}` | `{title?, text?}` → `{video_wish_library, wish}`. Manual edit, no LLM call — same as `/settings/wish-library/{id}` |
-| `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` and `.../image-models/{provider}` call so far this install (`storage.load_model_catalog()`), so the Settings "Models"/"Prices" tabs have something to show before "Refresh models" is pressed in the current session |
-| `GET /api/settings/mureka-billing` | → `{account_id, balance, total_recharge, total_spending, concurrent_request_limit, trace_id}` — passthrough of Mureka's `GET /v1/account/billing` (confirmed live, 2026-08), backs the balance pill on the Mureka stage. The currency/unit of `balance` isn't documented anywhere on Mureka's side, so it's shown as-is, no invented conversion; `502` if the call fails (e.g. no API key) |
-| `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (via `model` if given — a `"{provider}:{model_id}"` composite applied to a throwaway settings copy so it never overwrites `simple_models.default` — else the configured simple model) produces both `wish.text` (cleaned) and `wish.title`; no configured model degrades to `text` unchanged + a truncate-fallback title; appends, persists |
-| `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit of an existing wish's title and/or text (either field, or both); no LLM call, so no usage tracking; `404` if `id` is unknown, `422` if a given field is blank |
-| `POST /api/settings/scene-wish-library` / `PATCH .../{id}` | Same shape and behaviour as `/settings/wish-library`, against `scene_wish_library` instead — a separate library for scene/imagery wishes |
-| `POST /api/projects/{id}/title-card/wishes` | `{text}` → `{wish, title_card_wish_library, active_title_card_wish_ids}`. Poster-generation equivalent of `scenes/wishes` — cleans+titles via `wish_library.add_or_get_wish` (`library_key='title_card_wish_library'`) then immediately activates it for this project |
-| `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model, active_wish_ids?}` → `{style, lyrics, skill_id, model_used, debug}`. `model` is the `"{provider}:{model_id}"` composite — the Suno stage seeds it from `settings.text_models.default` but lets the user override it per-call via the `ModelPicker` next to "Сгенерировать промпт"/"Generate prompt"; `active_wish_ids` (falls back to the project's own field if omitted) is resolved against `settings.suno_wish_library` and sent as an emphasized, numbered "ВАЖНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ" block right after the base prompt; `provider ∈ google\|openrouter\|deepseek` + a matching key calls that provider's real chat API; a failed call returns `502` instead of falling back. `debug` is either `{stub: false, request, response, missing_markers}` (real call — `missing_markers` true if the reply didn't follow the `===STYLE===`/`===LYRICS===` format) or `{stub: true, reason: no_model_selected\|unsupported_provider\|no_api_key, requested_model}` — shown in the Suno stage's debug panel, which auto-expands whenever either flag needs attention |
-| `POST /api/projects/{id}/suno/wishes` | `{text}` → `{wish, suno_wish_library, active_wish_ids}`. Cleans+titles `text` via `wish_library.add_or_get_wish` (reuses an existing card with the same text instead of duplicating it), then immediately activates that wish's id for this project — the "Применить" button on the Suno stage's "Доработка через AI-пожелание" section. Replaces the old `suno/refine`, which instead folded the wish into `skill_prompt` and only kept a read-only history |
-| `POST /api/projects/{id}/scenes/generate` | `{style_description, scene_count?, model?, scene_mode?, active_scene_wish_ids?}` → `{scenes, style_description, scene_mode, debug}` — **replaces all scenes**, clearing their images. `scene_mode ∈ narrative\|abstract` picks `scene_base_prompt_narrative`/`_abstract`; `active_scene_wish_ids` (falls back to the project's own field) resolves against `scene_wish_library` the same way Suno's wishes do; `provider ∈ google\|openrouter\|deepseek` + a matching key calls that provider's real chat API asking for a JSON scene array; a failed call returns `502`. `debug` shape mirrors `suno/generate`'s exactly (`{stub, request, response, missing_markers, usage}` or `{stub: true, reason, requested_model}`) |
-| `POST /api/projects/{id}/scenes/wishes` | `{text}` → `{wish, scene_wish_library, active_scene_wish_ids}`. Scene-imagery equivalent of `suno/wishes` — cleans+titles then activates for this project |
-| `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background generation job per requested variant (`model` = `"{provider}:{model_id}"` from `settings.image_models`/`image_models_simple`, provider ∈ `krea\|replicate\|fal\|google\|openrouter`) and returns immediately; poll each job below. A finished job appends its image to `scenes[n].images` on its own, independent of polling. Also called from the Scenes stage itself (`useScenesStage.js`'s `generateSceneImage`, always `count: 1` against the cheap-tier `sceneImageModel`) for a quick single-image preview without leaving that stage — same endpoint, same `scenes[n].images` array, just a different caller |
-| `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}` — polled every 1.5s by the frontend (`useImagesStage.js`); job state is in-memory only (see `architecture.md`) |
-| `POST /api/projects/{id}/scenes/videos/wishes` | `{text}` → `{wish, video_wish_library, active_video_wish_ids}`. Video/animation equivalent of `scenes/wishes` — cleans+titles via `wish_library.add_or_get_wish` (`library_key='video_wish_library'`) then immediately activates it for this project. Project-level (not per-scene), like `active_scene_wish_ids` |
-| `POST /api/projects/{id}/scenes/{n}/videos` | `{count?, model, motion_prompt?, image_id?, aspect_ratio?, resolution?, duration_seconds?, active_video_wish_ids?}` → `{job_ids}` — animates one scene image (`image_id`, or the scene's own `is_selected` image if omitted — `422` if neither exists) using `motion_prompt` (defaults to the scene's own field) plus resolved active video wishes (`video.build_prompt`); `model` must be `provider ∈ google\|google_free\|openrouter`. Same immediate-return/background-job shape as scene images (`providers/video.py`'s `start_jobs`) |
-| `GET /api/projects/{id}/scenes/{n}/videos/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', video: Video\|null, error: str\|null, debug: {request, response}\|null}` — polled every 3s by the frontend (`useVideoStage.js`, video generation runs for minutes); in-memory-only job state (`providers/video.py`'s own `_jobs` dict) |
-| `DELETE /api/projects/{id}/scenes/{n}/videos/{video_id}` | → `{videos}` — removes one from `scene.videos` and deletes its file |
-| `POST /api/projects/{id}/scenes/{n}/videos/upload` | multipart `file` (`.mp4\|.mov\|.webm\|.mkv`) → `{video}` — appends a user's own clip (animated in an outside tool from the scene's picture+`motion_prompt`, then brought back in by hand) to `scene.videos` alongside generated ones; `model: 'upload'`, `cost: 0`, everything else generation-only (`motion_prompt`, `aspect_ratio`, `resolution`, `duration_seconds`, `generation_ms`, `source_image_id`) left `null`. File-only, no pasted-URL variant (unlike the scene-image upload); `415` on an unrecognized extension |
-| `GET /api/projects/{id}/video-export` | `?scenes=0,2,5` (comma-separated 0-based indices, omitted/`all` for every scene) → a zip file (`application/zip`, `Content-Disposition: attachment`). Bulk hand-off for animating scenes in an outside tool: for each included scene, resolves its animate-source picture the same way the Video stage itself does (`animate_image_id` override → `is_selected` → first image → skip if none, or if the file is missing on disk), writes it as `{scene_number:03d}_{motion_prompt_slug}.{ext}` (1-based scene number, so a partial export's numbers still match the real scene positions), and adds one `prompts.txt` with every included scene's `motion_prompt`, blank-line separated, in scene order. A scene with no resolvable image is silently skipped from both the zip and `prompts.txt` — nothing to export for it. `404` if the project doesn't exist |
-| `POST /api/projects/{id}/video-import-batch` | multipart `files` (one or more, `.mp4\|.mov\|.webm\|.mkv`) → `{assigned: [{filename, scene_index, video}], skipped: [{filename, reason}]}` — reverse of `video-export` above: each file is matched back to a scene purely by the leading `{scene_number:03d}_...` prefix on its **last path segment** (same convention `video-export` writes; a folder-picker upload can hand back `subfolder/008_clip.mp4` instead of a bare filename depending on the browser, so matching strips any `/`-or-`\`-delimited directory part first — `filename` in the response is still the original, unstripped name the browser sent), 1-based number minus one giving the 0-based `scene_index`; matched files are appended to that scene's `videos[]` via the same `video.save_uploaded_video` the single-file upload route above uses (`model: 'upload'`, `cost: 0`). `reason` is one of `unsupported_type`\|`no_scene_number`\|`scene_out_of_range` — a bad file in the batch is skipped, not a hard failure for the rest. `404` if the project doesn't exist |
-| `GET /api/projects/{id}/final-export` | → a zip file (`application/zip`, `Content-Disposition: attachment`) — the Export stage's (last stage, `stage: 'export'`) deliverable bundle, distinct from `video-export` above (that one hands off *source* pictures+prompts for animating elsewhere; this one packages the *finished* results). `videos/`: **every** `Video` across every scene (not just each scene's `is_selected` pick), named `{5-rating}★_scene{n:03d}_{motion_prompt_slug}_{shortid}.mp4` — the inverted-rating prefix (`0` for 5★ down to `5` for unrated) sorts the best clips first alphabetically; `{shortid}` (the video file's own generated hex suffix) disambiguates several candidates sharing the same scene/prompt. `audio/`: the project's `is_selected` `MurekaTrack`'s `.mp3`, if any (skipped otherwise — no fallback). `title/`: every `TitleCardVariant` with `marked_for_export: true`, numbered `{i:02d}_{filename}`; if none are marked, falls back to the single `is_selected` variant so older projects (predating this flag) still get their main title card. A scene/track/variant whose file is missing on disk is silently skipped, same tolerance as `video-export`. `404` if the project doesn't exist |
-| `POST /api/projects/{id}/editor/render` | optional body `{range_start_ms, range_end_ms}` (both-or-neither; reads `project.video_edit`, edited beforehand via the generic `PATCH`) → `{job_id}` — `422` if `video_edit.clips` is empty or `mureka_track_id` is unset, `404` if the project doesn't exist. Same immediate-return/background-job shape as scene images/video, but the work is a local `ffmpeg` call (`providers/editor.py`'s `start_render_job`/`render_to_file`), not an external API. With a range, the resulting `renders[]` entry is tagged `kind: 'test'` and only that window is rendered (`_trim_plan_to_range`) - no body renders the full timeline (`kind: 'final'`) |
-| `GET /api/projects/{id}/editor/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', render: Render\|null, error: str\|null}` — polled every 3s by the frontend (`useEditorStage.js`); in-memory-only job state (`providers/editor.py`'s own `_jobs` dict). On success, the `render` entry has already been appended to `project.video_edit.renders` server-side |
-| `DELETE /api/projects/{id}/editor/renders/{render_id}` | → `{renders}` — removes one from `video_edit.renders` and deletes its file; `404` if the project or the render doesn't exist |
-| `POST /api/projects/{id}/editor/overlay-videos` | multipart `file` → the new `overlay_video_sources[]` entry `{id, file_path, duration_seconds: null}` — `422` on an unsupported video extension, `404` if the project doesn't exist. The route itself appends to `video_edit.overlay_video_sources` under the project lock (mirrors `import_video_batch`'s own pattern), not a separate `PATCH` round-trip |
-| `DELETE /api/projects/{id}/editor/overlay-videos/{source_id}` | → `{overlay_video_sources}` — removes one and deletes its file; `404` if the project or the source doesn't exist |
-| `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
-| `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
-| `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}` — same immediate-return/background-job shape as scene images, but `model` must be a reference-capable provider (`google`/`google_free`'s Nano Banana ids, Krea's `google/nano-banana-pro`, FAL's `fal-ai/nano-banana/edit`, or OpenRouter with `input_references`; see `architecture.md`) — any other provider fails the job with a clear error instead of silently falling back |
-| `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', variant: TitleCardVariant\|null, error: str\|null, debug: {request, response}\|null}` — polled every 1.5s by the frontend (`useTitleCardStage.js`), same in-memory-only job state as scene images (a separate `title_card._jobs` dict). `debug` is a redacted snapshot of the actual provider request/response (reference-image bytes and inline result data replaced with `<... bytes>` placeholders; plain URLs kept) for the stage's debug panel |
-| `DELETE /api/projects/{id}/title-card/variants/{variant_id}` | → `{variants}` — removes one result from `project.title_card.variants` and deletes its file |
-| `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | `{method?}` (`'local'\|'fal'\|'replicate'`, defaults to `settings.background_remover_method`) → `{variant, variants, debug: {request, response}\|null}` — runs the variant through the chosen background-removal method (`title_card.remove_background`; see `architecture.md` for what each of the 3 does) and **appends** the result as a new variant (`source_variant_id` pointing back at the original, which is left untouched); `404` if `variant_id` doesn't exist, `502` on a provider failure |
-| `POST /api/projects/{id}/title-card/poster` | multipart: `file` (flattened PNG) + `background_path`, `title_card_variant_id`, `logo_id?`, `layers` (JSON), `canvas_size` (JSON), `poster_id?` → `{poster, posters}`. Creates a new `Poster`, or re-renders one in place (same `file_path`) when `poster_id` matches an existing entry. `422` if `background_path`/`title_card_variant_id` don't resolve |
-| `DELETE /api/projects/{id}/title-card/poster/{poster_id}` | → `{posters}` — removes one from `project.title_card.posters` and deletes its file |
-| `POST /api/projects/{id}/magic-layers` | `{source_path, num_layers?, method?, source_kind?}` → `{job_id}` — decomposes one project image into inpainted RGBA layers (`providers/magic_layers.py`). `source_path` must resolve inside the project folder and exist (`422` otherwise, same guard as `title-card/generate`'s references); `num_layers` is clamped to 2-10 and `method` to `fal`\|`replicate`, both falling back to `settings.magic_layers_*`. Immediate-return/background-job shape like the title card, since a decomposition runs 15-30s |
-| `GET /api/projects/{id}/magic-layers/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', group: MagicLayerGroup\|null, error: str\|null, debug: {request, response}\|null}` — polled every 1.5s (`useMagicLayers.js`), in-memory-only job state (`magic_layers._jobs`). On success the group and its PNGs are already persisted. `debug` has the image bytes replaced with a `<image data, N bytes>` placeholder and the result URLs redacted |
-| `DELETE /api/projects/{id}/magic-layers/{group_id}` | → `{magic_layer_groups}` — removes the group and deletes its layer files (and the now-empty `magic/{group_id}/` folder). Posters that referenced it keep their `layers.magic` entries, which then render nothing — deliberately not cascaded |
-| `POST /api/projects/{id}/mureka/generate` | `{style, lyrics, model, n, gender?, reference_id?}` → `{job_id}` — one job per click (unlike scene images, Mureka's own `n` (1-3) returns several songs from a single task); `422` if `lyrics` is blank |
-| `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', tracks: MurekaTrack[]\|null, error: str\|null, stage: str\|null, debug}` — polled every 3s (longer than image jobs — Mureka generation runs 30-90s), in-memory-only job state (`providers/mureka.py`'s own `_jobs` dict). `stage` mirrors Mureka's own intermediate task status (`preparing\|queued\|running\|streaming`) while `status` is still `'pending'` — shown next to the elapsed-seconds counter instead of just a spinner. Shared by `/mureka/generate` and `/mureka/tracks/{id}/extend` below (same job shape) |
-| `DELETE /api/projects/{id}/mureka/tracks/{track_id}` | → `{tracks}` — removes one from `project.mureka.tracks` and deletes its `.mp3` file |
-| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) to get the `mureka_file_id` usable as `reference_id`; `415` on a bad extension, `502` if the Mureka upload call fails. Normally called with an already-trimmed clip from the `/reference-sources/{id}/trim` route below, not a raw upload. Logs a `console_log.log_step` line (filename → `mureka_file_id`) so the upload is traceable in the backend console against the `reference_id` a later `song/generate` request is logged with; the same id/upload-time pair is also shown in `MurekaStage.jsx`'s reference picker (selected-reference box and each clip's hover tooltip) |
-| `DELETE /api/projects/{id}/mureka/reference-audio/{ref_id}` | → `{reference_audio}` |
-| `POST /api/projects/{id}/mureka/reference-sources` | multipart `file` (any decodable audio format) → `{reference_sources}` — stages a raw upload under `music/reference-sources/` **without** touching Mureka (which hard-rejects reference audio under 30s); `415` on a bad extension |
-| `DELETE /api/projects/{id}/mureka/reference-sources/{source_id}` | → `{reference_sources}` |
-| `POST /api/projects/{id}/mureka/reference-sources/{source_id}/trim` | `{start_ms, end_ms}` → `{reference_audio}` — cuts `[start_ms, end_ms)` from the staged source via `ffmpeg` (system dependency, see README) and forwards the result through the same flow as `/mureka/reference-audio` above, tagging the new `reference_audio` entry with `source_id`/`start_ms`/`end_ms`; `422` if the range is invalid, `502` on an `ffmpeg` or Mureka failure (missing `ffmpeg` on `PATH` surfaces here with a clear message). The source itself is left in `reference_sources` — callable again with a different range to produce another clip from the same upload |
-| `POST /api/projects/{id}/mureka/tracks/{track_id}/extend` | `{lyrics, extend_at?, extend_type?, model?}` → `{job_id}` — real Mureka `song/extend` call ("Продлить"), same job/poll shape as `/mureka/generate`; `extend_at` defaults to the track's own `duration_ms` (extend from the end). `422` if `lyrics` is blank or the track has no Mureka `song_id` (`track.raw.id`) to extend from — e.g. an already-extended track past Mureka's ~1-month window |
-| `POST /api/projects/{id}/mureka/tracks/{track_id}/stem` | `{model?}` (`audio-separation-1\|2\|3`) → `{tracks}` — real Mureka `song/stem` call ("Разделить на дорожки"), **synchronous** (no job/poll — unlike every other real Mureka call here); appends to the track's `stems[]`. `404` if the track's `.mp3` is missing from disk, `502` on a provider failure |
-| `POST /api/projects/{id}/mureka/tracks/{track_id}/describe` | no body → `{tracks}` — real Mureka `song/describe` call ("Описание песни"), synchronous like `/stem`; sends the track's own `.mp3` as a base64 data URI (same technique and 10MB cap as `/stem`) and appends `{id, instrument[], genres[], tags[], description, created_at}` to the track's `descriptions[]`. `404` if the track's `.mp3` is missing from disk, `502` on a provider failure |
-| `POST /api/projects/{id}/mureka/tracks/{track_id}/transcribe` | no body → `{tracks}` — real Mureka `song/transcribe` call ("Ноты из песни"), synchronous; uses the track's Mureka `song_id` (`raw.id`, same id `/extend` uses) rather than re-uploading audio, downloads the resulting `.musicxml`+`.pdf` zip immediately (CDN link expires) to `music/{id}.zip`, and appends `{id, file_path, expires_at, created_at}` to `transcriptions[]`. `422` if the track has no `song_id`, `502` on a provider failure |
-| `POST /api/projects/{id}/mureka/tracks/{track_id}/lyrics-video` | `{title?, aspect_ratio?}` (`aspect_ratio ∈ 16:9\|9:16\|3:4\|4:3`, Mureka defaults to `9:16`) → `{tracks}` — real Mureka `lyrics-video/generate` call ("Видео с текстом"), synchronous; also keyed off `raw.id`, downloads the resulting mp4 immediately to `music/{id}.mp4`, and appends `{id, file_path, title, aspect_ratio, created_at}` to `lyrics_videos[]`. `title` defaults to the project's own title when omitted. `422` if the track has no `song_id`, `502` on a provider failure |
+| `GET /api/settings/models/{provider}` | `provider ∈ google\|google_free\|openrouter\|deepseek\|replicate\|fal` → `{provider, source: 'live'\|'curated'\|'error', models: [{id, name}], error?}`. Replicate/FAL are always curated. A non-`error` result is upserted into `model_catalog.json` |
+| `GET /api/settings/image-models/{provider}` | Same shape, plus `krea` as a valid provider. Google filtered to `predict`-capable (Imagen); everything else curated. Also upserted into the catalog |
+| `GET /api/settings/video-models/{provider}` | Same shape, `provider ∈ google\|google_free\|openrouter` only — Google filtered to `predictLongRunning` (Veo), OpenRouter via `GET /api/v1/videos/models`. Upserted under the catalog's own `'video'` key |
+| `GET /api/settings/models-catalog` | → `{text: {provider: {...}}, image: {provider: {...}}}` — the persisted last-known-good result of every `.../models/{provider}` call so far (`storage.load_model_catalog()`), so the Settings tabs have something to show before a refresh |
+| `GET /api/settings/mureka-billing` | → `{account_id, balance, total_recharge, total_spending, concurrent_request_limit, trace_id}` — passthrough of Mureka's `GET /v1/account/billing`. `balance`'s unit is undocumented upstream, so it's shown as-is; `502` if the call fails |
+| `POST /api/settings/wish-library` | `{text, model?}` → `{suno_wish_library, wish}`. One `clean_wish_and_title` call (`model` = a `"{provider}:{model_id}"` composite applied to a throwaway settings copy, else the configured simple model) fills both `wish.text` and `wish.title`; no configured model degrades to `text` unchanged + a truncated title |
+| `PATCH /api/settings/wish-library/{id}` | `{title?, text?}` → `{suno_wish_library, wish}`. Manual edit, no LLM call. `404` unknown id, `422` blank field |
+| `POST /api/settings/scene-wish-library` / `PATCH .../{id}` | Same shape and behaviour, against `scene_wish_library` |
+| `POST /api/settings/video-wish-library` / `PATCH .../{id}` | Same shape and behaviour, against `video_wish_library` |
 | `POST /api/settings/logos` | multipart `file` (png/webp) + `name?` → `{logos}` — appends to the global `settings.logos`, file under `app_data/logos/` |
 | `DELETE /api/settings/logos/{logo_id}` | → `{logos}` |
-| `POST /api/translate` | `{text, target_lang?}` (`target_lang` defaults to `ru`) → `{translated}`. Project-independent - a one-off preview translation for the "translate" button next to each static/motion prompt (`TranslateButton.jsx`), never written back into the project. Calls the Google Cloud Translation API v2 (Basic) with `settings.api_keys.google_translate`; a missing key or provider failure returns `502` (no silent fallback) |
+| `POST /api/projects/{id}/suno/generate` | `{skill_id, skill_prompt, model, active_wish_ids?}` → `{style, lyrics, skill_id, model_used, debug}`. `model` is the `"{provider}:{model_id}"` composite; `active_wish_ids` falls back to the project's own field and is sent as an emphasized block right after the base prompt. Real call when `provider ∈ google\|openrouter\|deepseek` **and** the key is set; a failed call is `502`, never a silent fallback. `debug` is `{stub: false, request, response, missing_markers}` or `{stub: true, reason: no_model_selected\|unsupported_provider\|no_api_key, requested_model}` |
+| `POST /api/projects/{id}/suno/wishes` | `{text}` → `{wish, suno_wish_library, active_wish_ids}` — cleans+titles via `wish_library.add_or_get_wish` (reusing an existing card with the same text), then activates it for this project |
+| `POST /api/projects/{id}/scenes/generate` | `{style_description, scene_count?, model?, scene_mode?, active_scene_wish_ids?}` → `{scenes, style_description, scene_mode, debug}` — **replaces all scenes**, clearing their images. `scene_mode ∈ narrative\|abstract` picks the matching `scene_base_prompt_*`. Same real-call / `502` / `debug` rules as `suno/generate`, plus `usage` in the debug payload |
+| `POST /api/projects/{id}/scenes/wishes` | `{text}` → `{wish, scene_wish_library, active_scene_wish_ids}` — same as `suno/wishes`, against the scene library |
+| `POST /api/projects/{id}/scenes/videos/wishes` | `{text}` → `{wish, video_wish_library, active_video_wish_ids}` — same again, against the video library. Project-level, not per-scene |
+| `POST /api/projects/{id}/title-card/wishes` | `{text}` → `{wish, title_card_wish_library, active_title_card_wish_ids}` — same again, against the title-card library |
+| `POST /api/projects/{id}/scenes/{n}/images` | `{count, model}` → `{job_ids}` — starts one background job per variant (`model` from `settings.image_models`/`image_models_simple`, provider ∈ `krea\|replicate\|fal\|google\|openrouter`) and returns immediately; each job appends its own image to `scenes[n].images` when it finishes, independent of polling. Also the Scenes stage's one-click preview (`count: 1`, cheap tier) |
+| `GET /api/projects/{id}/scenes/{n}/images/jobs/{job_id}` | → `{status: 'pending'\|'completed'\|'failed', image: Image\|null, error: str\|null}`. Job state is in-memory only (see `architecture.md`) |
+| `POST /api/projects/{id}/scenes/{n}/videos` | `{count?, model, motion_prompt?, image_id?, aspect_ratio?, resolution?, duration_seconds?, active_video_wish_ids?}` → `{job_ids}` — animates one scene image (`image_id`, else the scene's `is_selected` one; `422` if neither exists) with `motion_prompt` (defaults to the scene's own) plus resolved video wishes. `provider ∈ google\|google_free\|openrouter`. Same background-job shape as scene images |
+| `GET /api/projects/{id}/scenes/{n}/videos/jobs/{job_id}` | → `{status, video: Video\|null, error: str\|null, debug: {request, response}\|null}`; in-memory-only job state |
+| `DELETE /api/projects/{id}/scenes/{n}/videos/{video_id}` | → `{videos}` — removes one from `scene.videos` and deletes its file |
+| `POST /api/projects/{id}/scenes/{n}/videos/upload` | multipart `file` (`.mp4\|.mov\|.webm\|.mkv`) → `{video}` — appends a hand-made clip to `scene.videos` with `model: 'upload'`, `cost: 0` and every generation-only field `null` (see `Video`). File-only, no pasted-URL variant; `415` on an unrecognized extension |
+| `POST /api/projects/{id}/reference-images` | multipart `file` → `{reference_images}` |
+| `DELETE /api/projects/{id}/reference-images/{filename}` | → `{reference_images}` |
+| `GET /api/projects/{id}/video-export` | `?scenes=0,2,5` (comma-separated 0-based indices; omitted/`all` = every scene) → a zip. Per scene: the animate-source picture resolved as the Video stage does (`animate_image_id` → `is_selected` → first image → skip), written as `{scene_number:03d}_{motion_prompt_slug}.{ext}` with a **1-based** number, plus one `prompts.txt` of every included `motion_prompt`, blank-line separated, in scene order. A scene with no resolvable image is silently skipped. `404` if the project doesn't exist |
+| `POST /api/projects/{id}/video-import-batch` | multipart `files` (`.mp4\|.mov\|.webm\|.mkv`) → `{assigned: [{filename, scene_index, video}], skipped: [{filename, reason}]}` — the reverse of `video-export`: each file is matched by the leading `{scene_number:03d}_` prefix on its **last path segment** (a folder upload may hand back `sub/008_clip.mp4`; `filename` in the response is still the unstripped original), 1-based number minus one giving `scene_index`. Matched files go through the same `video.save_uploaded_video` as the single upload. `reason ∈ unsupported_type\|no_scene_number\|scene_out_of_range` — a bad file is skipped, not a hard failure |
+| `GET /api/projects/{id}/final-export` | → a zip: the Export stage's deliverable bundle (as opposed to `video-export`, which hands off *sources*). `videos/`: **every** `Video` across every scene, named `{5-rating}★_scene{n:03d}_{motion_prompt_slug}_{shortid}.mp4` — the inverted rating sorts the best first, `{shortid}` disambiguates candidates sharing a scene/prompt. `audio/`: the `is_selected` `MurekaTrack`'s `.mp3`, if any (no fallback). `title/`: every `TitleCardVariant` with `marked_for_export`, numbered `{i:02d}_{filename}`, falling back to the `is_selected` one when none are marked. Missing files are silently skipped |
+| `POST /api/projects/{id}/editor/render` | optional `{range_start_ms, range_end_ms}` (both-or-neither) → `{job_id}`, reading `project.video_edit` as last `PATCH`ed. `422` if `clips` is empty or `mureka_track_id` is unset. Same background-job shape as images/video, but the work is a local `ffmpeg` call. With a range the `renders[]` entry is tagged `kind: 'test'` and only that window renders (`_trim_plan_to_range`); no body renders the full timeline (`kind: 'final'`) |
+| `GET /api/projects/{id}/editor/jobs/{job_id}` | → `{status, render: Render\|null, error: str\|null}`; in-memory-only job state. On success the `render` entry is already appended to `video_edit.renders` server-side |
+| `DELETE /api/projects/{id}/editor/renders/{render_id}` | → `{renders}` — removes one and deletes its file |
+| `POST /api/projects/{id}/editor/overlay-videos` | multipart `file` → the new `overlay_video_sources[]` entry `{id, file_path, duration_seconds: null}`; `422` on an unsupported extension. The route appends under the project lock, not a separate `PATCH` round-trip |
+| `DELETE /api/projects/{id}/editor/overlay-videos/{source_id}` | → `{overlay_video_sources}` — removes one and deletes its file |
+| `POST /api/projects/{id}/title-card/generate` | `{text_block, base_prompt, reference_image_paths (1-4, must resolve inside the project folder and exist), model, aspect_ratio?, count?, active_title_card_wish_ids?}` → `{job_ids}`. `model` must be a reference-capable provider (see `architecture.md`); any other fails the job with a clear error rather than falling back |
+| `GET /api/projects/{id}/title-card/jobs/{job_id}` | → `{status, variant: TitleCardVariant\|null, error: str\|null, debug: {request, response}\|null}`; in-memory-only job state. `debug` is redacted — image bytes replaced with `<... bytes>`, plain URLs kept |
+| `DELETE /api/projects/{id}/title-card/variants/{variant_id}` | → `{variants}` — removes one and deletes its file |
+| `POST /api/projects/{id}/title-card/variants/{variant_id}/remove-background` | `{method?}` (`'local'\|'fal'\|'replicate'`, defaults to `settings.background_remover_method`) → `{variant, variants, debug}` — **appends** the result as a new variant with `source_variant_id` pointing back at the original, which is left untouched. `404` unknown variant, `502` on a provider failure |
+| `POST /api/projects/{id}/title-card/poster` | multipart: `file` (flattened PNG) + `background_path`, `title_card_variant_id`, `logo_id?`, `layers` (JSON), `canvas_size` (JSON), `poster_id?` → `{poster, posters}`. Creates a `Poster`, or re-renders one in place (same `file_path`) when `poster_id` matches. `422` if the two source ids don't resolve |
+| `DELETE /api/projects/{id}/title-card/poster/{poster_id}` | → `{posters}` — removes one and deletes its file |
+| `POST /api/projects/{id}/magic-layers` | `{source_path, num_layers?, method?, source_kind?}` → `{job_id}`. `source_path` must resolve inside the project folder and exist (`422`); `num_layers` clamped to 2-10, `method` to `fal\|replicate`, both falling back to `settings.magic_layers_*`. Background job — a decomposition runs 15-30s |
+| `GET /api/projects/{id}/magic-layers/jobs/{job_id}` | → `{status, group: MagicLayerGroup\|null, error: str\|null, debug}`; in-memory-only job state. On success the group and its PNGs are already persisted |
+| `DELETE /api/projects/{id}/magic-layers/{group_id}` | → `{magic_layer_groups}` — removes the group and its layer files. Posters referencing it keep their `layers.magic` entries, which then render nothing — deliberately not cascaded |
+| `POST /api/projects/{id}/mureka/generate` | `{style, lyrics, model, n, gender?, reference_id?}` → `{job_id}` — one job per click (Mureka's own `n` of 1-3 returns several songs from a single task); `422` if `lyrics` is blank |
+| `GET /api/projects/{id}/mureka/jobs/{job_id}` | → `{status, tracks: MurekaTrack[]\|null, error: str\|null, stage: str\|null, debug}`; in-memory-only job state. `stage` mirrors Mureka's own intermediate task status (`preparing\|queued\|running\|streaming`) while `status` is still `'pending'`. Shared with `/tracks/{id}/extend` |
+| `DELETE /api/projects/{id}/mureka/tracks/{track_id}` | → `{tracks}` — removes one and deletes its `.mp3` |
+| `POST /api/projects/{id}/mureka/reference-audio` | multipart `file` (mp3/m4a) → `{reference_audio}` — saves a local copy under `music/references/` **and** uploads it to Mureka's `files/upload` (`purpose=reference`) for the `mureka_file_id` usable as `reference_id`. `415` on a bad extension, `502` if the upload fails. Normally called with an already-trimmed clip from `/reference-sources/{id}/trim`, not a raw upload |
+| `DELETE /api/projects/{id}/mureka/reference-audio/{ref_id}` | → `{reference_audio}` |
+| `POST /api/projects/{id}/mureka/reference-sources` | multipart `file` (any decodable audio) → `{reference_sources}` — stages a raw upload under `music/reference-sources/` **without** touching Mureka, which hard-rejects reference audio under 30s; `415` on a bad extension |
+| `DELETE /api/projects/{id}/mureka/reference-sources/{source_id}` | → `{reference_sources}` |
+| `POST /api/projects/{id}/mureka/reference-sources/{source_id}/trim` | `{start_ms, end_ms}` → `{reference_audio}` — cuts `[start_ms, end_ms)` from the staged source via **ffmpeg** and forwards it through the same flow as `/reference-audio`, tagging the entry with `source_id`/`start_ms`/`end_ms`. `422` on an invalid range, `502` on an ffmpeg or Mureka failure (a missing `ffmpeg` surfaces here). The source stays in `reference_sources`, callable again for another clip |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/extend` | `{lyrics, extend_at?, extend_type?, model?}` → `{job_id}` — real `song/extend`, same job/poll shape as `/mureka/generate`; `extend_at` defaults to the track's `duration_ms`. `422` if `lyrics` is blank or the track has no `raw.id` to extend from |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/stem` | `{model?}` (`audio-separation-1\|2\|3`) → `{tracks}` — real `song/stem`, **synchronous** (unlike every other real Mureka call here); appends to the track's `stems[]`. `404` if the `.mp3` is missing, `502` on a provider failure |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/describe` | no body → `{tracks}` — real `song/describe`, synchronous; sends the `.mp3` as a base64 data URI (same 10MB cap as `/stem`) and appends `{id, instrument[], genres[], tags[], description, created_at}` to `descriptions[]`. `404` if the `.mp3` is missing, `502` on failure |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/transcribe` | no body → `{tracks}` — real `song/transcribe`, synchronous; keyed off `raw.id` rather than re-uploading audio, downloads the `.musicxml`+`.pdf` zip immediately (the CDN link expires) to `music/{id}.zip` and appends `{id, file_path, expires_at, created_at}` to `transcriptions[]`. `422` without a `song_id`, `502` on failure |
+| `POST /api/projects/{id}/mureka/tracks/{track_id}/lyrics-video` | `{title?, aspect_ratio?}` (`∈ 16:9\|9:16\|3:4\|4:3`, Mureka defaults to `9:16`) → `{tracks}` — real `lyrics-video/generate`, synchronous; also keyed off `raw.id`, downloads the mp4 immediately to `music/{id}.mp4` and appends `{id, file_path, title, aspect_ratio, created_at}` to `lyrics_videos[]`. `title` defaults to the project's own. `422` without a `song_id`, `502` on failure |
+| `POST /api/translate` | `{text, target_lang?}` (defaults to `ru`) → `{translated}`. Project-independent, never written back into the project. Google Cloud Translation v2 (Basic) with `settings.api_keys.google_translate`; a missing key or a failure is `502`, no silent fallback |
 | `GET /media/<path>` | Static passthrough over `app_data/`; build URLs with `mediaUrl()` in `api/client.js` |
 | `GET /api/usage/records` | Filters `project_id\|task\|provider\|model\|status\|date_from\|date_to\|limit\|offset` → `{records, total, limit, offset, totals}` |
 | `GET /api/usage/summary` | Same filters + `group_by ∈ project\|task\|model\|provider\|day`, `tz_offset` → `{group_by, currency, groups[], totals}` |
 | `GET /api/usage/today` | `tz_offset` → `{date, cost, currency, calls, unknown_cost_calls, saved_cost}` |
-| `GET /api/usage/period-totals` | `tz_offset` → `{currency, today, week, month, total}` — each a `{calls, errors, cost, unknown_cost_calls, saved_cost}` totals object; backs the header cost pill's expanded view. `saved_cost` is what every `google_free` call in that bucket would have cost at the paid rate — informational only, never added into `cost` |
-| `GET /api/usage/pricing` / `PUT /api/usage/pricing` | Merged price catalog `{pricing_version, currency, models[], overrides}` / body `{pricing_overrides}`, `422` on an invalid row. `models[]` also includes an unpriced row (`input`/`output`/`per_image: null`, `source: 'catalog'`) for every model in the persisted model catalog that isn't priced yet - so the Prices tab lists everything the Models tab has ever seen |
+| `GET /api/usage/period-totals` | `tz_offset` → `{currency, today, week, month, total}`, each a `{calls, errors, cost, unknown_cost_calls, saved_cost}` object. `saved_cost` is what the bucket's `google_free` calls would have cost at the paid rate — informational, never added into `cost` |
+| `GET /api/usage/pricing` / `PUT /api/usage/pricing` | Merged catalog `{pricing_version, currency, models[], overrides}` / body `{pricing_overrides}`, `422` on an invalid row. `models[]` also carries an unpriced row (`source: 'catalog'`) for every catalog model not priced yet, so the Prices tab lists everything the Models tab has seen |
 
 Every generation route persists its result onto the project before returning,
 so the client never has to `PATCH` afterwards — except the scene-images job

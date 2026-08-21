@@ -80,260 +80,116 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    source pictures + prompts for animating elsewhere, and
    `POST .../video-import-batch` brings the finished clips back in.
 9. **Editor** (`stage: 'editor'`) — picked clips + picked track → one file via
-   local `ffmpeg` (no external API). Laid out like a real NLE app rather than a
-   scrolling page: the program monitor fills whatever height is left after the
-   timeline, which is docked to the very bottom and pared down to just its
-   three scale-locked rows — time ruler, clip blocks, the track's waveform
-   (linear by default; the **Клип** tab's waveform-scale picker can reshape
-   the bar-height mapping to dB-with-floor or per-bucket adaptive/local
-   normalization instead, to make quiet-vs-loud passages easier to see when
-   picking cut points, plus an independent frequency-color toggle that tints
-   bars by bass/mid/treble energy share - `TimelineAudioTrack.jsx`, all
-   purely viewing preferences persisted to `localStorage`, none touching the
-   decode/bucket pipeline itself. Each bucket also carries both peak and RMS
-   energy, drawn as a faint outer/solid inner pair - RMS is what reads as
-   rhythm, peak alone only reacts to single transients), and a playhead
-   across all three. Playback transport (rewind/play/time) is a
-   floating overlay centered over the program monitor, hidden until the
-   monitor is hovered/focused (`EditorPreview.jsx` → `EditorFloatingTransport.jsx`,
-   CSS-only reveal) — CapCut-style, instead of a permanently-visible block.
-   The right-hand panel (`EditorSidePanel.jsx`) is a 3-tab shell instead of one
-   tall scrolling stack: **Свойства объекта** (the selected clip/overlay/
-   transition's properties — auto-opens on any new selection), **Клип** (audio
-   track picker + canvas-size/orientation picker + the waveform display-scale
-   picker, grouped as project-level settings), and **Готовые видео** (the
-   renders list — auto-opens whenever a render finishes). Below the tabs sits
-   one icon-only bottom toolbar (`EditorBottomToolbar.jsx`, tooltip on hover):
-   split, undo, redo, test-render, final-render — consolidating what used to
-   be a separate timeline toolbar row plus a footer, and visible regardless of
-   which tab is active. Nothing but `EditorTimeline.jsx` itself ever sits
-   directly under the program monitor: the timeline's own toolbar (zoom,
-   keyboard-shortcuts button, the test-range chip, add-scene chips, the
-   add-overlay picker) lives inside the **Клип** tab's body instead of a strip
-   between the monitor and the timeline, still portaled from
-   `EditorTimeline.jsx` (which continues to own the timeline's own
-   DOM/scroll/zoom state) via `EditorTimelineTools.jsx` into a target
-   `EditorClipSettingsTab.jsx` renders — `EditorSidePanel.jsx` keeps that one
-   tab's body mounted at all times (hidden with CSS, not unmounted, on the
-   other two tabs) specifically so the portal target doesn't disappear out
-   from under it on a tab switch. Split/undo/redo and the clip/overlay/
-   transition inspector moved out of that portaled content into the tab shell
-   above (`EditorBottomToolbar.jsx`/`EditorObjectPropertiesTab.jsx`) once the
-   panel became tabbed (the drag/
-   trim/marquee gesture state machine is its own `useTimelineDrag.js` hook -
-   both split out of `EditorTimeline.jsx` once it grew past ~600 lines
-   covering zoom, gestures, and side-panel JSX all at once; see
-   `docs/code-map.md`). Clip blocks show actual sampled
-   frames from *that clip's own* trimmed source window (`useClipThumbnails`,
-   more frames as the block gets wider), not scene text — extraction runs
-   through one shared hidden `<video>`, serialized and cached, so many clips
-   don't fight over decoders. Editing is direct manipulation — drag a block
-   to reorder, drag its edges to trim, **Ctrl/Cmd+drag an edge instead ramps
-   `speed`** (the trim window stays put; only how fast it plays back changes
-   - see `applyEdgeSpeed` in `lib/timeline.js`), drag the ruler to scrub, the
-   razor button (or `S`/`Ctrl+B`) to split the clip under the playhead, the
-   wheel to scroll and ctrl+wheel / the toolbar to zoom.
+   local `ffmpeg` (no external API). Laid out like an NLE app rather than a
+   scrolling page: a program monitor filling whatever height is left above a
+   bottom-docked timeline (ruler + markers, clip row, overlay track, the
+   track's waveform, all scale-locked to one playhead), a 3-tab right-hand
+   panel and one icon-only bottom toolbar. Desktop-oriented by design — below
+   the mobile/tablet breakpoint the fixed-height layout falls back to a
+   scrolling stack and the drag gestures stay mouse-only, with a keyboard path
+   (Tab to a clip, arrows between clips, Enter/Space) covering non-mouse
+   desktop use.
 
-   Every drag is **magnetic** (`lib/timelineSnap.js`, applied in
-   `useTimelineDrag.js` — CapCut's Track Magnet): a clip edge, an overlay, a
-   marker or the scrub playhead snaps to the nearest clip boundary, overlay
-   edge, marker, the playhead itself, or either end of the timeline, with a
-   dashed guide line drawn where it landed. The threshold is a screen-pixel
-   distance divided by the current scale, so it feels equally sticky at any
-   zoom; holding **Alt** bypasses it for a frame-exact placement without
-   turning the global toggle (magnet button in the toolbar, persisted) off.
-   Snapping is decided in the hook rather than inside `lib/timeline.js`'s
-   math, which stays pure "apply this delta".
+   **The timeline has no gaps.** Clips are always concatenated back to back, so
+   a horizontal drag means "reorder", not "move to this exact time". Editing is
+   direct manipulation: drag to reorder, drag an edge to trim, **Ctrl/Cmd+drag
+   an edge to ramp `speed` instead** (the trim window stays put — `applyEdgeSpeed`
+   in `lib/timeline.js`), drag the ruler to scrub, `S`/`Ctrl+B` to split under
+   the playhead, wheel to scroll, ctrl+wheel to zoom. Every drag is **magnetic**
+   (`lib/timelineSnap.js`, applied in `useTimelineDrag.js`): clip boundaries,
+   overlay edges, markers, the playhead and both ends of the timeline, with a
+   dashed guide drawn where it landed. The threshold is a screen-pixel distance
+   divided by the current scale, so it feels equally sticky at any zoom, and
+   holding **Alt** bypasses it without turning the global toggle off. Whether to
+   snap is decided in the hook, never inside `lib/timeline.js`, which stays a
+   pure "apply this delta".
 
-   The keyboard model matches a desktop NLE: **left/right step the playhead
-   one frame** (Shift = 10), up/down walk between clips, Home/End jump to the
-   ends, `Q`/`W` trim the selected clip up to the playhead, `M` drops a
-   marker, `Ctrl+T` adds a text overlay, `Ctrl +/-/0` zoom. `EditorTimeline.
-   jsx`'s `onKeyDown` guards only against text fields — an earlier
-   `target !== currentTarget` guard silently killed every shortcut once focus
-   sat on a clip block, which arrow navigation does *by design*, so "walk to a
-   clip, press Delete" did nothing; `EditorTimeline.test.jsx` keeps a
-   regression test for that. `KeyboardShortcutsModal.jsx` is the single
-   published list of these bindings and is meant to be updated in the same
+   The keyboard model matches a desktop NLE (arrows step the playhead one frame,
+   Shift = 10; up/down walk between clips; `Q`/`W` trim to the playhead; `M`
+   drops a marker; `Ctrl+T` adds a text overlay). `EditorTimeline.jsx`'s
+   `onKeyDown` must guard **only** against text fields — an earlier
+   `target !== currentTarget` guard silently killed every shortcut once focus sat
+   on a clip block, which arrow navigation does by design;
+   `EditorTimeline.test.jsx` keeps that regression. `KeyboardShortcutsModal.jsx`
+   is the published list of these bindings and is meant to be updated in the same
    change as the handler.
 
-   **Markers** (`video_edit.markers[]`) are labelled moments on the ruler
-   (`TimelineMarker.jsx`) that the renderer never reads — they exist to be
-   snapped to. Besides `M`, the toolbar can place one per detected beat:
-   `lib/beats.js` runs onset detection over the bass envelope the waveform
-   decode already produced (`hooks/useAudioPeaks.js`, lifted out of
-   `TimelineAudioTrack.jsx` once it had two consumers), so nothing is decoded
-   twice. That batch replaces the whole marker set rather than appending, so
-   it is idempotent and undoes in one step. For a tool whose whole purpose is
-   cutting footage to a generated song, "cut on the beat" is the single
-   highest-leverage thing the timeline can offer.
+   **The preview approximates, the render is the truth.** A `<video>`+`<audio>`
+   pair synced off a `requestAnimationFrame` playhead stands in for the cut; only
+   the server-side ffmpeg render is pixel-accurate. That loop has to read playback
+   state through a ref, not the hook's own `isPlaying` closure (see
+   `useEditorPreview.js`'s `isPlayingRef`/`tick`). Colour correction previews as a
+   CSS `filter`; reverse and transitions don't preview at all — all within the
+   same accepted tolerance.
 
-   The clip inspector strip below the toolbar mirrors
-   both gestures as exact-value fields, adds a **reverse** toggle next to the
-   speed field (plays the trimmed window back to front - a real ffmpeg
-   `reverse` filter at render time, not simulated by the in-browser preview,
-   see `docs/data-model.md`'s `EditorClip` section), and a reset button (back
-   to "full source clip, forward, 1x") per clip. Right-clicking the program
-   monitor itself opens `EditorPreviewContextMenu.jsx`, a shortcut to the same
-   split/freeze/trim-to-playhead/copy/paste/duplicate/speed/reverse/reset/
-   delete actions for whichever clip is currently selected, or - if none is -
-   whichever sits under the playhead (`lib/timeline.js`'s `findActiveClip`),
-   so the user doesn't have to go find the clip on the timeline first. The
-   *same* component opens on a right-click on a timeline clip block, targeting
-   that block — one menu, two surfaces.
+   **Markers** (`video_edit.markers[]`) are labelled moments the renderer never
+   reads — they exist to be snapped to. Besides `M`, one can be placed per
+   detected beat: `lib/beats.js` runs onset detection over the bass envelope the
+   waveform decode already produced (`hooks/useAudioPeaks.js`), so nothing is
+   decoded twice. That batch **replaces** the whole marker set rather than
+   appending, so it is idempotent and undoes in one step. For a tool whose whole
+   purpose is cutting footage to a generated song, "cut on the beat" is the
+   single highest-leverage thing the timeline can offer.
 
-   The inspector also carries **colour correction** (`clip.adjust`, four
-   sliders plus warm/cool/mono/punch presets → one ffmpeg `eq` filter, and no
-   filter at all when it is untouched) and a **freeze-frame** button
-   (`clip.freeze` — splits at the playhead and inserts a held still, exactly
-   what CapCut's freeze does). Colour correction is previewed live as a CSS
-   `filter` on the monitor's `<video>`, within the same "approximate preview"
-   tolerance as everything else here. `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every
-   `video_edit` edit (`useEditorStage.js`'s `past`/`future` history, coalescing
-   rapid edits - a drag's continuous pointermoves, a fast run of keystrokes -
-   into one step the same way `PosterConstructor.jsx`'s `commit()` does;
-   renders aren't part of the undoable document, only clip order/trim/speed/
-   reverse/transitions/fades, overlays, markers, audio settings and the picked
-   track). Above the clip row sits
-   a track for **overlays** - title-card variants, global logos, or an
-   uploaded video, placed over the video for their own
-   `[start_ms, start_ms+duration_ms)` window, added from a collapsible picker
-   (`PickerRow`/`PickerThumb`, reused from `PosterPanels.jsx`) that lists the
-   project's title-card variants, `settings.logos[]`, and its own
-   `video_edit.overlay_video_sources[]` (plus an upload button for the last
-   one). Unlike clips, overlays don't tile back to back - drag moves one in
-   time, drag an edge resizes it, and they can overlap or leave gaps; when two
-   overlap in time they render on separate lanes/rows instead of stacking
-   illegibly (`lib/overlays.js`'s `assignOverlayLanes`, greedy interval-graph
-   coloring - purely a display concern, never stored on the overlay). Picking
-   one is mutually exclusive with clip selection (own `selectedOverlayId`, not
-   part of `selectedClipIds`).
+   **Overlays** (title-card variants, global logos, uploaded videos, or
+   `kind: 'text'`) live on their own track and, unlike clips, don't tile: drag
+   moves one in time, an edge resizes it, and they may overlap or leave gaps —
+   time-overlapping overlays get separate display lanes (`lib/overlays.js`'s
+   `assignOverlayLanes`, a display concern never stored on the overlay). Picking
+   one is mutually exclusive with clip selection. Position/size/rotation are set
+   by dragging directly on the program monitor, through the shared
+   `components/shared/CanvasLayer.jsx` primitive the Poster constructor also uses.
+   **The Konva stage is anchored to the output canvas, not to the playing clip's
+   content rect**, because `providers/editor_plan.py` always scales `width_pct`/
+   `height_pct` against that same canvas — anchoring to the clip only agreed by
+   coincidence when its aspect ratio happened to match, and otherwise rendered
+   visibly squished. For the same reason `height_pct` is a percentage of canvas
+   *width* (`height_axis: 'width'`, see `docs/data-model.md`), so an overlay's
+   real aspect ratio survives a `canvas_orientation` switch.
+   `TimelineOverlayInspector.jsx` is a numeric fallback for the same fields, not
+   a second source of truth.
 
-   An overlay's position/size/rotation are set by **dragging it directly on
-   the program monitor** - `EditorPreview.jsx` renders active overlays on a
-   `react-konva` `Stage` sized and positioned to exactly the **output canvas**
-   (`canvasSize`, from `EditorStage.jsx`'s `resolveCanvasSize`) letterboxed to
-   fit the frame (`lib/videoFrameRect.js`'s `computeContentRect`, reused
-   against `canvasSize` instead of the `<video>`'s own natural size), via the
-   shared `components/shared/CanvasLayer.jsx` primitive - the same Konva
-   `Group`+`Transformer` drag/resize/rotate wrapper the Poster constructor's
-   layers use (`PosterCanvasLayers.jsx`'s `OverlayImage` was refactored onto
-   it), so both editors share one interaction model instead of two parallel
-   implementations. Anchoring to the canvas (not the currently playing clip's
-   own content rect) matters because `providers/editor.py` always scales an
-   overlay's `width_pct`/`height_pct` against that same fixed canvas - the two
-   only agreed by coincidence whenever the visible clip's aspect ratio
-   happened to match the canvas, and otherwise produced a visibly
-   squished/stretched overlay in the real render (e.g. a landscape clip
-   pillarboxed inside a portrait canvas). A second, independent distortion:
-   `height_pct` used to be a percentage of the canvas's own *height* while
-   `width_pct` was a percentage of its *width* - two different axes, so the
-   same stored overlay came out a different real shape depending on which
-   way `canvas_orientation` happened to be set, distorting on every switch
-   even with the above fixed. `height_pct` is now a percentage of canvas
-   width too (`height_axis: 'width'`, `docs/data-model.md`'s `VideoEdit`
-   section), so an overlay's real pixel aspect ratio - once correctly set by
-   dragging - survives an orientation switch undistorted. A dashed
-   `.editor-frame-bounds` outline still marks the *clip's* own real
-   (non-letterboxed) content rect,
-   now computed inside the canvas rect - informational only, not where
-   overlays are placed. `TimelineOverlayInspector.jsx` is a numeric fallback
-   for the same fields (x/y/width/height/rotation %, opacity, fade in/out),
-   not a second source of truth - it also shows a **reverse** toggle, but
-   only for a `kind: 'video'` overlay (meaningless for a still image, see
-   `docs/data-model.md`'s overlay section). While dragging, an overlay
-   magnet-snaps to the canvas's center or edges (`lib/snapping.js`'s
-   `snapNodeToCanvas`, a screen-px threshold read against the dragged Konva
-   node's own client rect, mutating its position directly rather than through
-   React state so it doesn't spam re-renders mid-drag - the same technique
-   `lib/posterLayers.js`'s `snapGroupToCenter` uses for the Poster
-   constructor, generalized here to edges too), with a dashed guide line drawn
-   for whichever axis snapped and a magnet icon-button in the monitor's corner
-   to turn it off. The real render composites overlays with
-   ffmpeg's `overlay` filter, each gated to its own window via
-   `enable='between(t,…)'` (`providers/editor.py::build_ffmpeg_command`).
-
-   Every boundary between two clips carries a small `TimelineTransitionMarker`
-   (a `+` that fills in once a transition is set) - click to open
-   `TimelineTransitionInspector.jsx`: a small curated type row (cut / dissolve
-   / through black / flash-white) plus a duration field. It's a property of
-   the *later* clip (`transition_in`), not a resizable timeline block - it
-   renders as a real ffmpeg `xfade` crossfade at render time, which genuinely
-   overlaps (and thus shortens) the two clips' combined duration, but the
-   timeline's own layout doesn't model that overlap (see
-   `docs/data-model.md`'s `EditorClip` section for why that's an accepted
-   approximation, not a bug). The marker is hidden when either neighbouring
-   clip block renders narrower than ~28px - at that width the 16px marker
-   would otherwise sit on top of the clip itself and block clicking it
-   (confirmed by hand while building this), same "too narrow to interact with"
-   precedent `useClipThumbnails.js`'s `MIN_SLOT_PX` already uses.
-   `TimelineClipInspector.jsx` additionally has a **fade in**/**fade out** row
-   per clip (`fade_in`/`fade_out` - a plain ffmpeg `fade`, colour is
-   black/white, entirely within that one clip's own duration, no effect on
-   neighbours).
-
-   Reorder/trim/split/speed/reverse/overlays (image or video, freely
-   placed/resized/rotated, with fade in/out and, for a video overlay, its own
-   reverse toggle)/transitions/fades/per-clip fit.
-   **The timeline has no gaps**: clips are always
-   concatenated back to back, so a
-   horizontal drag means "reorder", not "move to this exact time". The
-   in-browser preview never touches ffmpeg (a `<video>`+`<audio>` pair synced
-   off a `requestAnimationFrame` playhead approximates the cut — see
-   `useEditorPreview.js`'s `isPlayingRef`/`tick` comments for why that loop has
-   to read playback state through a ref, not the hook's own `isPlaying`
-   closure); only the server-side render is pixel-accurate. This stage is
-   desktop-oriented by design: the fixed-height "fill the viewport" layout and
-   the direct-manipulation gestures (drag, edge-trim) both fall back to a
-   normal scrolling stack and stay mouse-only below the mobile/tablet
-   breakpoint — a keyboard alternative (Tab to a clip, arrow keys between
-   clips, Enter/Space to select) covers non-mouse desktop use instead.
-
-   The **audio row is itself a selectable object** — clicking the waveform
-   shows `TimelineAudioInspector.jsx` (volume, fade in/out, and a track
-   offset that skips the song's head so the video can start on the chorus),
-   writing `video_edit.audio`. This is the fourth mutually-exclusive
-   selection kind alongside clip/overlay/transition, and it exists because
-   both CapCut and Movavi put volume and fades on the audio clip itself; the
-   renderer had no audio controls at all before it. The offset is mirrored in
-   `useEditorPreview.js` by shifting the playhead↔`<audio>.currentTime`
-   relationship, so the playhead means the same moment in the preview and in
-   the render.
-
-   **Export settings** (`video_edit.export` — resolution / fps / quality) live
-   in the Клип tab next to the canvas orientation: orientation picks the
-   canvas *shape*, export scales it and sets `fps` plus `-crf`/`-preset`.
-   Before this, 1920×1080 / 30fps / no explicit CRF were hard-coded.
-
-   **Text overlays** (`kind: 'text'`) are the one overlay kind with no stored
-   source file: the EDL carries the text and its styling, the preview draws it
-   with a Konva `Text` node, and the render rasterizes the same values to a
+   A **text overlay** is the one kind with no stored source file: the EDL carries
+   the text and its styling, and the render rasterizes those same values to a
    transparent PNG with Pillow that then rides the **existing** image-overlay
-   compositing path (`providers/editor.py`'s `_render_text_png`, cached
-   content-addressed under `editor/text_cache/`). Rasterizing rather than
-   reaching for ffmpeg's `drawtext` is deliberate: `drawtext` would need both
-   the fontfile path (a drive colon, on this project's Windows dev host) and
-   the text itself (quotes, colons, newlines, Cyrillic) escaped into the
-   filtergraph, and would add a fresh failure mode to it; a PNG adds none. The
-   font list is restricted to faces that exist both in the browser and on the
-   render host so the two sides agree — see `docs/data-model.md`.
+   path (`_render_text_png`, cached content-addressed under `editor/text_cache/`).
+   Deliberately not ffmpeg's `drawtext`, which would need both the fontfile path
+   (a drive colon, on this project's Windows dev host) and the text itself
+   (quotes, colons, newlines, Cyrillic) escaped into the filtergraph. The font
+   list is restricted to faces that exist both in the browser and on the render
+   host so the two sides agree.
 
-   `TestRangeModal.jsx` (opened by the test-render icon button in
-   `EditorBottomToolbar.jsx`, not a ruler gesture) picks an ephemeral `{startMs,
-   endMs}` test range - mm:ss From/To inputs, shown on the ruler as a thin
-   `.tl-test-range-tick` marker. Not part of `video_edit`, just render-time
-   input local to `EditorStage.jsx` (persisted per-project to `localStorage`,
-   key `editorTestRange_{projectId}`). With a range picked, it renders only
-   that window (`providers/editor.py`'s `_trim_plan_to_range`, applied after
-   the normal full-EDL plan is resolved) instead of the whole timeline -
-   cheap iteration on one overlay/effect without paying for a full render.
-   Its `renders[]` entry is tagged `kind: 'test'` (vs. `'final'`) with its own
-   `range`, shown with a badge in the renders list. Because the timeline
-   layout doesn't model a transition's overlap (previous paragraph), a range
-   typed right on a clip boundary can land inside that transition's blend
-   window - `_trim_plan_to_range` pulls the effective start back to where the
-   blend actually begins so the transition still renders, rather than
-   silently dropping it.
+   A **transition** is a property of the *later* clip (`transition_in`), not a
+   resizable timeline block. It renders as a real ffmpeg `xfade`, which genuinely
+   overlaps — and therefore shortens — the two clips' combined duration, while
+   the timeline's own layout does not model that overlap (an accepted
+   approximation, see `docs/data-model.md`'s `EditorClip`). Per-clip
+   `fade_in`/`fade_out` are a plain ffmpeg `fade` confined to that one clip.
+
+   The **audio row is itself a selectable object** — the fourth
+   mutually-exclusive selection kind alongside clip/overlay/transition — carrying
+   volume, fades, and a track offset that skips the song's head so the video can
+   start on the chorus (`video_edit.audio`). The offset is mirrored in
+   `useEditorPreview.js` by shifting the playhead↔`<audio>.currentTime`
+   relationship, so the playhead means the same moment in the preview and in the
+   render. **Export settings** (`video_edit.export`) sit next to the canvas
+   orientation: orientation picks the canvas *shape*, export scales it and sets
+   `fps` plus `-crf`/`-preset`.
+
+   `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every `video_edit` edit
+   (`useEditorStage.js`'s `past`/`future` history, coalescing a drag's continuous
+   pointermoves into one step the way `PosterConstructor.jsx`'s `commit()` does).
+   Renders are not part of the undoable document.
+
+   A **test render** takes an ephemeral `{startMs, endMs}` range — not part of
+   `video_edit`, persisted per project to `localStorage` — and renders only that
+   window via `providers/editor_plan.py`'s `_trim_plan_to_range`, applied after the
+   normal full-EDL plan resolves, for cheap iteration on one overlay or effect.
+   Its `renders[]` entry is tagged `kind: 'test'` (vs. `'final'`). Because the
+   timeline doesn't model a transition's overlap, a range typed right on a clip
+   boundary can land inside that blend window, so `_trim_plan_to_range` pulls the
+   effective start back to where the blend actually begins rather than silently
+   dropping the transition.
 
 Scenes and Images are two stages because they are two independent AI calls with
 independent model choices — you can reroll a scene's images without re-running

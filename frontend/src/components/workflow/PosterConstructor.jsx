@@ -7,6 +7,8 @@ import { Group, Image as KonvaImage, Layer, Line, Stage } from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
 import { useHtmlImage } from '../../hooks/useHtmlImage.js';
 import { onBackdropClick } from '../../lib/a11y.js';
+import { usePosterHistory } from '../../hooks/usePosterHistory.js';
+import { usePosterViewport } from '../../hooks/usePosterViewport.js';
 import {
   ZOOM_STEP, clampZoom, defaultTextFontSize, genId, makeDefaultGlass, makeLayer, makeMagicLayer, makeTextLayer,
   moveLayerInList, normalizeLayers, normalizeMagicLayers, normalizeTextLayers, parseTextBlock, roundRectPath,
@@ -16,32 +18,12 @@ import {
   EffectsPanel, GlassPanel, LayerToolbar, MagicLayersPanel, PickerRow, PickerThumb, TextLayerPanel,
 } from './PosterPanels.jsx';
 
-const MAX_DISPLAY_W = 760;
-const MAX_DISPLAY_H = 520;
 // Fixed (non-growing) side panel width, in both modes, so expanding to
 // fullscreen grows only the picture area, not the tools column. Wide enough
-// for 4 thumbnails per row without wrapping.
+// for 4 thumbnails per row without wrapping. The rest of the view math -
+// display budget, fit scale, zoom/pan, overflow margin - lives in
+// `usePosterViewport.js`.
 const SIDE_PANEL_WIDTH = 300;
-// Reserve (viewport px) subtracted from the fullscreen picture budget for
-// the panel + gaps + the (edge-to-edge, fullscreen-only) modal-card's own
-// small horizontal padding - see the fullscreen branch of modal-card's
-// inline style below.
-const SIDE_PANEL_RESERVE = 360;
-// In fullscreen the header bar is removed entirely (see the fullscreen
-// branch below) so the picture can span the full viewport height - only a
-// thin bottom padding is reserved, no room for a title bar.
-const FULLSCREEN_V_RESERVE = 24;
-
-/** Extra canvas room (screen px) kept around the poster's visible bounds so
- * overlay objects (e.g. the glass panel below) can be dragged past the
- * poster edge and still be seen while editing - purely an editor
- * convenience. Cropped back out at export time (see handleSave), so the
- * saved poster is always exactly `canvasSize`. */
-const OVERFLOW_MARGIN = 40;
-const OVERFLOW_MARGIN_FULLSCREEN = 100;
-
-/** Undo/redo history depth (oldest snapshots drop off past this). */
-const MAX_HISTORY = 50;
 
 export default function PosterConstructor({
   L, projectId, candidates, variants, logos, initialPoster, saving, onSave, onClose, textBlock,
@@ -66,30 +48,9 @@ export default function PosterConstructor({
   const [selected, setSelected] = useState(null); // {kind:'title'|'logo'|'text'|'magic', id} | {kind:'glass'} | null
   const [cropEditing, setCropEditing] = useState(null); // {kind, id} | null
   const [fullscreen, setFullscreen] = useState(false);
-  const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
-  const [zoom, setZoom] = useState(1);
-  const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
   const [guides, setGuides] = useState({ v: false, h: false });
-  const [past, setPast] = useState([]);
-  const [future, setFuture] = useState([]);
   const [templateNameDraft, setTemplateNameDraft] = useState('');
-  const lastCommitAt = useRef(0);
   const stageRef = useRef(null);
-
-  useEffect(() => {
-    if (!fullscreen) return undefined;
-    const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [fullscreen]);
-
-  // A zoom/pan applied under one background/one screen size doesn't mean
-  // anything once either changes - start fresh rather than leaving the view
-  // panned off into empty space.
-  useEffect(() => {
-    setZoom(1);
-    setStagePos({ x: 0, y: 0 });
-  }, [fullscreen, backgroundPath]);
 
   // `?canvas` distinguishes these fetches from the plain <img> tags the
   // picker thumbnails below use for the exact same URLs - two different
@@ -104,19 +65,12 @@ export default function PosterConstructor({
   const logo = logos.find((l) => l.id === logoId);
   const logoImg = useHtmlImage(logo ? `${mediaUrl(logo.file_path)}?canvas` : null);
 
-  // In fullscreen, the picture area grows to fill essentially the whole
-  // viewport (the side panel itself stays SIDE_PANEL_WIDTH wide - see its
-  // style below - rather than also growing and eating the extra space).
-  const maxDisplayW = fullscreen ? Math.max(320, viewport.w - SIDE_PANEL_RESERVE) : MAX_DISPLAY_W;
-  const maxDisplayH = fullscreen ? Math.max(240, viewport.h - FULLSCREEN_V_RESERVE) : MAX_DISPLAY_H;
-  const scale = bg.width ? Math.min(1, maxDisplayW / bg.width, maxDisplayH / bg.height) : 1;
-  const displayW = Math.round((bg.width || maxDisplayW) * scale);
-  const displayH = Math.round((bg.height || maxDisplayH) * scale);
-  const overflowMargin = fullscreen ? OVERFLOW_MARGIN_FULLSCREEN : OVERFLOW_MARGIN;
-  const marginLocal = scale ? overflowMargin / scale : 0;
-  const effectiveScale = scale * zoom;
-  const stageW = displayW + overflowMargin * 2;
-  const stageH = displayH + overflowMargin * 2;
+  const {
+    zoom, setZoom, stagePos, setStagePos,
+    scale, displayW, displayH, overflowMargin, marginLocal, effectiveScale, stageW, stageH,
+  } = usePosterViewport({
+    fullscreen, resetKey: backgroundPath, naturalWidth: bg.width, naturalHeight: bg.height,
+  });
 
   // Default-place a freshly picked overlay (no layers yet) once both its
   // image and the background's natural size are known.
@@ -139,14 +93,10 @@ export default function PosterConstructor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logoImg.image, logoId, bg.width]);
 
-  /** Undo/redo: a single choke point every document mutation runs through.
-   * Snapshots the pre-mutation document into `past` (clearing `future`,
-   * since a fresh edit invalidates any redo branch) before applying
-   * `mutate` - unless the previous commit was under 400ms ago, in which
-   * case it's coalesced into that same snapshot instead of pushing a new
-   * one. That coalescing is what keeps a single slider/color/text-field
-   * drag (which re-fires this on every tick) from flooding the history
-   * with one entry per pixel/keystroke - see the plan's rationale. */
+  /** What the poster *document* is, for undo/redo purposes: everything the
+   * user edits and nothing else (no selection, no view transform). These two
+   * are the whole interface `usePosterHistory.js` needs - every mutation
+   * below runs through the `commit` it returns. */
   function currentDoc() {
     return {
       backgroundPath, titleCardVariantId, logoId, titleLayers, logoLayers, glassLayer, textLayers,
@@ -165,55 +115,13 @@ export default function PosterConstructor({
     setHideBackground(doc.hideBackground);
     setHideTitleCard(doc.hideTitleCard);
   }
-  function commit(mutate) {
-    const now = Date.now();
-    if (now - lastCommitAt.current > 400) {
-      setPast((p) => [...p, currentDoc()].slice(-MAX_HISTORY));
-      setFuture([]);
-    }
-    lastCommitAt.current = now;
-    mutate();
-  }
-  function undo() {
-    if (past.length === 0) return;
-    const prev = past[past.length - 1];
-    setFuture((f) => [currentDoc(), ...f]);
-    setPast((p) => p.slice(0, -1));
-    applyDoc(prev);
-    lastCommitAt.current = 0;
+  function clearEditingSelection() {
     setSelected(null);
     setCropEditing(null);
   }
-  function redo() {
-    if (future.length === 0) return;
-    const next = future[0];
-    setPast((p) => [...p, currentDoc()]);
-    setFuture((f) => f.slice(1));
-    applyDoc(next);
-    lastCommitAt.current = 0;
-    setSelected(null);
-    setCropEditing(null);
-  }
-
-  useEffect(() => {
-    function onKeyDown(e) {
-      const tag = document.activeElement?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const key = e.key.toLowerCase();
-      if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
-        e.preventDefault();
-        redo();
-      }
-    }
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-    // undo/redo intentionally omitted: they're recreated every render but only
-    // *do* anything different once past/future change, so resubscribing on
-    // those two (rather than every render - e.g. every drag-guide update) is
-    // the actual intent, not an oversight.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [past, future]);
+  const { commit, undo, redo, canUndo, canRedo } = usePosterHistory({
+    currentDoc, applyDoc, onRestore: clearEditingSelection,
+  });
 
   // Magic layers are slices of one specific source image, so switching that
   // source drops them (and the "hide the flat original" flags they set) -
@@ -633,7 +541,8 @@ export default function PosterConstructor({
       >
         {fullscreen ? (
           // The title bar is dropped entirely in fullscreen so the picture
-          // can span the full viewport height (see FULLSCREEN_V_RESERVE) -
+          // can span the full viewport height (see `usePosterViewport.js`'s
+          // FULLSCREEN_V_RESERVE) -
           // just the two controls remain, floating over the top-right corner
           // of the picture instead of taking their own layout row.
           <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 30, display: 'flex', gap: 6 }}>
@@ -674,10 +583,10 @@ export default function PosterConstructor({
           <div style={panelStyle}>
             {bg.image && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={undo} disabled={past.length === 0} title={L.poster_undo}>
+                <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={undo} disabled={!canUndo} title={L.poster_undo}>
                   <Undo2 size={13} />
                 </button>
-                <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={redo} disabled={future.length === 0} title={L.poster_redo}>
+                <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={redo} disabled={!canRedo} title={L.poster_redo}>
                   <Redo2 size={13} />
                 </button>
                 <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.15)' }} />
