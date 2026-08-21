@@ -5,6 +5,8 @@ import ModelPicker from './ModelPicker.jsx';
 import { formatCost, formatTokens } from '../../lib/pricing.js';
 import { sortByUseCount } from '../../lib/wishes.js';
 import { onActivateKey } from '../../lib/a11y.js';
+import StubBanner from './StubBanner.jsx';
+import StageMoreOptions from './StageMoreOptions.jsx';
 
 /** `12с` / `1м 05с` (or the EN `12s` / `1m 05s`) - shared unit labels with
  * SunoStage.jsx's own formatDuration, reused here rather than duplicated
@@ -139,6 +141,7 @@ function DebugPanel({ L, lastDebug }) {
 }
 
 export default function ScenesStage({
+  developerMode,
   L, project, isMobile, sceneTextModel, textModelFavorites, modelPrices,
   sceneImageModel, sceneImageModelFavorites, sceneImageLoadingIdx,
   sceneMode, sceneCount, styleDescription, sceneWishText, storyboardLoading, wishLoading, elapsedSeconds, sceneError, lastDebug,
@@ -251,13 +254,6 @@ export default function ScenesStage({
         <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setSceneCount(Math.min(30, sceneCount + 1))}>
           <Plus size={12} />
         </button>
-
-        <button
-          className={`chip${hideMotionPrompt ? ' is-active' : ''}`} style={{ marginLeft: 10 }}
-          onClick={() => actions.setHideMotionPrompt(!hideMotionPrompt)}
-        >
-          {L.hideMotionPromptLabel}
-        </button>
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
@@ -279,17 +275,26 @@ export default function ScenesStage({
         />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.sceneImageModelLabel}:</span>
-        <ModelPicker
-          favorites={sceneImageModelFavorites}
-          value={sceneImageModel}
-          onChange={actions.selectSceneImageModel}
-          emptyLabel={L.modelPickerEmpty}
-          prices={modelPrices}
-          L={L}
-        />
-      </div>
+      <StageMoreOptions L={L} storageKey="scenes">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.sceneImageModelLabel}:</span>
+          <ModelPicker
+            favorites={sceneImageModelFavorites}
+            value={sceneImageModel}
+            onChange={actions.selectSceneImageModel}
+            emptyLabel={L.modelPickerEmpty}
+            prices={modelPrices}
+            L={L}
+          />
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginBottom: 14 }}>{L.sceneImageModelHint}</div>
+        <button
+          className={`chip${hideMotionPrompt ? ' is-active' : ''}`}
+          onClick={() => actions.setHideMotionPrompt(!hideMotionPrompt)}
+        >
+          {L.hideMotionPromptLabel}
+        </button>
+      </StageMoreOptions>
 
       {storyboardLoading && (
         <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>
@@ -300,7 +305,8 @@ export default function ScenesStage({
         <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 16 }}>⚠️ {sceneError}</div>
       )}
 
-      <DebugPanel L={L} lastDebug={lastDebug} />
+      {lastDebug?.stub && <StubBanner L={L} message={stubMessage(L, lastDebug)} />}
+      {developerMode && <DebugPanel L={L} lastDebug={lastDebug} />}
 
       {project.scenes.length === 0 ? (
         <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>

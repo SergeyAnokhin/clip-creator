@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, Menu, Settings } from 'lucide-react';
 import UsagePill from '../UsagePill.jsx';
 import MiniPlayerWidget from '../MiniPlayerWidget.jsx';
+import JobsPill from '../JobsPill.jsx';
 import { focusOnMount, onActivateKey } from '../../lib/a11y.js';
 
 /** Click-to-edit span: shows plain text, swaps to an input on click, commits
@@ -54,7 +55,7 @@ function EditableField({ value, placeholder, onCommit }) {
 export default function WorkflowHeader({
   L, langLabel, title, author, onGoHome, onToggleSidebar, onToggleLang, onOpenSettings,
   onChangeTitle, onChangeAuthor, usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
-  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer, jobs,
 }) {
   return (
     <div className="workflow-header">
@@ -72,6 +73,7 @@ export default function WorkflowHeader({
         </span>
       </div>
       <div style={{ flex: 1 }} />
+      <JobsPill L={L} jobs={jobs} />
       <MiniPlayerWidget L={L} track={miniPlayerTrack} isPlaying={miniPlayerIsPlaying} onToggle={onToggleMiniPlayer} />
       <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       <button

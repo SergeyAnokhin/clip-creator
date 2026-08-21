@@ -21,7 +21,7 @@ export function useProjects({ showToast, L }) {
     try {
       setProjects(await api.listProjects());
     } catch {
-      showToast('Не удалось загрузить проекты');
+      showToast('Не удалось загрузить проекты', 'error');
     }
   }
 
@@ -44,7 +44,7 @@ export function useProjects({ showToast, L }) {
     () => debounce((id, project) => {
       api.patchProject(id, project)
         .then((response) => adoptRenamedId(id, response?.id))
-        .catch(() => showToast('Не удалось сохранить'));
+        .catch(() => showToast('Не удалось сохранить', 'error'));
     }, 400),
     [],
   );
@@ -56,7 +56,7 @@ export function useProjects({ showToast, L }) {
       if (immediate) {
         api.patchProject(next.id, next)
           .then((response) => adoptRenamedId(next.id, response?.id))
-          .catch(() => showToast('Не удалось сохранить'));
+          .catch(() => showToast('Не удалось сохранить', 'error'));
       } else {
         debouncedPatch(next.id, next);
       }
@@ -76,7 +76,7 @@ export function useProjects({ showToast, L }) {
         const response = await api.patchProject(activeProject.id, activeProject);
         adoptRenamedId(activeProject.id, response?.id);
       } catch {
-        showToast('Не удалось сохранить');
+        showToast('Не удалось сохранить', 'error');
       }
     }
   }
@@ -92,7 +92,7 @@ export function useProjects({ showToast, L }) {
       setShowNewProjectModal(false);
       showToast(L.toast_created);
     } catch {
-      showToast('Не удалось создать проект');
+      showToast('Не удалось создать проект', 'error');
     } finally {
       setModalLoading(false);
     }
@@ -104,7 +104,7 @@ export function useProjects({ showToast, L }) {
       setProjects((prev) => prev.filter((p) => p.id !== id));
       showToast(L.toast_deletedProject);
     } catch {
-      showToast('Не удалось удалить проект');
+      showToast('Не удалось удалить проект', 'error');
     }
   }
 
@@ -116,7 +116,7 @@ export function useProjects({ showToast, L }) {
       setActiveProject(project);
       return project;
     } catch {
-      showToast('Не удалось открыть проект');
+      showToast('Не удалось открыть проект', 'error');
       return null;
     }
   }

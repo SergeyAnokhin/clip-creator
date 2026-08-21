@@ -105,7 +105,9 @@ it).
 | `api/client.js` | One function per route + `mediaUrl(path)`. `VITE_API_URL` overrides the base |
 | `i18n/dict.js` | `DICT.ru` / `DICT.en` — **add every key to both** |
 | `styles/theme.css` | The whole visual system: palette vars + per-component classes. Grep the class name from the JSX |
-| `components/Toast.jsx` | The single transient message |
+| `components/Toast.jsx` | The toast stack (up to 3); `error`/`warning` levels never auto-dismiss |
+| `components/JobsPill.jsx` | Header indicator for in-flight generations - count + elapsed, renders nothing while idle |
+| `components/ApiKeysPill.jsx` | Home header: how many API keys are actually set, linking to Settings. Replaced a hardcoded "API connected" literal |
 | `components/UsagePill.jsx` | Header spend pill; click expands today/week/month/all-time |
 | `components/MiniPlayerWidget.jsx` | Header "now playing" pill; renders nothing until a track has been started |
 | `components/common/JsonTreeView.jsx` | Generic collapsible JSON viewer (no dependency) |
@@ -135,6 +137,7 @@ it).
 | `pricing.js` | Cost formatting/estimation for `text`/`image`/`video` kinds |
 | `musicTagColors.js` | Tag palette — mirrors `routers/settings.py`'s `MUSIC_TAG_COLORS`, **keep in sync** |
 | `videoModelLimits.js` | Hand-curated per-model duration/resolution limits. Informational only, never enforced |
+| `stageStatus.js` | `stageProgress(key, project)` -> `{status, counter, blockedBy}` and `nextIncompleteStage`; drives the sidebar rows and the stage footer |
 | `wishes.js` | `sortByUseCount` |
 | `format.js` / `debounce.js` / `download.js` | Date labels / `debounce(fn, ms)` / `downloadJSON` |
 | `a11y.js` | `onActivateKey`, `onBackdropClick`, `focusOnMount` — see [a11y.md](a11y.md) |
@@ -150,7 +153,8 @@ hooks return `{ state, actions }`.
 
 | Hook | Owns |
 | --- | --- |
-| `useToast` | The single transient message; every other hook depends on `showToast` |
+| `useToast` | The toast stack + `showToast(message, level)`; every other hook depends on it |
+| `useJobs` | Registry of in-flight generations, created right after `useToast`. `beginJob`/`endJob` are threaded into every stage hook that starts one |
 | `useViewport` | Breakpoint + workflow sidebar |
 | `useUsage` | Usage ledger + price catalog. Created **before** `useSettings` |
 | `useMiniPlayer` | The one piece of state that outlives navigation: the "now playing" track + the `<audio>` props `App.jsx` spreads at its root |
@@ -242,9 +246,12 @@ scrolls normally inside it.
 | `TimelineOverlayInspector.jsx` | Numeric precise-entry fallback for the selected overlay — the real placement UI is dragging it on the program monitor |
 | `KeyboardShortcutsModal.jsx` | Static reference list of every Editor keyboard/pointer binding — the single source of truth for them |
 | `TestRangeModal.jsx` | Picks the `{startMs, endMs}` test-render window (mm:ss From/To pairs), opened from `EditorBottomToolbar.jsx` |
+| `StageFooter.jsx` | "step N of 9" plus prev/next stage buttons (`Ctrl/Cmd` + arrows), under every stage except the Editor |
+| `StageMoreOptions.jsx` | Collapsible "more options" strip on the generating stages; open state per stage in `localStorage` |
+| `StubBanner.jsx` | In-stage warning when the last generation was a backend stub, not a model reply. Not gated on developer mode |
 | `ModelPicker.jsx` | `<select>` over a favorites list → `"{provider}:{id}"` composite |
 | `TranslateButton.jsx` / `CopyButton.jsx` | Small self-contained utility buttons under a prompt field |
-| `Sidebar.jsx` | Stage nav + per-stage completion icon. Rows are `div.stage-row`, **not** `<button>` — see the file's comment before automating clicks |
+| `Sidebar.jsx` | Stage nav; status + counter per row from `lib/stageStatus.js`. Rows are `div.stage-row`, **not** `<button>` - see the file's comment before automating clicks |
 
 ### `components/settings/`
 

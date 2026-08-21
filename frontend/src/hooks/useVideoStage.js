@@ -18,7 +18,7 @@ export const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16'];
  * Video generation replaces project state server-side, so it calls
  * `flushPendingSave()` first - same autosave race as `useImagesStage.js`. */
 export function useVideoStage({
-  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, videoModels, onAiCall,
+  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, videoModels, onAiCall, beginJob, endJob,
   onVideoWishLibraryChange, onVideoWishUsed,
 }) {
   const [currentSceneIndex, setCurrentSceneIndex] = useState(0);
@@ -81,7 +81,7 @@ export function useVideoStage({
       setVideoWishText('');
       showToast(L.toast_saved);
     } catch {
-      showToast('Не удалось сохранить пожелание');
+      showToast('Не удалось сохранить пожелание', 'error');
     } finally {
       setWishLoading(false);
       onAiCall?.();
@@ -114,27 +114,32 @@ export function useVideoStage({
       showToast('У сцены нет ни одной картинки для анимации');
       return;
     }
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const sceneIdx = currentSceneIndex;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'video', detail: L.jobs_scene + ' ' + (sceneIdx + 1) });
     setVideoLoading(true);
     setVideoError(null);
     try {
       await flushPendingSave();
-      const { job_ids: jobIds } = await api.generateSceneVideos(activeProject.id, currentSceneIndex, {
+      const { job_ids: jobIds } = await api.generateSceneVideos(jobProjectId, sceneIdx, {
         count: 1, model: videoModel, motion_prompt: scene.motion_prompt, image_id: sourceImage.image_id,
         aspect_ratio: aspectRatio === 'auto' ? undefined : aspectRatio,
         resolution, duration_seconds: durationSeconds,
         active_video_wish_ids: activeProject.active_video_wish_ids,
       });
-      const job = await pollVideoJob(activeProject.id, currentSceneIndex, jobIds[0]);
+      const job = await pollVideoJob(jobProjectId, sceneIdx, jobIds[0]);
       setLastDebug(job.debug ? { ...job.debug, completedAt: new Date().toISOString() } : null);
       if (job.status === 'completed') {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
-          scenes: p.scenes.map((s, i) => (i === currentSceneIndex ? { ...s, videos: [...(s.videos || []), job.video] } : s)),
+          scenes: p.scenes.map((s, i) => (i === sceneIdx ? { ...s, videos: [...(s.videos || []), job.video] } : s)),
         }));
         showToast(L.toast_generated);
       } else {
         setVideoError(job.error || 'Не удалось сгенерировать видео');
-        showToast(job.error || 'Не удалось сгенерировать видео');
+        showToast(job.error || 'Не удалось сгенерировать видео', 'error');
       }
     } catch (err) {
       const message = err?.detail || 'Не удалось сгенерировать видео';
@@ -142,6 +147,7 @@ export function useVideoStage({
       setVideoError(message);
       showToast(message);
     } finally {
+      endJob(registryId);
       setVideoLoading(false);
       onAiCall?.();
     }
@@ -188,7 +194,7 @@ export function useVideoStage({
       }));
       showToast(L.toast_generated);
     } catch {
-      showToast('Не удалось загрузить изображение');
+      showToast('Не удалось загрузить изображение', 'error');
     }
   }
   async function uploadSceneImageUrl(sceneIdx, url) {
@@ -201,7 +207,7 @@ export function useVideoStage({
       }));
       showToast(L.toast_generated);
     } catch {
-      showToast('Не удалось загрузить изображение по ссылке');
+      showToast('Не удалось загрузить изображение по ссылке', 'error');
     }
   }
   /** "Bring your own clip" - a scene's video animated in an outside tool
@@ -217,7 +223,7 @@ export function useVideoStage({
       }));
       showToast(L.toast_generated);
     } catch {
-      showToast('Не удалось загрузить видео');
+      showToast('Не удалось загрузить видео', 'error');
     }
   }
   /** Reverse of the Video stage's export button: a folder of finished clips
@@ -254,7 +260,7 @@ export function useVideoStage({
         showToast(L.video_importSummary.replace('{assigned}', result.assigned.length));
       }
     } catch {
-      showToast('Не удалось импортировать видео');
+      showToast('Не удалось импортировать видео', 'error');
     }
   }
 
@@ -269,7 +275,7 @@ export function useVideoStage({
         scenes: p.scenes.map((s, i) => (i !== sceneIdx ? s : { ...s, videos: s.videos.filter((_, j) => j !== vidIdx) })),
       }));
     } catch {
-      showToast('Не удалось удалить видео');
+      showToast('Не удалось удалить видео', 'error');
     }
   }
 

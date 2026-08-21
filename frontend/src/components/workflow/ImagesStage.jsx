@@ -1,14 +1,15 @@
 import { useRef, useState } from 'react';
-import { Minus, Plus, Upload, X } from 'lucide-react';
+import { ArrowRight, Minus, Plus, Upload, X } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import SceneCard from './SceneCard.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
+import StageMoreOptions from './StageMoreOptions.jsx';
 
 const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16'];
 
 export default function ImagesStage({
-  L, project, isMobile, imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
+  L, project, isMobile, onSelectStage, imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
   variantCount, referenceUploading, hideMotionPrompt, aspectRatio, outpaintQualityMode,
   magicLayerGroups, magicBusySources,
   sceneLoadingIdx, sceneRecordingIdx, recordingSeconds, voiceSupported, actions,
@@ -24,6 +25,58 @@ export default function ImagesStage({
           <div className="stage-heading-title">{L.imagesStageTitle}</div>
           <div className="stage-heading-subtitle">{L.imagesStageSubtitle}</div>
         </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.imageModelTierLabel}:</span>
+        <button className={`chip${imageModelTier === 'simple' ? ' is-active' : ''}`} onClick={() => actions.setImageModelTier('simple')}>
+          {L.imageModelTier_simple}
+        </button>
+        <button className={`chip${imageModelTier === 'main' ? ' is-active' : ''}`} onClick={() => actions.setImageModelTier('main')}>
+          {L.imageModelTier_main}
+        </button>
+
+        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10, marginRight: 2 }}>{L.imageModel}:</span>
+        <ModelPicker
+          favorites={tierFavorites}
+          value={imageModel}
+          onChange={actions.selectImageModel}
+          emptyLabel={L.modelPickerEmpty}
+          prices={modelPrices}
+          L={L}
+        />
+
+        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10, marginRight: 2 }}>{L.variantCountLabel}:</span>
+        <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setVariantCount(Math.max(0, variantCount - 1))}>
+          <Minus size={12} />
+        </button>
+        <span style={{ fontSize: 13, minWidth: 16, textAlign: 'center' }}>{variantCount}</span>
+        <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setVariantCount(Math.min(4, variantCount + 1))}>
+          <Plus size={12} />
+        </button>
+      </div>
+
+      <StageMoreOptions L={L} storageKey="images">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.aspectRatioLabel}:</span>
+        {ASPECT_RATIOS.map((ratio) => (
+          <button
+            key={ratio}
+            className={`chip${aspectRatio === ratio ? ' is-active' : ''}`}
+            onClick={() => actions.setAspectRatio(ratio)}
+          >
+            {L[`aspectRatio_${ratio === 'auto' ? 'auto' : ratio.replace(':', '_')}`]}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+        <button
+          className={`chip${hideMotionPrompt ? ' is-active' : ''}`}
+          onClick={() => actions.setHideMotionPrompt(!hideMotionPrompt)}
+        >
+          {L.hideMotionPromptLabel}
+        </button>
       </div>
 
       <div className="glass-card" style={{ marginBottom: 18 }}>
@@ -76,58 +129,15 @@ export default function ImagesStage({
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.imageModelTierLabel}:</span>
-        <button className={`chip${imageModelTier === 'simple' ? ' is-active' : ''}`} onClick={() => actions.setImageModelTier('simple')}>
-          {L.imageModelTier_simple}
-        </button>
-        <button className={`chip${imageModelTier === 'main' ? ' is-active' : ''}`} onClick={() => actions.setImageModelTier('main')}>
-          {L.imageModelTier_main}
-        </button>
-
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10, marginRight: 2 }}>{L.imageModel}:</span>
-        <ModelPicker
-          favorites={tierFavorites}
-          value={imageModel}
-          onChange={actions.selectImageModel}
-          emptyLabel={L.modelPickerEmpty}
-          prices={modelPrices}
-          L={L}
-        />
-
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10, marginRight: 2 }}>{L.variantCountLabel}:</span>
-        <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setVariantCount(Math.max(0, variantCount - 1))}>
-          <Minus size={12} />
-        </button>
-        <span style={{ fontSize: 13, minWidth: 16, textAlign: 'center' }}>{variantCount}</span>
-        <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setVariantCount(Math.min(4, variantCount + 1))}>
-          <Plus size={12} />
-        </button>
-
-        <button
-          className={`chip${hideMotionPrompt ? ' is-active' : ''}`} style={{ marginLeft: 10 }}
-          onClick={() => actions.setHideMotionPrompt(!hideMotionPrompt)}
-        >
-          {L.hideMotionPromptLabel}
-        </button>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.aspectRatioLabel}:</span>
-        {ASPECT_RATIOS.map((ratio) => (
-          <button
-            key={ratio}
-            className={`chip${aspectRatio === ratio ? ' is-active' : ''}`}
-            onClick={() => actions.setAspectRatio(ratio)}
-          >
-            {L[`aspectRatio_${ratio === 'auto' ? 'auto' : ratio.replace(':', '_')}`]}
-          </button>
-        ))}
-      </div>
+      </StageMoreOptions>
 
       {project.scenes.length === 0 ? (
         <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>
-          {L.noScenesYet}
+          <div style={{ marginBottom: 12 }}>{L.noScenesYet}</div>
+          <button className="btn btn-accent-soft" onClick={() => onSelectStage('scenes')}>
+            {L.stage_scenes}
+            <ArrowRight size={14} />
+          </button>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>

@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Download, Film, FolderDown, FolderUp, Loader2,
+  ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Download, Film, FolderDown, FolderUp, Loader2,
   Mic, MicOff, Sparkles, Upload, UploadCloud, X,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { resolveAnimateImage } from '../../lib/scenes.js';
 import { getVideoModelLimits } from '../../lib/videoModelLimits.js';
 import { onActivateKey } from '../../lib/a11y.js';
+import StageMoreOptions from './StageMoreOptions.jsx';
 import CopyButton from './CopyButton.jsx';
 import ModelPicker from './ModelPicker.jsx';
 import TranslateButton from './TranslateButton.jsx';
@@ -109,7 +110,8 @@ function DebugPanel({ L, lastDebug }) {
  * plus a plain file upload for a clip animated in an outside tool and
  * brought back in by hand. */
 export default function VideoStage({
-  L, project,
+  developerMode,
+  L, project, onSelectStage,
   currentSceneIndex, videoModel, resolution, aspectRatio, durationSeconds,
   videoWishText, wishLoading, videoLoading, lastDebug, videoError, elapsedSeconds,
   videoModelFavorites, modelPrices, videoWishLibrary,
@@ -154,7 +156,13 @@ export default function VideoStage({
             <div className="stage-heading-subtitle">{L.videoStageSubtitle}</div>
           </div>
         </div>
-        <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>{L.noStoryboardYet}</div>
+        <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>
+          <div style={{ marginBottom: 12 }}>{L.noStoryboardYet}</div>
+          <button className="btn btn-accent-soft" onClick={() => onSelectStage('scenes')}>
+            {L.stage_scenes}
+            <ArrowRight size={14} />
+          </button>
+        </div>
       </>
     );
   }
@@ -404,24 +412,30 @@ export default function VideoStage({
         )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.video_resolutionLabel}:</span>
-        {RESOLUTIONS.map((r) => (
-          <button key={r} className={`chip${resolution === r ? ' is-active' : ''}`} onClick={() => actions.setResolution(r)}>{r}</button>
-        ))}
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10 }}>{L.video_aspectRatioLabel}:</span>
-        {ASPECT_RATIOS.map((r) => (
-          <button key={r} className={`chip${aspectRatio === r ? ' is-active' : ''}`} onClick={() => actions.setAspectRatio(r)}>
-            {r === 'auto' ? L.aspectRatio_auto : r}
-          </button>
-        ))}
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10 }}>{L.video_durationLabel}:</span>
-        <input
-          type="number" min={1} max={8} className="field" style={{ width: 60 }}
-          value={durationSeconds}
-          onChange={(e) => actions.setDurationSeconds(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
-        />
-      </div>
+      <StageMoreOptions L={L} storageKey="video">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{L.video_resolutionLabel}:</span>
+          {RESOLUTIONS.map((r) => (
+            <button key={r} className={`chip${resolution === r ? ' is-active' : ''}`} onClick={() => actions.setResolution(r)}>{r}</button>
+          ))}
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10 }}>{L.video_aspectRatioLabel}:</span>
+          {ASPECT_RATIOS.map((r) => (
+            <button key={r} className={`chip${aspectRatio === r ? ' is-active' : ''}`} onClick={() => actions.setAspectRatio(r)}>
+              {r === 'auto' ? L.aspectRatio_auto : r}
+            </button>
+          ))}
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10 }}>{L.video_durationLabel}:</span>
+          <input
+            type="number" min={1} max={8} className="field" style={{ width: 60 }}
+            value={durationSeconds}
+            onChange={(e) => actions.setDurationSeconds(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+          />
+        </div>
+      </StageMoreOptions>
+
+      {/* Describes limits on the controls above and on the picked model, so it
+          belongs before the generate button rather than after it. */}
+      <ModelLimitsHint L={L} videoModel={videoModel} />
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <button
@@ -460,7 +474,6 @@ export default function VideoStage({
         />
       </div>
 
-      <ModelLimitsHint L={L} videoModel={videoModel} />
 
       {videoLoading && (
         <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>
@@ -471,7 +484,7 @@ export default function VideoStage({
         <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 16 }}>⚠️ {videoError}</div>
       )}
 
-      <DebugPanel L={L} lastDebug={lastDebug} />
+      {developerMode && <DebugPanel L={L} lastDebug={lastDebug} />}
 
       {videos.length === 0 ? (
         <div className="glass-card" style={{ color: 'var(--text-dim)', fontSize: 13 }}>{L.video_noneYet}</div>

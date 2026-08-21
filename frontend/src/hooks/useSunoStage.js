@@ -8,7 +8,7 @@ import { EMPTY_MUREKA } from './useMurekaStage.js';
  * more UI to change it. */
 export function useSunoStage({
   activeProject, setActiveProject, updateProject, showToast, L, textModelDefault, onAiCall, onWishLibraryChange,
-  onWishUsed,
+  onWishUsed, beginJob, endJob,
 }) {
   const [skillId, setSkillId] = useState('skill_a');
   const [refinementText, setRefinementText] = useState('');
@@ -70,7 +70,7 @@ export function useSunoStage({
       setRefinementText('');
       showToast(L.toast_saved);
     } catch {
-      showToast('Не удалось сохранить пожелание');
+      showToast('Не удалось сохранить пожелание', 'error');
     } finally {
       setWishLoading(false);
       onAiCall?.();
@@ -87,14 +87,18 @@ export function useSunoStage({
   }
   async function generateSuno() {
     if (!activeProject) return;
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'suno' });
     setSunoLoading(true);
     setSunoError(null);
     try {
-      const result = await api.generateSuno(activeProject.id, {
+      const result = await api.generateSuno(jobProjectId, {
         skill_id: skillId, skill_prompt: activeProject.skill_prompt, model: genModel,
         active_wish_ids: activeProject.active_wish_ids,
       });
-      setActiveProject((p) => ({
+      setActiveProject((p) => (p?.id !== jobProjectId ? p : {
         ...p, style: result.style, lyrics: result.lyrics, skill_id: result.skill_id, model_used: result.model_used,
         // Keep the Mureka generation form's style/lyrics in sync with a fresh
         // regenerate here - otherwise it only ever picks up style/lyrics once,
@@ -106,15 +110,17 @@ export function useSunoStage({
       // it's just "what time did this finish", shown next to the usage
       // summary in the debug panel.
       setLastDebug(result.debug ? { ...result.debug, completedAt: new Date().toISOString() } : null);
-      showToast(L.toast_generated);
+      if (result.debug?.stub) showToast(L.toast_generatedStub, 'warning');
+      else showToast(L.toast_generated);
     } catch (err) {
       const message = err?.detail || 'Не удалось сгенерировать';
       // Surface provider failures/timeouts in devtools too - the toast alone
       // disappears after a few seconds.
       console.error('[Suno generate] request failed:', err);
       setSunoError(message);
-      showToast(message);
+      showToast(message, 'error');
     } finally {
+      endJob(registryId);
       setSunoLoading(false);
       onAiCall?.();
     }

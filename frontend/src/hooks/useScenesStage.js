@@ -24,7 +24,7 @@ const DEFAULT_SCENE_COUNT = 10;
  * stage. */
 export function useScenesStage({
   activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, textModels, imageModelsSimple, onAiCall, onSceneWishLibraryChange,
-  onSceneWishUsed,
+  onSceneWishUsed, beginJob, endJob,
 }) {
   const [sceneTextModel, setSceneTextModel] = useState(textModels.default || '');
   const [sceneImageModel, setSceneImageModel] = useState(imageModelsSimple?.default || '');
@@ -83,25 +83,31 @@ export function useScenesStage({
 
   async function generateStoryboard() {
     if (!activeProject) return;
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'scenes' });
     setStoryboardLoading(true);
     setSceneError(null);
     try {
       await flushPendingSave();
-      const result = await api.generateSceneStoryboard(activeProject.id, {
+      const result = await api.generateSceneStoryboard(jobProjectId, {
         style_description: styleDescription, model: sceneTextModel, scene_count: sceneCount,
         scene_mode: sceneMode, active_scene_wish_ids: activeProject.active_scene_wish_ids,
       });
-      setActiveProject((p) => ({
+      setActiveProject((p) => (p?.id !== jobProjectId ? p : {
         ...p, scenes: result.scenes, style_description: result.style_description, scene_mode: result.scene_mode,
       }));
       setLastDebug(result.debug ? { ...result.debug, completedAt: new Date().toISOString() } : null);
-      showToast(L.toast_generated);
+      if (result.debug?.stub) showToast(L.toast_generatedStub, 'warning');
+      else showToast(L.toast_generated);
     } catch (err) {
       const message = err?.detail || 'Не удалось сгенерировать раскадровку';
       console.error('[Scenes generate] request failed:', err);
       setSceneError(message);
-      showToast(message);
+      showToast(message, 'error');
     } finally {
+      endJob(registryId);
       setStoryboardLoading(false);
       onAiCall?.();
     }
@@ -117,7 +123,7 @@ export function useScenesStage({
       setSceneWishText('');
       showToast(L.toast_saved);
     } catch {
-      showToast('Не удалось сохранить пожелание');
+      showToast('Не удалось сохранить пожелание', 'error');
     } finally {
       setWishLoading(false);
       onAiCall?.();
@@ -142,25 +148,30 @@ export function useScenesStage({
   }
   async function generateSceneImage(idx) {
     if (!activeProject) return;
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'images', detail: L.jobs_scene + ' ' + (idx + 1) });
     setSceneImageLoadingIdx(idx);
     try {
       await flushPendingSave();
       const { job_ids: jobIds } = await api.generateSceneImages(
-        activeProject.id, idx, { count: 1, model: sceneImageModel },
+        jobProjectId, idx, { count: 1, model: sceneImageModel },
       );
-      const job = await pollImageJob(activeProject.id, idx, jobIds[0]);
+      const job = await pollImageJob(jobProjectId, idx, jobIds[0]);
       if (job.status === 'completed') {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
           scenes: p.scenes.map((s, i) => (i === idx ? { ...s, images: [...s.images, job.image] } : s)),
         }));
         showToast(L.toast_generated);
       } else {
-        showToast(job.error || 'Не удалось сгенерировать изображение');
+        showToast(job.error || 'Не удалось сгенерировать изображение', 'error');
       }
     } catch {
-      showToast('Не удалось сгенерировать изображение');
+      showToast('Не удалось сгенерировать изображение', 'error');
     } finally {
+      endJob(registryId);
       setSceneImageLoadingIdx(null);
       onAiCall?.();
     }
@@ -177,7 +188,7 @@ export function useScenesStage({
         scenes: p.scenes.map((s, i) => (i !== idx ? s : { ...s, images: s.images.filter((_, j) => j !== imgIdx) })),
       }));
     } catch {
-      showToast('Не удалось удалить изображение');
+      showToast('Не удалось удалить изображение', 'error');
     }
   }
 

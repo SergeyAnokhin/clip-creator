@@ -57,7 +57,7 @@ function buildSourceDurations(scenes) {
  * hook merges their state/actions into the same public shape it always
  * returned, so nothing downstream (`EditorStage.jsx`, `App.jsx`) had to
  * change for the split. */
-export function useEditorStage({ activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L }) {
+export function useEditorStage({ activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, beginJob, endJob }) {
   const [selectedClipIds, setSelectedClipIds] = useState(() => new Set());
   const [selectedOverlayId, setSelectedOverlayId] = useState(null);
   const [selectedTransitionClipId, setSelectedTransitionClipId] = useState(null);
@@ -110,7 +110,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   const selectedTrack = tracks.find((t) => t.track_id === videoEdit.mureka_track_id) || null;
 
   const preview = useEditorPreview({ activeProject, timelineClips, scenes, selectedTrack, totalDurationMs });
-  const render = useEditorRender({ activeProject, setActiveProject, flushPendingSave, showToast, L });
+  const render = useEditorRender({ activeProject, setActiveProject, flushPendingSave, showToast, L, beginJob, endJob });
   const { invalidatePreviewClip } = preview;
 
   function resetForProject(project) {
@@ -720,7 +720,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       }));
       return source;
     } catch {
-      showToast(L.editor_overlayVideoUploadError);
+      showToast(L.editor_overlayVideoUploadError, 'error');
       return null;
     }
   }
@@ -733,7 +733,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
         video_edit: { ...(p.video_edit || EMPTY_VIDEO_EDIT), overlay_video_sources: result.overlay_video_sources },
       }));
     } catch {
-      showToast(L.editor_overlayVideoDeleteError);
+      showToast(L.editor_overlayVideoDeleteError, 'error');
     }
   }
 

@@ -1,10 +1,12 @@
 import { Feather, Plus, Settings } from 'lucide-react';
+import ApiKeysPill from '../ApiKeysPill.jsx';
 import UsagePill from '../UsagePill.jsx';
 import MiniPlayerWidget from '../MiniPlayerWidget.jsx';
+import JobsPill from '../JobsPill.jsx';
 
 export default function Header({
-  L, langLabel, onToggleLang, onOpenSettings, onNewWorkflow, usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
-  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
+  L, langLabel, apiKeys, onToggleLang, onOpenSettings, onNewWorkflow, usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer, jobs,
 }) {
   return (
     <div className="home-header">
@@ -14,10 +16,8 @@ export default function Header({
         </span>
         <span>{L.appName}</span>
       </div>
-      <div className="pill pill-success">
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', boxShadow: '0 0 6px #4ade80' }} />
-        {L.apiConnected}
-      </div>
+      <ApiKeysPill L={L} apiKeys={apiKeys} onOpenSettings={onOpenSettings} />
+      <JobsPill L={L} jobs={jobs} />
       <MiniPlayerWidget L={L} track={miniPlayerTrack} isPlaying={miniPlayerIsPlaying} onToggle={onToggleMiniPlayer} />
       <UsagePill L={L} today={usageToday} periodTotals={usagePeriodTotals} onOpen={onOpenUsage} onLoadPeriodTotals={onLoadUsagePeriodTotals} />
       <div style={{ flex: 1 }} />

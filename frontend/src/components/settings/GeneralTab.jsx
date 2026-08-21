@@ -3,7 +3,7 @@ import { Download, Upload } from 'lucide-react';
 
 // Settings > "General": UI language, the shared request timeout, and the
 // export/import of everything except API keys (those live in ProvidersTab).
-export default function GeneralTab({ L, lang, requestTimeoutSeconds, actions, onExport, onImportFile }) {
+export default function GeneralTab({ L, lang, requestTimeoutSeconds, developerMode, actions, onExport, onImportFile }) {
   const fileRef = useRef(null);
 
   return (
@@ -39,6 +39,18 @@ export default function GeneralTab({ L, lang, requestTimeoutSeconds, actions, on
           value={requestTimeoutSeconds}
           onChange={(e) => actions.setRequestTimeoutSeconds(Math.max(5, Number(e.target.value) || 60))}
         />
+      </div>
+
+      <div className="settings-panel">
+        <div className="settings-panel-label">{L.settings_developerMode}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>{L.settings_developerModeHint}</div>
+        <button
+          className={`chip${developerMode ? ' is-active' : ''}`}
+          aria-pressed={developerMode}
+          onClick={() => actions.setDeveloperMode(!developerMode)}
+        >
+          {developerMode ? L.settings_developerModeOn : L.settings_developerModeOff}
+        </button>
       </div>
 
       <div className="settings-panel">

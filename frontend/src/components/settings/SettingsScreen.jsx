@@ -22,7 +22,7 @@ const TABS = ['general', 'providers', 'models', 'prices', 'prompts', 'wishes', '
 export default function SettingsScreen({
   L, lang, showToast, apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, specialTags,
   videoModels, videoWishLibrary,
-  sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds,
+  sunoBasePrompt, sunoPromptPresets, referenceExamples, wishLibrary, requestTimeoutSeconds, developerMode,
   sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary,
   backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams, logos,
   outpaintQualityMode, musicTags, sunoBasePromptUserPresets, murekaBasePromptUserPresets,
@@ -157,7 +157,7 @@ export default function SettingsScreen({
 
           {activeTab === 'general' && (
             <GeneralTab
-              L={L} lang={lang} requestTimeoutSeconds={requestTimeoutSeconds} actions={actions}
+              L={L} lang={lang} requestTimeoutSeconds={requestTimeoutSeconds} developerMode={developerMode} actions={actions}
               onExport={exportGeneralFile} onImportFile={handleGeneralFile}
             />
           )}

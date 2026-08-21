@@ -14,7 +14,7 @@ export const EMPTY_MUREKA = { style_input: '', lyrics_input: '', reference_audio
  * this stage treats star rating and "this is the one I'll use" as separate
  * concepts. */
 export function useMurekaStage({
-  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, onAiCall,
+  activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, onAiCall, beginJob, endJob,
 }) {
   const [model, setModel] = useState('auto');
   const [n, setN] = useState(2);
@@ -100,20 +100,24 @@ export function useMurekaStage({
   async function generate() {
     if (!activeProject) return;
     if (!mureka.lyrics_input?.trim()) {
-      showToast(L.mureka_noLyricsError);
+      showToast(L.mureka_noLyricsError, 'error');
       return;
     }
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'mureka' });
     setGenerating(true);
     setMurekaError(null);
     try {
       await flushPendingSave();
-      const { job_id: jobId } = await api.generateMureka(activeProject.id, {
+      const { job_id: jobId } = await api.generateMureka(jobProjectId, {
         style: mureka.style_input, lyrics: mureka.lyrics_input,
         model, n, gender: gender || undefined, reference_id: referenceId || undefined,
       });
-      const job = await pollJob(activeProject.id, jobId, (j) => setJobStage(j.stage || null));
+      const job = await pollJob(jobProjectId, jobId, (j) => setJobStage(j.stage || null));
       if (job.status === 'completed' && job.tracks?.length) {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
           mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: [...(p.mureka?.tracks || []), ...job.tracks] },
         }));
@@ -122,14 +126,15 @@ export function useMurekaStage({
       } else {
         const message = job.error || L.mureka_generateFailed;
         setMurekaError(message);
-        showToast(message);
+        showToast(message, 'error');
       }
     } catch (err) {
       const message = err?.detail || L.mureka_generateFailed;
       console.error('[Mureka generate] request failed:', err);
       setMurekaError(message);
-      showToast(message);
+      showToast(message, 'error');
     } finally {
+      endJob(registryId);
       setGenerating(false);
       onAiCall?.();
     }
@@ -197,7 +202,7 @@ export function useMurekaStage({
         mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: (p.mureka?.tracks || []).filter((t) => t.track_id !== trackId) },
       }));
     } catch {
-      showToast(L.mureka_deleteTrackFailed);
+      showToast(L.mureka_deleteTrackFailed, 'error');
     }
   }
 
@@ -226,7 +231,7 @@ export function useMurekaStage({
       const last = result.reference_audio[result.reference_audio.length - 1];
       if (last) setReferenceId(last.mureka_file_id);
     } catch (err) {
-      showToast(err?.detail || L.mureka_uploadReferenceFailed);
+      showToast(err?.detail || L.mureka_uploadReferenceFailed, 'error');
     } finally {
       setUploadingReference(false);
     }
@@ -238,7 +243,7 @@ export function useMurekaStage({
       setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), reference_audio: result.reference_audio } }));
       if (referenceId && !result.reference_audio.some((r) => r.mureka_file_id === referenceId)) setReferenceId('');
     } catch {
-      showToast(L.mureka_deleteReferenceFailed);
+      showToast(L.mureka_deleteReferenceFailed, 'error');
     }
   }
 
@@ -255,7 +260,7 @@ export function useMurekaStage({
       setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), reference_sources: result.reference_sources } }));
       return result.reference_sources[result.reference_sources.length - 1] || null;
     } catch (err) {
-      showToast(err?.detail || L.mureka_uploadReferenceFailed);
+      showToast(err?.detail || L.mureka_uploadReferenceFailed, 'error');
       return null;
     } finally {
       setUploadingReferenceSource(false);
@@ -267,7 +272,7 @@ export function useMurekaStage({
       const result = await api.deleteMurekaReferenceSource(activeProject.id, sourceId);
       setActiveProject((p) => ({ ...p, mureka: { ...(p.mureka || EMPTY_MUREKA), reference_sources: result.reference_sources } }));
     } catch {
-      showToast(L.mureka_deleteReferenceFailed);
+      showToast(L.mureka_deleteReferenceFailed, 'error');
     }
   }
   async function trimReferenceSource(sourceId, startMs, endMs) {
@@ -281,7 +286,7 @@ export function useMurekaStage({
       showToast(L.mureka_trimSuccess);
       return true;
     } catch (err) {
-      showToast(err?.detail || L.mureka_trimFailed);
+      showToast(err?.detail || L.mureka_trimFailed, 'error');
       return false;
     } finally {
       setTrimmingReference(false);
@@ -295,28 +300,33 @@ export function useMurekaStage({
     if (!activeProject) return;
     const trimmed = (lyrics || '').trim();
     if (!trimmed) {
-      showToast(L.mureka_extendNoLyricsError);
+      showToast(L.mureka_extendNoLyricsError, 'error');
       return;
     }
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'mureka', detail: L.mureka_extendBtn });
     setExtendingTrackIds((ids) => [...ids, trackId]);
     try {
-      const { job_id: jobId } = await api.extendMurekaTrack(activeProject.id, trackId, {
+      const { job_id: jobId } = await api.extendMurekaTrack(jobProjectId, trackId, {
         lyrics: trimmed, extend_at: extendAt, extend_type: extendType, model: extendModel,
       });
-      const job = await pollJob(activeProject.id, jobId);
+      const job = await pollJob(jobProjectId, jobId);
       if (job.status === 'completed' && job.tracks?.length) {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
           mureka: { ...(p.mureka || EMPTY_MUREKA), tracks: [...(p.mureka?.tracks || []), ...job.tracks] },
         }));
         showToast(L.toast_generated);
         loadBilling();
       } else {
-        showToast(job.error || L.mureka_extendFailed);
+        showToast(job.error || L.mureka_extendFailed, 'error');
       }
     } catch (err) {
-      showToast(err?.detail || L.mureka_extendFailed);
+      showToast(err?.detail || L.mureka_extendFailed, 'error');
     } finally {
+      endJob(registryId);
       setExtendingTrackIds((ids) => ids.filter((id) => id !== trackId));
       onAiCall?.();
     }
@@ -334,7 +344,7 @@ export function useMurekaStage({
       showToast(L.mureka_stemSuccess);
       loadBilling();
     } catch (err) {
-      showToast(err?.detail || L.mureka_stemFailed);
+      showToast(err?.detail || L.mureka_stemFailed, 'error');
     } finally {
       setStemmingTrackIds((ids) => ids.filter((id) => id !== trackId));
       onAiCall?.();
@@ -354,7 +364,7 @@ export function useMurekaStage({
       loadBilling();
       return true;
     } catch (err) {
-      showToast(err?.detail || L.mureka_describeFailed);
+      showToast(err?.detail || L.mureka_describeFailed, 'error');
       return false;
     } finally {
       setDescribingTrackIds((ids) => ids.filter((id) => id !== trackId));
@@ -374,7 +384,7 @@ export function useMurekaStage({
       loadBilling();
       return true;
     } catch (err) {
-      showToast(err?.detail || L.mureka_transcribeFailed);
+      showToast(err?.detail || L.mureka_transcribeFailed, 'error');
       return false;
     } finally {
       setTranscribingTrackIds((ids) => ids.filter((id) => id !== trackId));
@@ -395,7 +405,7 @@ export function useMurekaStage({
       loadBilling();
       return true;
     } catch (err) {
-      showToast(err?.detail || L.mureka_lyricsVideoFailed);
+      showToast(err?.detail || L.mureka_lyricsVideoFailed, 'error');
       return false;
     } finally {
       setLyricsVideoTrackIds((ids) => ids.filter((id) => id !== trackId));

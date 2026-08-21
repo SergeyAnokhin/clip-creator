@@ -5,6 +5,7 @@ import { buildSunoPromptPreview, groupPresetsByService } from '../../lib/sunoPro
 import { estimateCost, estimateTokensFromChars, formatCost, formatTokens } from '../../lib/pricing.js';
 import { sortByUseCount } from '../../lib/wishes.js';
 import { onActivateKey } from '../../lib/a11y.js';
+import StubBanner from './StubBanner.jsx';
 import { TYPE_COLORS } from '../../i18n/dict.js';
 
 const _TAG_COLOR_DEFAULT = '#ff9d5c';
@@ -87,7 +88,7 @@ function BasePromptPanel({ L, sunoBasePrompt, sunoPromptPresets, actions }) {
 }
 
 function PromptPreviewPanel({
-  L, sunoBasePrompt, referenceExamples, skillPrompt, blocks, activeWishes, genModel, modelPrices,
+  L, sunoBasePrompt, referenceExamples, skillPrompt, blocks, activeWishes, genModel, modelPrices, developerMode,
 }) {
   const [open, setOpen] = useState(false);
   const previewText = buildSunoPromptPreview({
@@ -101,7 +102,7 @@ function PromptPreviewPanel({
     <div className="glass-card" style={{ marginBottom: 16 }}>
       <div
         className="suno-panel-title"
-        style={{ marginBottom: open ? 12 : 0, cursor: 'pointer' }}
+        style={{ marginBottom: (open || developerMode) ? 12 : 0, cursor: 'pointer' }}
         role="button" tabIndex={0} aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onActivateKey(() => setOpen((o) => !o))}
@@ -109,13 +110,17 @@ function PromptPreviewPanel({
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         {L.suno_previewTitle}
       </div>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-dim)' }}>
-        <span>{L.suno_previewCharsLabel}: {previewText.length}</span>
-        <span>{L.suno_previewTokensLabel}: {tokens}</span>
-        <span>
-          {L.suno_previewCostLabel}: {genModel ? `${formatCost(cost)} (${L.suno_previewCostHint})` : L.suno_previewNoModel}
-        </span>
-      </div>
+      {/* Chars/tokens/estimated cost are diagnostics about the call, not part
+          of writing the song - they sat above the fold on every visit. */}
+      {developerMode && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-dim)' }}>
+          <span>{L.suno_previewCharsLabel}: {previewText.length}</span>
+          <span>{L.suno_previewTokensLabel}: {tokens}</span>
+          <span>
+            {L.suno_previewCostLabel}: {genModel ? `${formatCost(cost)} (${L.suno_previewCostHint})` : L.suno_previewNoModel}
+          </span>
+        </div>
+      )}
       {open && (
         <pre
           style={{
@@ -235,6 +240,7 @@ function DebugPanel({ L, lastDebug }) {
 }
 
 export default function SunoStage({
+  developerMode,
   L, project, refinementText, isRecordingRefinement, recordingSeconds, voiceSupported, isMobile,
   sunoLoading, wishLoading, trackUrl, wishLibrary, genModel, simpleModelDefault, simpleModelFavorites, textModelFavorites,
   modelPrices, sunoBasePrompt, sunoPromptPresets, referenceExamples, lastDebug, elapsedSeconds, sunoError, actions,
@@ -328,7 +334,7 @@ export default function SunoStage({
       <PromptPreviewPanel
         L={L} sunoBasePrompt={sunoBasePrompt} referenceExamples={referenceExamples}
         skillPrompt={project.skill_prompt} blocks={project.blocks} activeWishes={activeWishes}
-        genModel={genModel} modelPrices={modelPrices}
+        genModel={genModel} modelPrices={modelPrices} developerMode={developerMode}
       />
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, flexWrap: 'wrap' }}>
@@ -361,7 +367,8 @@ export default function SunoStage({
         <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 16 }}>⚠️ {sunoError}</div>
       )}
 
-      <DebugPanel L={L} lastDebug={lastDebug} />
+      {lastDebug?.stub && <StubBanner L={L} message={stubMessage(L, lastDebug)} />}
+      {developerMode && <DebugPanel L={L} lastDebug={lastDebug} />}
 
       {!!(project.style || project.lyrics) && (
         <>

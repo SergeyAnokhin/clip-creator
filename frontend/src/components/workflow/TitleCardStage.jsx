@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, ImagePlus, Layers, Loader2, Mic, MicOff, Min
 import { mediaUrl } from '../../api/client.js';
 import ModelPicker from './ModelPicker.jsx';
 import TitleCardGallery from './TitleCardGallery.jsx';
+import StageMoreOptions from './StageMoreOptions.jsx';
 import PosterGallery from './PosterGallery.jsx';
 import PosterConstructor from './PosterConstructor.jsx';
 import ImageLightbox from './ImageLightbox.jsx';
@@ -180,6 +181,7 @@ function ReferencePicker({ L, projectId, candidates, onPick, onUpload, onClose }
 }
 
 export default function TitleCardStage({
+  developerMode,
   L, project,
   imageModel, imageModelTier, imageModelFavorites, imageModelSimpleFavorites, modelPrices,
   variantCount, aspectRatio, generating,
@@ -354,18 +356,6 @@ export default function TitleCardStage({
           favorites={tierFavorites} value={imageModel} onChange={actions.selectImageModel}
           emptyLabel={L.modelPickerEmpty} prices={modelPrices} L={L}
         />
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.aspectRatioLabel}:</span>
-        {ASPECT_RATIOS.map((ratio) => (
-          <button
-            key={ratio} className={`chip${aspectRatio === ratio ? ' is-active' : ''}`}
-            onClick={() => actions.setAspectRatio(ratio)}
-          >
-            {L[`aspectRatio_${ratio.replace(':', '_')}`]}
-          </button>
-        ))}
 
         <span style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 10, marginRight: 2 }}>{L.variantCountLabel}:</span>
         <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => actions.setVariantCount(Math.max(1, variantCount - 1))}>
@@ -376,6 +366,20 @@ export default function TitleCardStage({
           <Plus size={12} />
         </button>
       </div>
+
+      <StageMoreOptions L={L} storageKey="title_card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', marginRight: 2 }}>{L.aspectRatioLabel}:</span>
+          {ASPECT_RATIOS.map((ratio) => (
+            <button
+              key={ratio} className={`chip${aspectRatio === ratio ? ' is-active' : ''}`}
+              onClick={() => actions.setAspectRatio(ratio)}
+            >
+              {L[`aspectRatio_${ratio.replace(':', '_')}`]}
+            </button>
+          ))}
+        </div>
+      </StageMoreOptions>
 
       <div style={{ marginBottom: 18 }}>
         <button
@@ -463,7 +467,7 @@ export default function TitleCardStage({
         />
       )}
 
-      <DebugPanel L={L} lastDebug={lastDebug} />
+      {developerMode && <DebugPanel L={L} lastDebug={lastDebug} />}
     </>
   );
 }

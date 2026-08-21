@@ -206,10 +206,50 @@ argument, so the whole data flow reads off `App.jsx`.
 Edits update local state immediately, then `PATCH` the **whole** project.
 Text-field edits go through a 400 ms debounce.
 
-One exception to "state belongs to the mounted stage": `useMiniPlayer.js` owns
-the "now playing" track and renders its `<audio>` at the `App.jsx` top level,
-outside every screen/stage conditional, so navigating away doesn't unmount it or
-interrupt playback.
+Two exceptions to "state belongs to the mounted stage", both owned by `App.jsx`
+so they survive navigation:
+
+- `useMiniPlayer.js` owns the "now playing" track and renders its `<audio>` at
+  the top level, outside every screen/stage conditional, so navigating away
+  doesn't unmount it or interrupt playback.
+- `useJobs.js` is the registry of in-flight generations. A stage hook calls
+  `beginJob({projectId, stage, detail})` before starting one and `endJob(id)` in
+  its `finally`; `components/JobsPill.jsx` renders the count and elapsed time in
+  the home and workflow headers (nothing at all while idle), and `Sidebar.jsx`
+  turns a job's `stage` into the `running` status a stage row shows. The hook
+  neither polls nor cancels - each stage hook still owns its own poll loop.
+
+  The `projectId` a job was begun under is also what its write-back is checked
+  against: every poll result is applied as
+  `setActiveProject((p) => (p?.id !== jobProjectId ? p : {...}))`. Without that
+  guard, going home mid-job crashed the updater (`activeProject` is `null` by
+  then) and opening a *different* project wrote the finished image/video/track
+  into it. The scene index is captured the same way.
+
+**Navigation state survives a reload.** There is no router; `App.jsx` persists
+`{screen, projectId, activeStage}` to `localStorage` under `versecraft.session`
+on every change and restores it once on mount. A project deleted meanwhile just
+lands on home.
+
+**Toasts are a stack, not a slot** (`useToast.js` / `components/Toast.jsx`):
+`showToast(message, level)` where `level` defaults to `'info'`, up to 3 at once.
+`'error'` and `'warning'` never auto-dismiss - only the close button removes
+them - so a failure can't flash past in 2.2s unread. Every `catch` branch in the
+stage hooks passes `'error'`.
+
+**Stage completion is computed in `lib/stageStatus.js`**, not in the sidebar:
+`stageProgress(key, project)` returns `{status, counter, blockedBy}` with
+`status` one of `blocked`/`pending`/`processing`/`completed` (`running` is
+layered on from `useJobs`). A stage that already has its own output is never
+`blocked`, whatever its normal inputs look like - the Editor-timeline fixture
+has hand-authored videos and no scene images at all.
+`components/workflow/StageFooter.jsx` renders it as "step N of 9" plus
+prev/next (also `Ctrl/Cmd+←`/`→`), on every stage but the Editor.
+
+**Diagnostics are behind `settings.developer_mode`** (default off): the
+per-stage "what actually went to the model" debug panels and the Suno stage's
+chars/tokens/estimated-cost line. `components/workflow/StubBanner.jsx` is
+deliberately *not* gated on it - see the stub rule under "Text" below.
 
 ## Provider seams
 
@@ -251,6 +291,10 @@ for a ```` ```json ```` array of exactly `scene_count` scene objects.
 - Real call when `provider ∈ google|openrouter|deepseek` **and** the key is set;
   otherwise a deterministic stub with `debug.reason` = `no_model_selected` /
   `unsupported_provider` / `no_api_key`, shown verbatim in the debug panel.
+- A stub is **not** reported to the user as a success: the frontend checks
+  `result.debug.stub` and shows a warning toast plus `StubBanner.jsx` in the
+  stage body, rather than the green "Готово!" it used to show next to plausible
+  fabricated text buried in a collapsed debug panel.
 - A **failure** (bad key, non-200, unparsable) is `HTTPException(502)`, never a
   silent stub fallback. A *successful* reply in the wrong format is tolerated
   instead: `suno` sets `debug.missing_markers` and returns an empty style;

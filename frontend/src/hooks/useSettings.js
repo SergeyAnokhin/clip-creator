@@ -40,6 +40,7 @@ export function useSettings({ showToast, onAiCall }) {
   const [sceneWishLibrary, setSceneWishLibrary] = useState([]);
   const [titleCardWishLibrary, setTitleCardWishLibrary] = useState([]);
   const [hideMotionPrompt, setHideMotionPromptState] = useState(false);
+  const [developerMode, setDeveloperModeState] = useState(false);
   const [titleCardBasePrompt, setTitleCardBasePrompt] = useState('');
   const [titleCardBasePromptPresets, setTitleCardBasePromptPresets] = useState([]);
   const [backgroundRemoverParams, setBackgroundRemoverParams] = useState(DEFAULT_BG_REMOVER_PARAMS);
@@ -73,6 +74,7 @@ export function useSettings({ showToast, onAiCall }) {
       setSceneWishLibrary(s.scene_wish_library || []);
       setTitleCardWishLibrary(s.title_card_wish_library || []);
       setHideMotionPromptState(s.hide_motion_prompt || false);
+      setDeveloperModeState(s.developer_mode || false);
       setTitleCardBasePrompt(s.title_card_base_prompt || '');
       setTitleCardBasePromptPresets(s.title_card_base_prompt_presets || []);
       setBackgroundRemoverParams(s.background_remover_params || DEFAULT_BG_REMOVER_PARAMS);
@@ -377,6 +379,13 @@ export function useSettings({ showToast, onAiCall }) {
     api.putSettings({ hide_motion_prompt: value }).catch(() => {});
   }
 
+  /** Same immediate-save shape as setHideMotionPrompt: a view preference is
+   * expected to stick the moment it is flipped, not on the Save button. */
+  function setDeveloperMode(value) {
+    setDeveloperModeState(value);
+    api.putSettings({ developer_mode: value }).catch(() => {});
+  }
+
   function setBackgroundRemoverParam(key, value) {
     setBackgroundRemoverParams((prev) => ({ ...prev, [key]: value }));
   }
@@ -399,7 +408,7 @@ export function useSettings({ showToast, onAiCall }) {
       setLogos(result.logos);
       showToast(L.toast_saved);
     } catch {
-      showToast(L.toast_saveFailed);
+      showToast(L.toast_saveFailed, 'error');
     }
   }
   async function deleteLogo(id) {
@@ -407,7 +416,7 @@ export function useSettings({ showToast, onAiCall }) {
       const result = await api.deleteLogo(id);
       setLogos(result.logos);
     } catch {
-      showToast(L.toast_saveFailed);
+      showToast(L.toast_saveFailed, 'error');
     }
   }
 
@@ -427,7 +436,7 @@ export function useSettings({ showToast, onAiCall }) {
   function updateWishSnippet(id, patch) {
     api.updateWishSnippet(id, patch)
       .then((res) => { setWishLibrary(res.suno_wish_library); showToast(L.toast_saved); })
-      .catch(() => showToast(L.toast_saveFailed));
+      .catch(() => showToast(L.toast_saveFailed, 'error'));
   }
 
   function removeSceneWishSnippet(id) {
@@ -446,7 +455,7 @@ export function useSettings({ showToast, onAiCall }) {
   function updateSceneWishSnippet(id, patch) {
     api.updateSceneWishSnippet(id, patch)
       .then((res) => { setSceneWishLibrary(res.scene_wish_library); showToast(L.toast_saved); })
-      .catch(() => showToast(L.toast_saveFailed));
+      .catch(() => showToast(L.toast_saveFailed, 'error'));
   }
 
   function removeVideoWishSnippet(id) {
@@ -465,7 +474,7 @@ export function useSettings({ showToast, onAiCall }) {
   function updateVideoWishSnippet(id, patch) {
     api.updateVideoWishSnippet(id, patch)
       .then((res) => { setVideoWishLibrary(res.video_wish_library); showToast(L.toast_saved); })
-      .catch(() => showToast(L.toast_saveFailed));
+      .catch(() => showToast(L.toast_saveFailed, 'error'));
   }
   function bumpVideoWishUse(id) {
     const next = videoWishLibrary.map((w) => (w.id === id ? { ...w, use_count: (w.use_count || 0) + 1 } : w));
@@ -508,7 +517,7 @@ export function useSettings({ showToast, onAiCall }) {
       await api.putSettings({ api_keys: { ...apiKeys, ...keys } });
       showToast(L.toast_imported);
     } catch {
-      showToast(L.toast_importFailed);
+      showToast(L.toast_importFailed, 'error');
     }
   }
 
@@ -573,7 +582,7 @@ export function useSettings({ showToast, onAiCall }) {
       api.getSunoPromptPresets().then(setSunoPromptPresets).catch(() => {});
       showToast(L.toast_imported);
     } catch {
-      showToast(L.toast_importFailed);
+      showToast(L.toast_importFailed, 'error');
     }
   }
 
@@ -586,7 +595,7 @@ export function useSettings({ showToast, onAiCall }) {
         suno_base_prompt: sunoBasePrompt, suno_reference_examples: referenceExamples, suno_wish_library: wishLibrary,
         request_timeout_seconds: requestTimeoutSeconds,
         scene_base_prompt_narrative: sceneBasePromptNarrative, scene_base_prompt_abstract: sceneBasePromptAbstract,
-        scene_wish_library: sceneWishLibrary, hide_motion_prompt: hideMotionPrompt,
+        scene_wish_library: sceneWishLibrary, hide_motion_prompt: hideMotionPrompt, developer_mode: developerMode,
         title_card_base_prompt: titleCardBasePrompt, title_card_base_prompt_presets: titleCardBasePromptPresets,
         background_remover_params: backgroundRemoverParams, background_remover_method: backgroundRemoverMethod,
         background_remover_local_params: backgroundRemoverLocalParams, background_remover_fal_params: backgroundRemoverFalParams,
@@ -595,7 +604,7 @@ export function useSettings({ showToast, onAiCall }) {
       });
       showToast(L.toast_saved);
     } catch {
-      showToast('Не удалось сохранить настройки');
+      showToast('Не удалось сохранить настройки', 'error');
     }
   }
 
@@ -603,7 +612,7 @@ export function useSettings({ showToast, onAiCall }) {
     lang, L, langLabel: lang === 'ru' ? 'EN' : 'RU',
     apiKeys, textModels, simpleModels, imageModels, imageModelsSimple, videoModels, videoWishLibrary, specialTags,
     sunoBasePrompt, referenceExamples, wishLibrary, sunoPromptPresets, requestTimeoutSeconds,
-    sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt,
+    sceneBasePromptNarrative, sceneBasePromptAbstract, sceneWishLibrary, hideMotionPrompt, developerMode,
     titleCardBasePrompt, titleCardBasePromptPresets, titleCardWishLibrary,
     backgroundRemoverParams, backgroundRemoverMethod, backgroundRemoverLocalParams, backgroundRemoverFalParams,
     outpaintQualityMode,
@@ -615,7 +624,7 @@ export function useSettings({ showToast, onAiCall }) {
       setBackgroundRemoverParam, setBackgroundRemoverMethod, setBackgroundRemoverLocalParam, setBackgroundRemoverFalParam,
       setOutpaintQualityMode,
       uploadLogo, deleteLogo,
-      setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings, setHideMotionPrompt,
+      setApiKey, onSave: saveSettings, importApiKeys, importGeneralSettings, setHideMotionPrompt, setDeveloperMode,
       addSpecialTag, removeSpecialTag, updateSpecialTag, setSunoBasePrompt, updateSunoBasePrompt,
       addReferenceExample, removeReferenceExample, updateReferenceExample, saveWishToLibrary, removeWishSnippet, updateWishSnippet, setWishLibrary,
       addTextModelFavorite, removeTextModelFavorite, setTextModelDefault,

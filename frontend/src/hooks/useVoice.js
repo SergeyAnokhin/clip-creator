@@ -73,7 +73,7 @@ export function useVoice({ updateProject, showToast, L, lang, setRefinementText,
     recognition.onerror = (event) => {
       if (event.error === 'not-allowed') showToast(L.toast_voice_denied);
       else if (event.error === 'no-speech') showToast(L.toast_voice_no_speech);
-      else showToast(L.toast_voice_error);
+      else showToast(L.toast_voice_error, 'error');
     };
     recognition.onend = () => {
       clearInterval(interval.current);
@@ -121,7 +121,7 @@ export function useFieldVoice({ showToast, L, lang }) {
     recognition.onerror = (event) => {
       if (event.error === 'not-allowed') showToast(L.toast_voice_denied);
       else if (event.error === 'no-speech') showToast(L.toast_voice_no_speech);
-      else showToast(L.toast_voice_error);
+      else showToast(L.toast_voice_error, 'error');
     };
     recognition.onend = () => {
       recognitionRef.current = null;

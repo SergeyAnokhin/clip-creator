@@ -13,7 +13,7 @@ export default function HomeScreen({
   onModalUrlChange, onModalRawTextChange, onSubmitNewProject,
   onFilterChange, onSearchChange, onOpenProject, onDeleteProject,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
-  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer, jobs, apiKeys,
 }) {
   const isMobile = viewport === 'mobile';
   const isTablet = viewport === 'tablet';
@@ -34,6 +34,7 @@ export default function HomeScreen({
         onNewWorkflow={onOpenNewProjectModal} usageToday={usageToday} usagePeriodTotals={usagePeriodTotals}
         onOpenUsage={onOpenUsage} onLoadUsagePeriodTotals={onLoadUsagePeriodTotals}
         miniPlayerTrack={miniPlayerTrack} miniPlayerIsPlaying={miniPlayerIsPlaying} onToggleMiniPlayer={onToggleMiniPlayer}
+        jobs={jobs} apiKeys={apiKeys}
       />
 
       <div className="home-main" style={{ padding: isMobile ? '20px 16px' : '36px 32px' }}>

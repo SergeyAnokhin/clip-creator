@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Film, Image as ImageIcon, ImagePlus, Mic, MicOff, Upload } from 'lucide-react';
+import { Film, Image as ImageIcon, ImagePlus, Loader2, Mic, MicOff, Upload } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import ImageCarousel from './ImageCarousel.jsx';
 import TranslateButton from './TranslateButton.jsx';
@@ -114,9 +114,14 @@ export default function SceneCard({
               <Upload size={13} />
               {L.uploadSceneImage}
             </button>
-            <button className="btn btn-gradient" style={{ padding: '8px 15px' }} onClick={() => actions.onGenerate(index)}>
-              <ImagePlus size={13} />
-              {L.generateImages}
+            {/* Every other stage disables its generate button while running;
+                this one did not, so a second click fired another paid batch. */}
+            <button
+              className="btn btn-gradient" style={{ padding: '8px 15px' }}
+              onClick={() => actions.onGenerate(index)} disabled={isLoading}
+            >
+              {isLoading ? <Loader2 size={13} className="spin" /> : <ImagePlus size={13} />}
+              {isLoading ? L.generatingImage : L.generateImages}
             </button>
           </div>
         </div>

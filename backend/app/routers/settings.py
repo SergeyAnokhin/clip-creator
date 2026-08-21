@@ -170,6 +170,13 @@ DEFAULT_SETTINGS = {
     # separate picker UI needed.
     'suno_base_prompt_user_presets': [],
     'mureka_base_prompt_user_presets': [],
+    # Off by default: hides the per-stage "what actually went to the model"
+    # debug panels and the token/cost estimate lines, which are diagnostics
+    # rather than part of the creative flow. Nothing is removed - the toggle
+    # in Settings -> General brings them all back. The stub banner
+    # (StubBanner.jsx) is deliberately NOT gated on this: a fabricated result
+    # has to be visible whether or not diagnostics are on.
+    'developer_mode': False,
 }
 
 

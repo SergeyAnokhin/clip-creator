@@ -10,7 +10,7 @@ import { EMPTY_VIDEO_EDIT } from '../lib/editorDefaults.js';
  * only `activeProject`/`setActiveProject` for the resulting `renders[]`
  * entry - a finished render is server-appended and read back, not built by
  * an edit action here. */
-export function useEditorRender({ activeProject, setActiveProject, flushPendingSave, showToast, L }) {
+export function useEditorRender({ activeProject, setActiveProject, flushPendingSave, showToast, L, beginJob, endJob }) {
   const [renderLoading, setRenderLoading] = useState(false);
   const [renderError, setRenderError] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -34,28 +34,33 @@ export function useEditorRender({ activeProject, setActiveProject, flushPendingS
 
   async function startRender(options = {}) {
     if (!activeProject) return;
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'editor' });
     setRenderLoading(true);
     setRenderError(null);
     try {
       await flushPendingSave();
-      const { job_id: jobId } = await api.startEditorRender(activeProject.id, options.range);
-      const job = await pollRenderJob(activeProject.id, jobId);
+      const { job_id: jobId } = await api.startEditorRender(jobProjectId, options.range);
+      const job = await pollRenderJob(jobProjectId, jobId);
       if (job.status === 'completed') {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
           video_edit: { ...(p.video_edit || EMPTY_VIDEO_EDIT), renders: [...(p.video_edit?.renders || []), job.render] },
         }));
         showToast(L.toast_generated);
       } else {
         setRenderError(job.error || 'Не удалось собрать видео');
-        showToast(job.error || 'Не удалось собрать видео');
+        showToast(job.error || 'Не удалось собрать видео', 'error');
       }
     } catch (err) {
       const message = err?.detail || 'Не удалось собрать видео';
       console.error('[Editor render] request failed:', err);
       setRenderError(message);
-      showToast(message);
+      showToast(message, 'error');
     } finally {
+      endJob(registryId);
       setRenderLoading(false);
     }
   }
@@ -66,7 +71,7 @@ export function useEditorRender({ activeProject, setActiveProject, flushPendingS
       const result = await api.deleteEditorRender(activeProject.id, renderId);
       setActiveProject((p) => ({ ...p, video_edit: { ...(p.video_edit || EMPTY_VIDEO_EDIT), renders: result.renders } }));
     } catch {
-      showToast('Не удалось удалить видео');
+      showToast('Не удалось удалить видео', 'error');
     }
   }
 

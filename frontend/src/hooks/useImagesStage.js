@@ -18,6 +18,7 @@ import { pickMainByRating } from '../lib/scenes.js';
  * `flushPendingSave()` first - see the autosave race in docs/architecture.md. */
 export function useImagesStage({
   activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, imageModelsSimple, onAiCall,
+  beginJob, endJob,
 }) {
   const [imageModelTier, setImageModelTier] = useState('simple');
   const [imageModelMain, setImageModelMain] = useState(imageModels.default || '');
@@ -46,7 +47,7 @@ export function useImagesStage({
       const result = await api.uploadReferenceImage(activeProject.id, file);
       setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
     } catch {
-      showToast('Не удалось загрузить изображение');
+      showToast('Не удалось загрузить изображение', 'error');
     } finally {
       setReferenceUploading(false);
     }
@@ -58,7 +59,7 @@ export function useImagesStage({
       const result = await api.deleteReferenceImage(activeProject.id, filename);
       setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
     } catch {
-      showToast('Не удалось удалить изображение');
+      showToast('Не удалось удалить изображение', 'error');
     }
   }
   async function pollImageJob(projectId, sceneIdx, jobId) {
@@ -70,29 +71,34 @@ export function useImagesStage({
   }
   async function generateSceneImages(idx) {
     if (!activeProject) return;
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'images', detail: L.jobs_scene + ' ' + (idx + 1) });
     setSceneLoadingIdx(idx);
     try {
       await flushPendingSave();
-      const { job_ids: jobIds } = await api.generateSceneImages(activeProject.id, idx, {
+      const { job_ids: jobIds } = await api.generateSceneImages(jobProjectId, idx, {
         count: variantCount, model: imageModel, aspect_ratio: aspectRatio === 'auto' ? undefined : aspectRatio,
       });
-      const jobs = await Promise.all(jobIds.map((jobId) => pollImageJob(activeProject.id, idx, jobId)));
+      const jobs = await Promise.all(jobIds.map((jobId) => pollImageJob(jobProjectId, idx, jobId)));
       const newImages = jobs.filter((j) => j.status === 'completed').map((j) => j.image);
       if (newImages.length) {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
           scenes: p.scenes.map((s, i) => (i === idx ? { ...s, images: [...s.images, ...newImages] } : s)),
         }));
       }
       const failedJob = jobs.find((j) => j.status === 'failed');
       if (failedJob) {
-        showToast(failedJob.error || 'Не удалось сгенерировать часть изображений');
+        showToast(failedJob.error || 'Не удалось сгенерировать часть изображений', 'error');
       } else {
         showToast(L.toast_generated);
       }
     } catch {
-      showToast('Не удалось сгенерировать изображения');
+      showToast('Не удалось сгенерировать изображения', 'error');
     } finally {
+      endJob(registryId);
       setSceneLoadingIdx(null);
       onAiCall?.();
     }
@@ -118,7 +124,7 @@ export function useImagesStage({
         scenes: p.scenes.map((s, i) => (i !== sceneIdx ? s : { ...s, images: s.images.filter((_, j) => j !== imgIdx) })),
       }));
     } catch {
-      showToast('Не удалось удалить изображение');
+      showToast('Не удалось удалить изображение', 'error');
     }
   }
   async function uploadSceneImageFile(sceneIdx, file) {
@@ -131,7 +137,7 @@ export function useImagesStage({
       }));
       showToast(L.toast_generated);
     } catch {
-      showToast('Не удалось загрузить изображение');
+      showToast('Не удалось загрузить изображение', 'error');
     }
   }
   async function uploadSceneImageUrl(sceneIdx, url) {
@@ -144,7 +150,7 @@ export function useImagesStage({
       }));
       showToast(L.toast_generated);
     } catch {
-      showToast('Не удалось загрузить изображение по ссылке');
+      showToast('Не удалось загрузить изображение по ссылке', 'error');
     }
   }
   /** Unlike this hook's other actions, deliberately doesn't catch/showToast

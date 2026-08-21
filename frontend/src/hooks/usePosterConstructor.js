@@ -36,7 +36,7 @@ export function usePosterConstructor({ activeProject, setActiveProject, updatePr
       closeConstructor();
     } catch (err) {
       console.error('[Poster save] request failed:', err);
-      showToast(err?.detail || 'Не удалось сохранить афишу');
+      showToast(err?.detail || 'Не удалось сохранить афишу', 'error');
     } finally {
       setSaving(false);
     }
@@ -49,7 +49,7 @@ export function usePosterConstructor({ activeProject, setActiveProject, updatePr
       setActiveProject((p) => ({ ...p, title_card: { ...(p.title_card || EMPTY_TITLE_CARD), posters: result.posters } }));
     } catch (err) {
       console.error('[Poster delete] request failed:', err);
-      showToast('Не удалось удалить афишу');
+      showToast('Не удалось удалить афишу', 'error');
     }
   }
 

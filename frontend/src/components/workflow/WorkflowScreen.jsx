@@ -1,5 +1,6 @@
 import WorkflowHeader from './WorkflowHeader.jsx';
 import Sidebar from './Sidebar.jsx';
+import StageFooter from './StageFooter.jsx';
 import LyricsStage from './LyricsStage.jsx';
 import SunoStage from './SunoStage.jsx';
 import MurekaStage from './MurekaStage.jsx';
@@ -15,7 +16,7 @@ export default function WorkflowScreen({
   lyricsState, sunoState, murekaState, scenesState, imagesState, titleCardState, videoState, exportState, editorState, updateProject,
   onGoHome, onToggleSidebar, onCloseSidebarMobile, onToggleLang, onOpenSettings, onSelectStage,
   usageToday, usagePeriodTotals, onOpenUsage, onLoadUsagePeriodTotals,
-  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer,
+  miniPlayerTrack, miniPlayerIsPlaying, onToggleMiniPlayer, jobs,
 }) {
   const isMobile = viewport === 'mobile';
 
@@ -35,6 +36,7 @@ export default function WorkflowScreen({
         usageToday={usageToday} usagePeriodTotals={usagePeriodTotals} onOpenUsage={onOpenUsage}
         onLoadUsagePeriodTotals={onLoadUsagePeriodTotals}
         miniPlayerTrack={miniPlayerTrack} miniPlayerIsPlaying={miniPlayerIsPlaying} onToggleMiniPlayer={onToggleMiniPlayer}
+        jobs={jobs}
       />
 
       <div className="workflow-body">
@@ -44,6 +46,7 @@ export default function WorkflowScreen({
           activeStage={activeStage}
           viewport={viewport}
           sidebarOpen={sidebarOpen}
+          jobs={jobs}
           onSelectStage={onSelectStage}
           onCloseMobile={onCloseSidebarMobile}
         />
@@ -59,11 +62,16 @@ export default function WorkflowScreen({
             {activeStage === 'suno' && <SunoStage L={L} project={project} isMobile={isMobile} {...sunoState} />}
             {activeStage === 'mureka' && <MurekaStage L={L} project={project} isMobile={isMobile} {...murekaState} />}
             {activeStage === 'scenes' && <ScenesStage L={L} project={project} isMobile={isMobile} {...scenesState} />}
-            {activeStage === 'images' && <ImagesStage L={L} project={project} isMobile={isMobile} {...imagesState} />}
+            {activeStage === 'images' && <ImagesStage L={L} project={project} isMobile={isMobile} onSelectStage={onSelectStage} {...imagesState} />}
             {activeStage === 'title_card' && <TitleCardStage L={L} project={project} isMobile={isMobile} {...titleCardState} />}
-            {activeStage === 'video' && <VideoStage L={L} project={project} isMobile={isMobile} {...videoState} />}
+            {activeStage === 'video' && <VideoStage L={L} project={project} isMobile={isMobile} onSelectStage={onSelectStage} {...videoState} />}
             {activeStage === 'export' && <ExportStage L={L} project={project} isMobile={isMobile} {...exportState} />}
             {activeStage === 'editor' && <EditorStage L={L} project={project} isMobile={isMobile} {...editorState} />}
+            {/* The Editor fills a fixed-height layout of its own, so a footer
+                below it would be pushed off-screen rather than seen. */}
+            {activeStage !== 'editor' && (
+              <StageFooter L={L} project={project} activeStage={activeStage} onSelectStage={onSelectStage} />
+            )}
           </div>
         </div>
       </div>

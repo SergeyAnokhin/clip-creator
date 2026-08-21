@@ -22,7 +22,7 @@ const REFERENCE_SLOTS = 4;
  * reload (text fields, chosen reference paths, variant ratings). */
 export function useTitleCardStage({
   activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L, imageModels, imageModelsSimple, onAiCall,
-  onTitleCardWishLibraryChange, onTitleCardWishUsed,
+  onTitleCardWishLibraryChange, onTitleCardWishUsed, beginJob, endJob,
 }) {
   const [imageModelTier, setImageModelTier] = useState('simple');
   const [imageModelMain, setImageModelMain] = useState(imageModels.default || '');
@@ -117,7 +117,7 @@ export function useTitleCardStage({
       setActiveProject((p) => ({ ...p, reference_images: result.reference_images }));
       setReferenceSlot(slotIndex, result.reference_images[result.reference_images.length - 1]);
     } catch {
-      showToast('Не удалось загрузить изображение');
+      showToast('Не удалось загрузить изображение', 'error');
     }
   }
 
@@ -138,7 +138,7 @@ export function useTitleCardStage({
       setTitleCardWishText('');
       showToast(L.toast_saved);
     } catch {
-      showToast('Не удалось сохранить пожелание');
+      showToast('Не удалось сохранить пожелание', 'error');
     } finally {
       setWishLoading(false);
       onAiCall?.();
@@ -158,22 +158,26 @@ export function useTitleCardStage({
     if (!activeProject) return;
     const referencePaths = titleCard.reference_image_paths;
     if (!referencePaths.length) {
-      showToast(L.titleCard_noReferencesError);
+      showToast(L.titleCard_noReferencesError, 'error');
       return;
     }
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'title_card' });
     setGenerating(true);
     setTitleCardError(null);
     try {
       await flushPendingSave();
-      const { job_ids: jobIds } = await api.generateTitleCard(activeProject.id, {
+      const { job_ids: jobIds } = await api.generateTitleCard(jobProjectId, {
         text_block: titleCard.text_block, base_prompt: basePrompt,
         reference_image_paths: referencePaths, model: imageModel, aspect_ratio: aspectRatio, count: variantCount,
         active_title_card_wish_ids: activeProject.active_title_card_wish_ids,
       });
-      const jobs = await Promise.all(jobIds.map((jobId) => pollJob(activeProject.id, jobId)));
+      const jobs = await Promise.all(jobIds.map((jobId) => pollJob(jobProjectId, jobId)));
       const newVariants = jobs.filter((j) => j.status === 'completed').map((j) => j.variant);
       if (newVariants.length) {
-        setActiveProject((p) => ({
+        setActiveProject((p) => (p?.id !== jobProjectId ? p : {
           ...p,
           title_card: { ...(p.title_card || EMPTY_TITLE_CARD), variants: [...(p.title_card?.variants || []), ...newVariants] },
         }));
@@ -184,7 +188,7 @@ export function useTitleCardStage({
       if (failedJob) {
         const message = failedJob.error || 'Не удалось сгенерировать часть вариантов';
         setTitleCardError(message);
-        showToast(message);
+        showToast(message, 'error');
       } else {
         showToast(L.toast_generated);
       }
@@ -192,8 +196,9 @@ export function useTitleCardStage({
       const message = err?.detail || 'Не удалось сгенерировать афишу';
       console.error('[Title Card generate] request failed:', err);
       setTitleCardError(message);
-      showToast(message);
+      showToast(message, 'error');
     } finally {
+      endJob(registryId);
       setGenerating(false);
       onAiCall?.();
     }
@@ -224,7 +229,7 @@ export function useTitleCardStage({
         title_card: { ...(p.title_card || EMPTY_TITLE_CARD), variants: p.title_card.variants.filter((_, i) => i !== variantIdx) },
       }));
     } catch {
-      showToast('Не удалось удалить вариант');
+      showToast('Не удалось удалить вариант', 'error');
     }
   }
 
@@ -241,7 +246,7 @@ export function useTitleCardStage({
       if (result.debug) setLastDebug({ ...result.debug, completedAt: new Date().toISOString() });
     } catch (err) {
       console.error('[Title Card remove background] request failed:', err);
-      showToast(err?.detail || 'Не удалось удалить фон');
+      showToast(err?.detail || 'Не удалось удалить фон', 'error');
     } finally {
       setRemovingBgIds((s) => { const next = new Set(s); next.delete(variant.variant_id); return next; });
       onAiCall?.();

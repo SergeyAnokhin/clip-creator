@@ -645,7 +645,7 @@ background_remover_fal_params{model}, background_remover_params{background_type,
 magic_layers_method, magic_layers_num_layers, magic_layers_fal_params{model,num_inference_steps,acceleration},
 magic_layers_replicate_params{model},
 outpaint_quality_mode, logos[], poster_templates[], music_tags[],
-suno_base_prompt_user_presets[], mureka_base_prompt_user_presets[]}`
+suno_base_prompt_user_presets[], mureka_base_prompt_user_presets[], developer_mode}`
 
 Reads and writes merge over `DEFAULT_SETTINGS` in
 [`routers/settings.py`](../backend/app/routers/settings.py), so adding a key
@@ -719,6 +719,12 @@ resending everything.
 - **`hide_motion_prompt`** — UI-only: hides every `motion_prompt` field and its
   translate button on the Scenes and Images stages. Doesn't touch any stored
   value. Autosaves immediately on toggle.
+- **`developer_mode`** (default `false`) — UI-only: shows the per-stage "what
+  actually went to the model" debug panels and the Suno stage's
+  chars/tokens/estimated-cost line. Off by default because those are
+  diagnostics, not part of the creative flow; nothing is removed, and the stub
+  warning (`StubBanner.jsx`) is shown either way. Autosaves immediately on
+  toggle, like `hide_motion_prompt`.
 - **`music_tags`** — user-defined quality-review labels for Mureka tracks,
   `{id, label, color}[]`, global and plain-array CRUD'd through the partial-merge
   `PUT`. Seeded with 8 defaults (`DEFAULT_MUSIC_TAGS`). `color` is auto-assigned

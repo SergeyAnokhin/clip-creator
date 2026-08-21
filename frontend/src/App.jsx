@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useToast } from './hooks/useToast.js';
 import { useViewport } from './hooks/useViewport.js';
+import { useJobs } from './hooks/useJobs.js';
 import { useUsage } from './hooks/useUsage.js';
 import { useSettings } from './hooks/useSettings.js';
 import { useProjects } from './hooks/useProjects.js';
@@ -24,6 +25,10 @@ import UsageScreen from './components/usage/UsageScreen.jsx';
 import Toast from './components/Toast.jsx';
 import './styles/theme.css';
 
+/** Where the user was when the tab was last open: screen, project and stage.
+ * Read once on mount, written on every navigation change. */
+const SESSION_KEY = 'versecraft.session';
+
 /**
  * Composition root: owns only navigation (which screen / which stage), wires
  * the hooks together in dependency order, and assembles the per-stage prop
@@ -35,8 +40,11 @@ function App() {
   const [usageReturnScreen, setUsageReturnScreen] = useState('home');
   const [activeStage, setActiveStage] = useState('lyrics');
 
-  const { toast, showToast } = useToast();
+  const { toasts, showToast, dismissToast } = useToast();
   const view = useViewport();
+  // Long-running generations, tracked app-wide so they stay visible after a
+  // stage switch and can tell which project they belong to.
+  const { jobs, beginJob, endJob } = useJobs();
   const usage = useUsage();
   const miniPlayer = useMiniPlayer();
   const settings = useSettings({ showToast, onAiCall: usage.actions.refreshToday });
@@ -52,10 +60,12 @@ function App() {
     onAiCall: usage.actions.refreshToday,
     onWishLibraryChange: settings.actions.setWishLibrary,
     onWishUsed: settings.actions.bumpWishUse,
+    beginJob, endJob,
   });
   const mureka = useMurekaStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
     onAiCall: usage.actions.refreshToday,
+    beginJob, endJob,
   });
   const scenes = useScenesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
@@ -63,11 +73,13 @@ function App() {
     onAiCall: usage.actions.refreshToday,
     onSceneWishLibraryChange: settings.actions.setSceneWishLibrary,
     onSceneWishUsed: settings.actions.bumpSceneWishUse,
+    beginJob, endJob,
   });
   const images = useImagesStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
     imageModels: settings.imageModels, imageModelsSimple: settings.imageModelsSimple,
     onAiCall: usage.actions.refreshToday,
+    beginJob, endJob,
   });
   const titleCard = useTitleCardStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
@@ -75,6 +87,7 @@ function App() {
     onAiCall: usage.actions.refreshToday,
     onTitleCardWishLibraryChange: settings.actions.setTitleCardWishLibrary,
     onTitleCardWishUsed: settings.actions.bumpTitleCardWishUse,
+    beginJob, endJob,
   });
   const posterConstructor = usePosterConstructor({
     activeProject, setActiveProject, updateProject, showToast, L,
@@ -84,6 +97,7 @@ function App() {
   const magicLayers = useMagicLayers({
     activeProject, setActiveProject, flushPendingSave, showToast, L,
     onAiCall: usage.actions.refreshToday,
+    beginJob, endJob,
   });
   const video = useVideoStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
@@ -91,10 +105,12 @@ function App() {
     onAiCall: usage.actions.refreshToday,
     onVideoWishLibraryChange: settings.actions.setVideoWishLibrary,
     onVideoWishUsed: settings.actions.bumpVideoWishUse,
+    beginJob, endJob,
   });
   const exportStage = useExportStage({ activeProject, updateProject });
   const editorStage = useEditorStage({
     activeProject, setActiveProject, updateProject, flushPendingSave, showToast, L,
+    beginJob, endJob,
   });
   // Depends on suno's refinement box, scenes' wish box, title card's wish box and video's wish box, so it must be created after them.
   const voice = useVoice({
@@ -104,10 +120,10 @@ function App() {
   });
 
   // ---------- navigation ----------
-  async function openProject(id) {
+  async function openProject(id, stage = 'lyrics') {
     const project = await projects.loadProject(id);
     if (!project) return;
-    setActiveStage('lyrics');
+    setActiveStage(stage);
     view.resetSidebar();
     suno.resetForProject(project);
     mureka.resetForProject(project);
@@ -133,6 +149,40 @@ function App() {
   function openUsage() { setUsageReturnScreen(screen); setScreen('usage'); }
   function closeUsage() { setScreen(usageReturnScreen); }
 
+  // ---------- session restore ----------
+  // There is no router, so a reload used to always land on the home screen at
+  // the Lyrics stage regardless of where the user was. Persisting the three
+  // navigation values is the minimum that fixes it without taking on routing.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    } catch {
+      saved = null;
+    }
+    if (saved?.screen === 'workflow' && saved.projectId) {
+      // A project deleted since the last session just leaves us on home.
+      openProject(saved.projectId, saved.activeStage || 'lyrics').catch(() => {});
+    }
+    // Runs once on mount; openProject is stable enough for that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openProjectId = activeProject?.id;
+  useEffect(() => {
+    const payload = screen === 'workflow' && openProjectId
+      ? { screen, projectId: openProjectId, activeStage }
+      : { screen: 'home' };
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+    } catch {
+      // Private-mode / quota - losing the restore point is not worth an error.
+    }
+  }, [screen, openProjectId, activeStage]);
+
   // ---------- per-stage prop bundles ----------
   const lyricsState = {
     ...lyrics.state,
@@ -144,6 +194,7 @@ function App() {
   };
 
   const sunoState = {
+    developerMode: settings.developerMode,
     ...suno.state,
     isRecordingRefinement: voice.recordingKind === 'refinement',
     recordingSeconds: voice.recordingSeconds,
@@ -177,6 +228,7 @@ function App() {
   };
 
   const scenesState = {
+    developerMode: settings.developerMode,
     ...scenes.state,
     sceneRecordingIdx: voice.recordingKind === 'scene' ? voice.recordingTarget : null,
     isRecordingSceneWish: voice.recordingKind === 'sceneWish',
@@ -220,6 +272,7 @@ function App() {
   };
 
   const titleCardState = {
+    developerMode: settings.developerMode,
     ...titleCard.state,
     imageModelFavorites: settings.imageModels.favorites,
     imageModelSimpleFavorites: settings.imageModelsSimple.favorites,
@@ -252,6 +305,7 @@ function App() {
   };
 
   const videoState = {
+    developerMode: settings.developerMode,
     ...video.state,
     videoModelFavorites: settings.videoModels.favorites,
     modelPrices: usage.priceMap,
@@ -295,7 +349,7 @@ function App() {
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           miniPlayerTrack={miniPlayer.state.track} miniPlayerIsPlaying={miniPlayer.state.isPlaying}
-          onToggleMiniPlayer={miniPlayer.actions.toggle}
+          onToggleMiniPlayer={miniPlayer.actions.toggle} jobs={jobs} apiKeys={settings.apiKeys}
         />
       )}
 
@@ -310,7 +364,7 @@ function App() {
           usageToday={usage.today} usagePeriodTotals={usage.periodTotals} onOpenUsage={openUsage}
           onLoadUsagePeriodTotals={usage.actions.loadPeriodTotals}
           miniPlayerTrack={miniPlayer.state.track} miniPlayerIsPlaying={miniPlayer.state.isPlaying}
-          onToggleMiniPlayer={miniPlayer.actions.toggle}
+          onToggleMiniPlayer={miniPlayer.actions.toggle} jobs={jobs}
         />
       )}
 
@@ -323,7 +377,7 @@ function App() {
           specialTags={settings.specialTags}
           sunoBasePrompt={settings.sunoBasePrompt} sunoPromptPresets={settings.sunoPromptPresets}
           referenceExamples={settings.referenceExamples} wishLibrary={settings.wishLibrary}
-          requestTimeoutSeconds={settings.requestTimeoutSeconds}
+          requestTimeoutSeconds={settings.requestTimeoutSeconds} developerMode={settings.developerMode}
           sceneBasePromptNarrative={settings.sceneBasePromptNarrative} sceneBasePromptAbstract={settings.sceneBasePromptAbstract}
           sceneWishLibrary={settings.sceneWishLibrary}
           backgroundRemoverParams={settings.backgroundRemoverParams} logos={settings.logos}
@@ -346,7 +400,7 @@ function App() {
         <UsageScreen L={L} usage={usage} onClose={closeUsage} />
       )}
 
-      <Toast message={toast} />
+      <Toast toasts={toasts} onDismiss={dismissToast} />
       <audio {...miniPlayer.audioProps} style={{ display: 'none' }} />
     </div>
   );

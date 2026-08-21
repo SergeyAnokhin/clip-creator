@@ -157,6 +157,88 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* A generation that came back as a backend stub - see StubBanner.jsx. */
+/* "More options" disclosure heading on the generating stages. */
+.stage-more-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.stage-more-toggle:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.stage-counter {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bottom-of-stage "where am I / what is next" strip - see StageFooter.jsx. */
+.stage-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.stage-footer-step {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-footer-needs {
+  font-size: 11.5px;
+  color: #fbbf24;
+}
+
+.stub-banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.pill-running {
+  background: rgba(251, 191, 36, 0.14);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  font-variant-numeric: tabular-nums;
+}
+
+.jobs-pill-icon {
+  animation: wf-pulse 1.4s ease-in-out infinite;
+}
+
+/* Sidebar: a stage with a job running right now, as opposed to one whose data
+   merely happens to exist. */
+.stage-status-running {
+  animation: wf-spin 1.6s linear infinite;
+}
+
 .pill-accent {
   background: rgba(255, 157, 92, 0.14);
   color: var(--accent);
@@ -250,20 +332,95 @@
   padding: 20px;
 }
 
-.toast {
+.toast-stack {
   position: fixed;
   bottom: 28px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 40px));
   background: rgba(24, 21, 18, 0.95);
   backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  border-left-width: 3px;
   color: #fff;
-  padding: 10px 20px;
+  padding: 10px 12px 10px 16px;
   border-radius: 12px;
   font-size: 13px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-  z-index: 100;
+  pointer-events: auto;
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-icon {
+  flex-shrink: 0;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.toast-info {
+  border-left-color: rgba(255, 255, 255, 0.25);
+}
+
+.toast-info .toast-icon {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.toast-success {
+  border-left-color: var(--success);
+}
+
+.toast-success .toast-icon {
+  color: var(--success);
+}
+
+.toast-warning {
+  border-left-color: #fbbf24;
+}
+
+.toast-warning .toast-icon {
+  color: #fbbf24;
+}
+
+.toast-error {
+  border-left-color: var(--danger);
+}
+
+.toast-error .toast-icon {
+  color: var(--danger);
 }
 
 /* ---------- Home ---------- */
@@ -901,15 +1058,6 @@
   font-weight: 600;
   flex: 1;
   color: rgba(255, 255, 255, 0.9);
-}
-
-.stage-sub {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px 6px 44px;
-  font-size: 11.5px;
-  color: var(--text-dim);
 }
 
 .workflow-main {

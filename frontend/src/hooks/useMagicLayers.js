@@ -14,7 +14,7 @@ import { api } from '../api/client.js';
  *
  * Decomposition takes 15–30s, so the backend hands back a job id and this
  * polls it at the same 1.5s cadence as useTitleCardStage.js's pollJob. */
-export function useMagicLayers({ activeProject, setActiveProject, flushPendingSave, showToast, L, onAiCall }) {
+export function useMagicLayers({ activeProject, setActiveProject, flushPendingSave, showToast, L, onAiCall, beginJob, endJob }) {
   // source_paths currently being decomposed — several can run at once, each
   // image shows its own spinner (mirrors useTitleCardStage's removingBgIds).
   const [busySources, setBusySources] = useState(() => new Set());
@@ -38,27 +38,32 @@ export function useMagicLayers({ activeProject, setActiveProject, flushPendingSa
   async function decompose(sourcePath, { method, numLayers, sourceKind } = {}) {
     if (!activeProject || !sourcePath) return null;
     if (busySources.has(sourcePath)) return null;
+    // Captured up front: the job outlives the scene/project that is on
+    // screen when it finishes, so its result must land where it started.
+    const jobProjectId = activeProject.id;
+    const registryId = beginJob({ projectId: jobProjectId, stage: 'images', detail: L.magic_panelLabel });
     setBusySources((s) => new Set(s).add(sourcePath));
     try {
       // The job writes the group onto the project server-side, so any pending
       // local save has to land first or it would overwrite the new group.
       await flushPendingSave?.();
-      const { job_id: jobId } = await api.startMagicLayers(activeProject.id, {
+      const { job_id: jobId } = await api.startMagicLayers(jobProjectId, {
         source_path: sourcePath, source_kind: sourceKind, method, num_layers: numLayers,
       });
-      const job = await pollJob(activeProject.id, jobId);
+      const job = await pollJob(jobProjectId, jobId);
       if (job.status !== 'completed') {
-        showToast(job.error || L.magic_error);
+        showToast(job.error || L.magic_error, 'error');
         return null;
       }
-      setActiveProject((p) => ({ ...p, magic_layer_groups: [...(p.magic_layer_groups || []), job.group] }));
+      setActiveProject((p) => (p?.id !== jobProjectId ? p : { ...p, magic_layer_groups: [...(p.magic_layer_groups || []), job.group] }));
       showToast(L.magic_done);
       return job.group;
     } catch (err) {
       console.error('[Magic layers] request failed:', err);
-      showToast(err?.detail || L.magic_error);
+      showToast(err?.detail || L.magic_error, 'error');
       return null;
     } finally {
+      endJob(registryId);
       setBusySources((s) => { const next = new Set(s); next.delete(sourcePath); return next; });
       onAiCall?.();
     }
@@ -71,7 +76,7 @@ export function useMagicLayers({ activeProject, setActiveProject, flushPendingSa
       setActiveProject((p) => ({ ...p, magic_layer_groups: result.magic_layer_groups }));
     } catch (err) {
       console.error('[Magic layers delete] request failed:', err);
-      showToast(err?.detail || L.magic_deleteError);
+      showToast(err?.detail || L.magic_deleteError, 'error');
     }
   }
 

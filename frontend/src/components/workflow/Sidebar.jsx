@@ -1,54 +1,39 @@
-import { CheckCircle2, Circle, Clapperboard, Download, Film, Image as ImageIcon, Loader, ListMusic, Minus, Music2, Music4, Scissors, Type } from 'lucide-react';
+import { CheckCircle2, Circle, Clapperboard, CircleSlash, Download, Film, Image as ImageIcon, Loader, ListMusic, Music2, Music4, Scissors, Type } from 'lucide-react';
 import { onActivateKey } from '../../lib/a11y.js';
+import { stageProgress } from '../../lib/stageStatus.js';
 
-const STATUS_ICON = { pending: Circle, processing: Loader, completed: CheckCircle2 };
-const STATUS_COLOR = { pending: 'rgba(255,255,255,0.25)', processing: '#fbbf24', completed: '#4ade80' };
+const STATUS_ICON = { blocked: CircleSlash, pending: Circle, processing: Loader, running: Loader, completed: CheckCircle2 };
+const STATUS_COLOR = {
+  blocked: 'rgba(255,255,255,0.16)',
+  pending: 'rgba(255,255,255,0.25)',
+  processing: '#fbbf24',
+  running: '#fbbf24',
+  completed: '#4ade80',
+};
 
+/** Stage rows used to carry three or four non-interactive "sub" captions each
+ * ("Импорт", "Разбивка", ...). They read as a second level of navigation,
+ * nothing happened when clicked, and 18 of them roughly doubled the sidebar's
+ * height - pushing Export and Editor below the fold. They are replaced by the
+ * per-stage counter that `stageProgress` already computes. */
 function stageDefs(L) {
   return [
-    { key: 'lyrics', name: L.stage_lyrics, icon: ListMusic, sub: [L.sub_import, L.sub_split, L.sub_tags] },
-    { key: 'suno', name: L.stage_suno, icon: Music2, sub: [L.sub_skill, L.sub_gen, L.sub_final] },
-    { key: 'mureka', name: L.stage_mureka, icon: Music4, sub: [L.sub_murekaGen, L.sub_murekaGallery] },
-    { key: 'scenes', name: L.stage_scenes, icon: Clapperboard, sub: [L.sub_script, L.sub_wishes] },
-    { key: 'images', name: L.stage_images, icon: ImageIcon, sub: [L.sub_images, L.sub_rating] },
-    { key: 'title_card', name: L.stage_titleCard, icon: Type, sub: [L.sub_titleCardText, L.sub_titleCardStyle] },
-    { key: 'video', name: L.stage_video, icon: Film, sub: [L.sub_videoGen, L.sub_videoRating] },
-    { key: 'export', name: L.stage_export, icon: Download, sub: [L.sub_exportPick, L.sub_exportDownload] },
-    { key: 'editor', name: L.stage_editor, icon: Scissors, sub: [L.sub_editorTimeline, L.sub_editorRender] },
+    { key: 'lyrics', name: L.stage_lyrics, icon: ListMusic },
+    { key: 'suno', name: L.stage_suno, icon: Music2 },
+    { key: 'mureka', name: L.stage_mureka, icon: Music4 },
+    { key: 'scenes', name: L.stage_scenes, icon: Clapperboard },
+    { key: 'images', name: L.stage_images, icon: ImageIcon },
+    { key: 'title_card', name: L.stage_titleCard, icon: Type },
+    { key: 'video', name: L.stage_video, icon: Film },
+    { key: 'export', name: L.stage_export, icon: Download },
+    { key: 'editor', name: L.stage_editor, icon: Scissors },
   ];
 }
 
-function stageStatus(key, project) {
-  if (key === 'lyrics') return 'completed';
-  if (key === 'suno') return project.style ? 'completed' : project.blocks.length > 0 ? 'processing' : 'pending';
-  if (key === 'mureka') return (project.mureka?.tracks?.length ?? 0) > 0 ? 'completed' : 'pending';
-  if (key === 'scenes') return project.scenes.length > 0 ? 'completed' : 'pending';
-  if (key === 'title_card') return (project.title_card?.variants?.length ?? 0) > 0 ? 'completed' : 'pending';
-  if (key === 'video') {
-    const total = project.scenes.length;
-    const ready = project.scenes.filter((s) => s.videos && s.videos.length > 0).length;
-    if (total === 0) return 'pending';
-    return ready === total ? 'completed' : ready > 0 ? 'processing' : 'pending';
-  }
-  if (key === 'export') {
-    const hasVideo = project.scenes.some((s) => s.videos && s.videos.length > 0);
-    const hasAudio = (project.mureka?.tracks || []).some((t) => t.is_selected);
-    if (hasVideo && hasAudio) return 'completed';
-    return hasVideo || hasAudio ? 'processing' : 'pending';
-  }
-  if (key === 'editor') {
-    if ((project.video_edit?.renders?.length ?? 0) > 0) return 'completed';
-    return (project.video_edit?.clips?.length ?? 0) > 0 ? 'processing' : 'pending';
-  }
-  const total = project.scenes.length;
-  const ready = project.scenes.filter((s) => s.images && s.images.length > 0).length;
-  if (total === 0) return 'pending';
-  return ready === total ? 'completed' : ready > 0 ? 'processing' : 'pending';
-}
-
-export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen, onSelectStage, onCloseMobile }) {
+export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen, jobs, onSelectStage, onCloseMobile }) {
   const isMobile = viewport === 'mobile';
   const isTablet = viewport === 'tablet';
+  const runningStages = new Set((jobs || []).map((j) => j.stage));
 
   const style = isMobile
     ? {
@@ -63,6 +48,13 @@ export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen
         background: 'rgba(255,255,255,0.03)', borderRight: '1px solid rgba(255,255,255,0.08)',
       };
 
+  function selectStage(key) {
+    onSelectStage(key);
+    // On mobile the drawer covers the content it just navigated to, so it has
+    // to close itself - the backdrop tap used to be the only way out.
+    if (isMobile) onCloseMobile?.();
+  }
+
   return (
     <>
       {/* Tap-outside-to-close is a pointer convenience next to the header's
@@ -70,22 +62,25 @@ export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen
       {isMobile && sidebarOpen && <div className="sidebar-backdrop" role="presentation" onClick={onCloseMobile} />}
       <div className="sidebar" style={style}>
         <div className="sidebar-inner">
-          {stageDefs(L).map((stage) => {
-            const status = stageStatus(stage.key, project);
+          {stageDefs(L).map((stage, index) => {
+            const { status: dataStatus, counter } = stageProgress(stage.key, project);
+            const status = runningStages.has(stage.key) ? 'running' : dataStatus;
             const StatusIcon = STATUS_ICON[status];
             const isActive = activeStage === stage.key;
             const StageIcon = stage.icon;
             return (
-              <div key={stage.key} style={{ marginBottom: 4 }}>
+              <div key={stage.key} style={{ marginBottom: 2 }}>
                 <div
                   className="stage-row"
                   style={{
                     background: isActive ? 'rgba(255,157,92,0.12)' : 'transparent',
                     borderColor: isActive ? 'rgba(255,157,92,0.3)' : 'transparent',
+                    opacity: status === 'blocked' && !isActive ? 0.55 : 1,
                   }}
                   role="button" tabIndex={0} aria-current={isActive ? 'step' : undefined}
-                  onClick={() => onSelectStage(stage.key)}
-                  onKeyDown={onActivateKey(() => onSelectStage(stage.key))}
+                  title={`${index + 1}. ${stage.name} — ${L['stageStatus_' + status]}`}
+                  onClick={() => selectStage(stage.key)}
+                  onKeyDown={onActivateKey(() => selectStage(stage.key))}
                 >
                   <span
                     className="stage-icon"
@@ -97,14 +92,13 @@ export default function Sidebar({ L, project, activeStage, viewport, sidebarOpen
                     <StageIcon size={13} />
                   </span>
                   <span className="stage-name">{stage.name}</span>
-                  <StatusIcon size={13} color={STATUS_COLOR[status]} />
+                  {counter && <span className="stage-counter">{counter}</span>}
+                  <StatusIcon
+                    size={13}
+                    color={STATUS_COLOR[status]}
+                    className={status === 'running' ? 'stage-status-running' : undefined}
+                  />
                 </div>
-                {stage.sub.map((name) => (
-                  <div key={name} className="stage-sub">
-                    <Minus size={11} color="rgba(255,255,255,0.3)" />
-                    {name}
-                  </div>
-                ))}
               </div>
             );
           })}
