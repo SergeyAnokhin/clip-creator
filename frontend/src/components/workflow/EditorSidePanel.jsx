@@ -6,9 +6,10 @@ import EditorBottomToolbar from './EditorBottomToolbar.jsx';
 
 const TABS = ['properties', 'clip', 'renders'];
 
-function selectionKey(selectedClipIds, selectedOverlayId, selectedTransitionClipId) {
+function selectionKey(selectedClipIds, selectedOverlayId, selectedTransitionClipId, isAudioSelected) {
   if (selectedOverlayId) return `overlay:${selectedOverlayId}`;
   if (selectedTransitionClipId) return `transition:${selectedTransitionClipId}`;
+  if (isAudioSelected) return 'audio';
   if (selectedClipIds.size) return `clip:${Array.from(selectedClipIds).sort().join(',')}`;
   return 'none';
 }
@@ -22,7 +23,8 @@ function selectionKey(selectedClipIds, selectedOverlayId, selectedTransitionClip
  * useEditorStage.js's existing state, they don't duplicate it. */
 export default function EditorSidePanel({
   L, projectId, videoEdit, clips, scenes, overlays, overlayVideoSources, titleCardVariants, logos,
-  selectedClipIds, selectedOverlayId, selectedTransitionClipId,
+  selectedClipIds, selectedOverlayId, selectedTransitionClipId, isAudioSelected,
+  audioSettings, exportSettings,
   tracks, selectedTrack, totalDurationMs, canvasOrientation, canvasSize,
   actions, canUndo, canRedo, renderLoading, renderError, elapsedSeconds, canRender,
   onOpenTestRangeModal, waveformScale, onSetWaveformScale, colorByFrequency, onToggleColorByFrequency, onToolsSlotRef,
@@ -32,10 +34,10 @@ export default function EditorSidePanel({
   const prevRendersLenRef = useRef((videoEdit.renders || []).length);
 
   useEffect(() => {
-    const key = selectionKey(selectedClipIds, selectedOverlayId, selectedTransitionClipId);
+    const key = selectionKey(selectedClipIds, selectedOverlayId, selectedTransitionClipId, isAudioSelected);
     if (key !== prevSelectionKeyRef.current && key !== 'none') setActiveTab('properties');
     prevSelectionKeyRef.current = key;
-  }, [selectedClipIds, selectedOverlayId, selectedTransitionClipId]);
+  }, [selectedClipIds, selectedOverlayId, selectedTransitionClipId, isAudioSelected]);
 
   useEffect(() => {
     const len = (videoEdit.renders || []).length;
@@ -62,7 +64,8 @@ export default function EditorSidePanel({
           <EditorObjectPropertiesTab
             L={L} projectId={projectId} scenes={scenes} clips={clips} overlays={overlays}
             selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
-            selectedTransitionClipId={selectedTransitionClipId}
+            selectedTransitionClipId={selectedTransitionClipId} isAudioSelected={isAudioSelected}
+            audioSettings={audioSettings} selectedTrack={selectedTrack}
             titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources}
             actions={actions}
           />
@@ -79,6 +82,7 @@ export default function EditorSidePanel({
           <EditorClipSettingsTab
             L={L} videoEdit={videoEdit} tracks={tracks} selectedTrack={selectedTrack}
             totalDurationMs={totalDurationMs} canvasOrientation={canvasOrientation} canvasSize={canvasSize}
+            exportSettings={exportSettings}
             actions={actions} waveformScale={waveformScale} onSetWaveformScale={onSetWaveformScale}
             colorByFrequency={colorByFrequency} onToggleColorByFrequency={onToggleColorByFrequency}
             onToolsSlotRef={onToolsSlotRef}

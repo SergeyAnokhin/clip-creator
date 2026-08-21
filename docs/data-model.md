@@ -112,7 +112,8 @@ probed**, so `duration_seconds`/`resolution`/`aspect_ratio`/`generation_ms` are
 `null` on it — which matters for the Editor stage's trim math below.
 
 **VideoEdit** (Editor stage, `providers/editor.py`): `{mureka_track_id, clips[],
-overlays[], overlay_video_sources[], renders[], canvas_orientation}`. Lazily seeded the first time
+overlays[], overlay_video_sources[], renders[], canvas_orientation, markers[],
+audio, export}`. Lazily seeded the first time
 the stage opens (one clip per scene that has an `is_selected` video, in scene
 order; `mureka_track_id` from whichever `MurekaTrack.is_selected`), but —
 unlike `TitleCard.text_block` — persisted immediately, so a reload right after
@@ -122,7 +123,7 @@ overlay video and rendering are the only real job/API calls (see the route
 table below).
 
 An **`EditorClip`** is `{clip_id, scene_index, video_id, trim_start_ms,
-trim_end_ms, speed, reverse?, fit?}` — `video_id` must resolve inside
+trim_end_ms, speed, reverse?, fit?, adjust?, freeze?}` — `video_id` must resolve inside
 `scenes[scene_index].videos[]` but need **not** be unique across `clips[]`: the
 timeline's razor (`lib/timeline.js`'s `splitClipsAt`) turns one clip into two
 entries over the same source video with adjacent trim windows, and the render
@@ -163,8 +164,31 @@ overscanned image (`TimelineClipInspector.jsx`'s "Кадрирование" sect
 `contain` is the old always-letterboxed behavior (scale down to fit, pad the
 rest), an explicit opt-in for a clip the user deliberately wants letterboxed.
 
+`adjust` (`{brightness, contrast, saturation, gamma}`, absent/`null` = no
+correction) is per-clip colour correction in ffmpeg `eq` semantics — a single
+`eq=` filter appended after the scale/crop chain and before the fades
+(`providers/editor.py`), and **omitted entirely** when it is absent or every
+value is at its default, so an untouched clip's filter graph is byte-for-byte
+what it was before this field existed (`lib/timeline.js`'s `isDefaultAdjust`
+is the frontend mirror of that check). Edited in
+`TimelineClipInspector.jsx`'s "Цветокоррекция" section (four sliders plus
+warm/cool/mono/punch presets), and previewed approximately as a CSS `filter`
+on the program monitor's `<video>` — `gamma` has no CSS equivalent and simply
+isn't previewed, same tolerance as `fit`/`reverse`.
+
+`freeze` (absent/`false` by default) makes the clip **hold the single frame at
+`trim_start_ms`** for its whole trim window instead of playing it — the render
+grabs one frame and clones it with `tpad` rather than trimming a range. Its
+window length is therefore its output length, so nothing about the timeline
+arithmetic, transitions or the tail pad changes for it. Created by
+`useEditorStage.js`'s `freezeAtPlayhead` (`lib/timeline.js`'s `freezeClipsAt`
+splits the clip under the playhead and inserts a `DEFAULT_FREEZE_MS` still
+between the halves — CapCut's "freeze" behaviour), reachable from the clip
+inspector and either right-click menu. `speed`/`reverse` are forced to their
+defaults on such a clip and are ignored by the render.
+
 An **overlay** entry in `overlays[]` is `{overlay_id, kind:
-'title_card'|'logo'|'video', source_id, start_ms, duration_ms, x_pct, y_pct,
+'title_card'|'logo'|'video'|'text', source_id, start_ms, duration_ms, x_pct, y_pct,
 width_pct, height_pct, rotation_deg, opacity, fade_in_ms, fade_out_ms,
 reverse?}` — shown over the video for `[start_ms, start_ms+duration_ms)` on
 the output
@@ -178,6 +202,24 @@ video row (overlapping ones render on separate lanes - purely a timeline
 (`docs/architecture.md`'s Settings section); `kind: 'video'` resolves it
 against this same `VideoEdit`'s own `overlay_video_sources[]` (below) -
 project-scoped, like a title card, not global like a logo.
+
+`kind: 'text'` has **no `source_id` at all** — it carries its own
+`text` block instead: `{content, font, color, outline_color, outline_width,
+align, line_spacing}`. It is rendered by rasterizing that block to a
+transparent PNG with Pillow (`providers/editor.py`'s `_render_text_png`) into
+a content-addressed cache at `editor/text_cache/{sha1}.png`, which then feeds
+the **existing image-overlay compositing path** — no `drawtext`, no new ffmpeg
+filter, and every other overlay property (placement, rotation, opacity, fades)
+works on it unchanged. The path is derived purely from the styling block, so
+`build_render_plan` resolves it with no disk access (the plan-only test mode)
+and only actually writes the file when it is given a `project_dir`; an
+unchanged overlay reuses the cached PNG. `font` is one of `lib/overlays.js`'s
+`TEXT_FONTS` — a deliberately small list of faces that exist **both** in the
+browser (the live Konva `Text` node in `EditorPreview.jsx`) **and** on the
+render host (`providers/editor.py`'s `_TEXT_FONT_FILES`, with DejaVu
+fallbacks), all Cyrillic-capable, so the preview and the render agree. There
+is no font-size field on purpose: how big the text appears is the overlay's
+own `width_pct`/`height_pct`, exactly like an image.
 
 `x_pct`/`y_pct` place the overlay's own **top-left corner** (of its
 *unrotated* bounding box) as a percentage of the canvas (`x_pct` of width,
@@ -237,6 +279,46 @@ that kind's `-loop 1` infinite still-image stream would hang ffmpeg, since
 the filter needs a stream with a real end to buffer.
 `TimelineOverlayInspector.jsx` only shows the toggle for a video overlay.
 
+**`markers[]`** (`VideoEdit`) is `[{marker_id, at_ms, label?}]` — labelled
+moments on the timeline ruler. **The renderer never reads them**: they exist
+purely as an editing aid, and above all as snap targets for every timeline
+gesture (`lib/timelineSnap.js`), which is what makes "cut on the beat"
+practical. Added with `M`, dragged, renamed (double-click) and deleted
+(right-click) on the ruler (`TimelineMarker.jsx`), or placed in bulk by the
+beat-detection button, which runs `lib/beats.js`'s onset detection over the
+bass envelope the waveform decode already produced (`hooks/useAudioPeaks.js`)
+— that batch **replaces** the whole set rather than appending, so pressing it
+twice doesn't double up and one undo takes it all back. Part of the undo
+history alongside `clips`/`overlays`.
+
+**`audio`** (`VideoEdit`) is `{volume, fade_in_ms, fade_out_ms, offset_ms}`,
+absent/`null` meaning exactly `{volume: 1, fade_in_ms: 0, fade_out_ms: 0,
+offset_ms: 0}` — which is also what the renderer did before the field existed,
+so nothing needs migrating. `volume` is a flat gain (clamped to 0–4×);
+the fades are ramps at the very start and end of the **output** (so a
+fade-out always lands on the last frame however the clips were trimmed), and
+are compressed proportionally if together they would outlast it; `offset_ms`
+skips that much of the track's own head ("start the video on the chorus"),
+clamped inside the track. Rendered as
+`atrim`/`asetpts`/`volume`/`afade`/`apad` and previewed by
+`hooks/useEditorPreview.js`, which offsets the playhead↔`<audio>.currentTime`
+relationship by the same amount so the playhead means the same moment in
+both. A **test render's** own window offset is *added* to `offset_ms`, never
+substituted for it, and the fades are re-clamped against the shorter window.
+Edited by selecting the waveform row itself on the timeline —
+`TimelineAudioInspector.jsx`, the fourth mutually-exclusive selection kind
+alongside clip/overlay/transition.
+
+**`export`** (`VideoEdit`) is `{resolution: 'source'|'720p'|'1080p'|'4k',
+fps: 24|30|60, quality: 'high'|'medium'|'low'}`, absent/`null` meaning
+`{'source', 30, 'high'}`. It is resolved *after* `canvas_orientation`
+(`_resolve_export`): orientation picks the canvas **shape**, this scales it
+(short side to the named height, both dimensions forced even for
+libx264/yuv420p) and sets `fps` plus `-crf`/`-preset`
+(high=18/medium, medium=23/medium, low=28/veryfast). Unknown values fall back
+to the defaults rather than failing the render. Edited in the Editor stage's
+**Клип** tab next to the canvas orientation, since both are project-level.
+
 **`overlay_video_sources[]`** (`VideoEdit`, alongside `overlays[]`) is
 `[{id, file_path, duration_seconds}]` - uploaded video files usable as a
 `kind: 'video'` overlay (video-in-video compositing). `file_path` is
@@ -247,9 +329,17 @@ uploaded/imported clip; the overlay's own `start_ms`/`duration_ms` governs its
 on-timeline window regardless of the source video's real length. Managed via
 its own upload/delete routes (below), not the generic `PATCH`.
 
-An `EditorClip` can also carry `transition_in` (`{type: 'dissolve'|'fadeblack'|
-'fadewhite', duration_ms}`, absent = a hard cut) and `fade_in`/`fade_out`
-(`{color: 'black'|'white', duration_ms}`, absent = no fade). `transition_in`
+An `EditorClip` can also carry `transition_in` (`{type, duration_ms}`, absent
+= a hard cut) and `fade_in`/`fade_out` (`{color: 'black'|'white',
+duration_ms}`, absent = no fade). `type` is one of the 16 entries in
+`lib/timeline.js`'s `TRANSITION_GROUPS` / `providers/editor.py`'s
+`_TRANSITION_XFADE_NAME` — `dissolve`/`fadeblack`/`fadewhite`, four wipes,
+four slides, and `circleopen`/`circleclose`/`radial`/`pixelize` — each mapping
+to the ffmpeg `xfade` transition of the same name (`dissolve` is the one
+alias: it maps to xfade's `fade`). An unrecognized type degrades to a hard cut
+rather than failing the render. The picker groups them
+(`TimelineTransitionInspector.jsx`) and offers "apply to every cut", which
+`setAllTransitions` writes across all clips but the first. `transition_in`
 describes the transition *into* this clip *from* the previous one (meaningless
 on the first clip) - it renders as a real ffmpeg `xfade`, so the two clips'
 actual frames overlap and blend for `duration_ms`, making the combined output

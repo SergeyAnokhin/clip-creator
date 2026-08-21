@@ -1,9 +1,87 @@
-import { Rewind, Trash2 } from 'lucide-react';
-import { EffectSlider } from './PosterPanels.jsx';
-import { MAX_OVERLAY_WIDTH_PCT, MIN_OVERLAY_MS, MIN_OVERLAY_WIDTH_PCT } from '../../lib/overlays.js';
+import { AlignCenter, AlignLeft, AlignRight, Rewind, Trash2 } from 'lucide-react';
+import { ColorField, EffectSlider } from './PosterPanels.jsx';
+import {
+  DEFAULT_TEXT_OVERLAY, MAX_OVERLAY_WIDTH_PCT, MIN_OVERLAY_MS, MIN_OVERLAY_WIDTH_PCT, TEXT_FONTS,
+} from '../../lib/overlays.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
 
+const ALIGN_ICONS = { left: AlignLeft, center: AlignCenter, right: AlignRight };
+
+/** The content/styling half of a `kind: 'text'` overlay - everything that
+ * isn't placement or timing (those are the same controls every other overlay
+ * kind uses, below). The live preview draws these with a Konva `Text` node
+ * and the render rasterizes the same values with Pillow
+ * (`providers/editor.py`), which is why the font list is deliberately
+ * restricted to faces both sides can actually resolve - see `TEXT_FONTS`.
+ *
+ * There is no font-*size* control on purpose: how big the text appears is the
+ * overlay's own scale (dragged on the monitor, or the "Масштаб" slider
+ * below), exactly like an image overlay. A separate size field would be a
+ * second way to say the same thing and the two would fight. */
+function OverlayTextSection({ L, overlay, actions }) {
+  const text = { ...DEFAULT_TEXT_OVERLAY, ...(overlay.text || {}) };
+  function patch(next) {
+    actions.setOverlayText(overlay.overlay_id, next);
+  }
+
+  return (
+    <>
+      <textarea
+        className="field tl-inspector-field tl-inspector-row"
+        rows={2}
+        value={text.content}
+        placeholder={L.overlay_textPlaceholder}
+        aria-label={L.overlay_textContentLabel}
+        onChange={(e) => patch({ content: e.target.value })}
+      />
+
+      <select
+        className="field tl-inspector-field tl-inspector-row"
+        value={text.font}
+        aria-label={L.overlay_textFontLabel}
+        onChange={(e) => patch({ font: e.target.value })}
+      >
+        {TEXT_FONTS.map((font) => (
+          <option key={font.value} value={font.value}>{font.label}</option>
+        ))}
+      </select>
+
+      <div className="tl-inspector-row tl-transition-types">
+        {['left', 'center', 'right'].map((align) => {
+          const Icon = ALIGN_ICONS[align];
+          return (
+            <button
+              key={align} type="button"
+              className={`tl-transition-chip${text.align === align ? ' is-selected' : ''}`}
+              title={L[`overlay_textAlign${align[0].toUpperCase()}${align.slice(1)}`]}
+              aria-label={L[`overlay_textAlign${align[0].toUpperCase()}${align.slice(1)}`]}
+              onClick={() => patch({ align })}
+            >
+              <Icon size={13} />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="tl-inspector-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <ColorField label={L.overlay_textColorLabel} value={text.color} onChange={(v) => patch({ color: v })} />
+        <ColorField
+          label={L.overlay_textOutlineColorLabel} value={text.outline_color}
+          onChange={(v) => patch({ outline_color: v })}
+        />
+        <EffectSlider
+          label={L.overlay_textOutlineWidthLabel} value={text.outline_width} min={0} max={20}
+          unit="px" onChange={(v) => patch({ outline_width: v })} L={L}
+        />
+      </div>
+    </>
+  );
+}
+
 /** Properties strip for the overlay currently selected on the overlay lane -
+ * for a `kind: 'text'` overlay this additionally hosts `OverlayTextSection`
+ * above the shared placement/timing controls (see its own docstring). Beyond
+ * that section, a text overlay is edited exactly like an image one -
  * the numeric counterpart to that lane's own direct-manipulation gestures
  * (drag = move in time, edge drag = resize) *and* to the program monitor's
  * drag/resize/rotate canvas (`EditorPreview.jsx`, via the shared
@@ -41,6 +119,8 @@ export default function TimelineOverlayInspector({
     <div className="tl-inspector">
       <span className="tl-inspector-title">{L.overlay_inspectorTitle}</span>
       <span className="tl-overlay-inspector-label tl-inspector-row">{label}</span>
+
+      {overlay.kind === 'text' && <OverlayTextSection L={L} overlay={overlay} actions={actions} />}
 
       <span className="tl-inspector-label tl-inspector-row">
         <span className="tl-inspector-rowlabel">{L.overlay_timingLabel}</span>

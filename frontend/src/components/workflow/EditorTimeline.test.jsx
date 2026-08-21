@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import EditorTimeline from './EditorTimeline.jsx';
-import { computeTimelineClips, getTotalDurationMs } from '../../lib/timeline.js';
+import { computeTimelineClips, FRAME_MS, getTotalDurationMs } from '../../lib/timeline.js';
 import { DICT } from '../../i18n/dict.js';
 
 // jsdom has no layout engine, so every element's getBoundingClientRect() is
@@ -32,6 +32,8 @@ function renderTimeline(overrides = {}) {
     seek: vi.fn(), selectClip: vi.fn(), reorderClip: vi.fn(), setClipTrim: vi.fn(),
     splitAtPlayhead: vi.fn(), removeClips: vi.fn(), play: vi.fn(), pause: vi.fn(),
     setSelection: vi.fn(), selectAll: vi.fn(), duplicateClips: vi.fn(), copyClips: vi.fn(), pasteClips: vi.fn(),
+    addMarker: vi.fn(), moveMarker: vi.fn(), removeMarker: vi.fn(), renameMarker: vi.fn(),
+    trimClipToPlayhead: vi.fn(), addTextOverlay: vi.fn(), selectAudio: vi.fn(),
     ...overrides.actions,
   };
   const props = {
@@ -124,18 +126,41 @@ describe('EditorTimeline gestures', () => {
     expect(trimEndMs).toBeCloseTo(5000 - 40 / SCALE, 0); // dx=-40px shrinks the end
   });
 
-  it('splits at the playhead on "S", but only when the scroll container itself is the event target', () => {
+  it('splits at the playhead on "S" and on Ctrl+B', () => {
     const { container, actions } = renderTimeline({ playheadMs: 2000 });
     const scroll = container.querySelector('.tl-scroll');
 
     fireEvent.keyDown(scroll, { code: 'KeyS' });
     expect(actions.splitAtPlayhead).toHaveBeenCalledTimes(1);
 
-    // A key event that bubbles up from a child (e.g. a clip) must not
-    // re-trigger the shortcut - onKeyDown guards on target === currentTarget.
+    fireEvent.keyDown(scroll, { code: 'KeyB', ctrlKey: true });
+    expect(actions.splitAtPlayhead).toHaveBeenCalledTimes(2);
+  });
+
+  it('still fires shortcuts when a clip block (not the scroll box) has focus', () => {
+    // Regression guard: onKeyDown used to bail out on `target !==
+    // currentTarget`, and arrow navigation focuses a clip block by design -
+    // so walking to a clip and pressing Delete silently did nothing.
+    const { container, actions } = renderTimeline({
+      playheadMs: 2000, selectedClipIds: new Set(['clip_a']),
+    });
     const clip = container.querySelector('.tl-clip');
+
     fireEvent.keyDown(clip, { code: 'KeyS', bubbles: true });
     expect(actions.splitAtPlayhead).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(clip, { code: 'Delete', bubbles: true });
+    expect(actions.removeClips).toHaveBeenCalledWith(['clip_a']);
+  });
+
+  it('does not hijack keys typed into a text field inside the timeline', () => {
+    const { container, actions } = renderTimeline({ playheadMs: 2000 });
+    const scroll = container.querySelector('.tl-scroll');
+    const input = document.createElement('input');
+    scroll.appendChild(input);
+
+    fireEvent.keyDown(input, { code: 'KeyS', bubbles: true });
+    expect(actions.splitAtPlayhead).not.toHaveBeenCalled();
   });
 
   it('removes the selected clip(s) on Delete', () => {
@@ -165,15 +190,21 @@ describe('EditorTimeline gestures', () => {
     expect(widthAfter / widthBefore).toBeCloseTo(1.6, 1);
   });
 
-  it('ignores wheel zoom without the ctrl key (page can scroll normally)', () => {
+  it('scrolls instead of zooming when the ctrl key is not held', () => {
     const { container } = renderTimeline();
     const scroll = container.querySelector('.tl-scroll');
     const content = container.querySelector('.tl-content');
     const widthBefore = parseFloat(content.style.width);
 
-    fireEvent.wheel(scroll, { deltaY: -100, ctrlKey: false });
+    fireEvent.wheel(scroll, { deltaY: 100, ctrlKey: false });
 
+    // Zoom is untouched...
     expect(parseFloat(content.style.width)).toBe(widthBefore);
+    // ...and the box scrolled horizontally instead. jsdom has no layout, so
+    // scrollLeft can't actually move past 0 - assert the handler consumed the
+    // event (preventDefault) rather than letting the page scroll.
+    const consumed = !fireEvent.wheel(scroll, { deltaY: 100, ctrlKey: false });
+    expect(consumed).toBe(true);
   });
 });
 
@@ -196,34 +227,58 @@ describe('EditorTimeline keyboard clip navigation', () => {
     expect(actions.play).not.toHaveBeenCalled();
   });
 
-  it('arrow-right with nothing selected selects and focuses the first clip', () => {
+  it('steps the playhead one frame with left/right, ten with shift', () => {
+    const { actions, container } = renderTimeline({ playheadMs: 1000 });
+    const scroll = container.querySelector('.tl-scroll');
+
+    fireEvent.keyDown(scroll, { code: 'ArrowRight' });
+    expect(actions.seek).toHaveBeenCalledWith(1000 + FRAME_MS);
+
+    fireEvent.keyDown(scroll, { code: 'ArrowLeft', shiftKey: true });
+    expect(actions.seek).toHaveBeenCalledWith(1000 - 10 * FRAME_MS);
+  });
+
+  it('jumps to the start and the end with Home/End', () => {
+    const { actions, container } = renderTimeline({ playheadMs: 1000 });
+    const scroll = container.querySelector('.tl-scroll');
+
+    fireEvent.keyDown(scroll, { code: 'Home' });
+    expect(actions.seek).toHaveBeenCalledWith(0);
+
+    fireEvent.keyDown(scroll, { code: 'End' });
+    // contentDurationMs floors at MIN_CONTENT_MS (5000) but the two clips
+    // here are 10000ms in total, so that is what End seeks to.
+    expect(actions.seek).toHaveBeenCalledWith(10000);
+  });
+
+  it('arrow-down with nothing selected selects and focuses the first clip', () => {
     const { container, actions } = renderTimeline();
     const scroll = container.querySelector('.tl-scroll');
     const [clipA] = container.querySelectorAll('.tl-clip');
 
-    fireEvent.keyDown(scroll, { code: 'ArrowRight' });
+    fireEvent.keyDown(scroll, { code: 'ArrowDown' });
 
     expect(actions.selectClip).toHaveBeenCalledWith('clip_a');
     expect(document.activeElement).toBe(clipA);
   });
 
-  it('arrow-left with nothing selected selects and focuses the last clip', () => {
+  it('arrow-up with nothing selected selects and focuses the last clip', () => {
     const { container, actions } = renderTimeline();
     const scroll = container.querySelector('.tl-scroll');
     const [, clipB] = container.querySelectorAll('.tl-clip');
 
-    fireEvent.keyDown(scroll, { code: 'ArrowLeft' });
+    fireEvent.keyDown(scroll, { code: 'ArrowUp' });
 
     expect(actions.selectClip).toHaveBeenCalledWith('clip_b');
     expect(document.activeElement).toBe(clipB);
   });
 
-  it('arrow-right from a selected clip moves to its right-hand neighbor', () => {
+  it('arrow-down from a selected clip moves to its right-hand neighbor', () => {
     const { container, actions } = renderTimeline({ selectedClipIds: new Set(['clip_a']) });
     const scroll = container.querySelector('.tl-scroll');
     const [, clipB] = container.querySelectorAll('.tl-clip');
 
-    fireEvent.keyDown(scroll, { code: 'ArrowRight' });
+    fireEvent.keyDown(scroll, { code: 'ArrowDown' });
 
     expect(actions.selectClip).toHaveBeenCalledWith('clip_b');
     expect(document.activeElement).toBe(clipB);
@@ -234,10 +289,47 @@ describe('EditorTimeline keyboard clip navigation', () => {
     const scroll = container.querySelector('.tl-scroll');
     const [clipA] = container.querySelectorAll('.tl-clip');
 
-    fireEvent.keyDown(scroll, { code: 'ArrowLeft' });
+    fireEvent.keyDown(scroll, { code: 'ArrowUp' });
 
     expect(actions.selectClip).toHaveBeenCalledWith('clip_a');
     expect(document.activeElement).toBe(clipA);
+  });
+
+  it('trims the selected clip up to the playhead with Q/W', () => {
+    const { container, actions } = renderTimeline({
+      playheadMs: 2000, selectedClipIds: new Set(['clip_a']),
+    });
+    const scroll = container.querySelector('.tl-scroll');
+
+    fireEvent.keyDown(scroll, { code: 'KeyQ' });
+    expect(actions.trimClipToPlayhead).toHaveBeenCalledWith('clip_a', 'start');
+
+    fireEvent.keyDown(scroll, { code: 'KeyW' });
+    expect(actions.trimClipToPlayhead).toHaveBeenCalledWith('clip_a', 'end');
+  });
+
+  it('drops a marker at the playhead on M', () => {
+    const { container, actions } = renderTimeline({ playheadMs: 2000 });
+    fireEvent.keyDown(container.querySelector('.tl-scroll'), { code: 'KeyM' });
+    expect(actions.addMarker).toHaveBeenCalled();
+  });
+});
+
+describe('EditorTimeline markers', () => {
+  const MARKERS = [{ marker_id: 'mrk_1', at_ms: 4000, label: 'Припев' }];
+
+  it('draws each marker on the ruler at its own position', () => {
+    const { container } = renderTimeline({ markers: MARKERS });
+    const marker = container.querySelector('.tl-marker');
+    expect(marker).not.toBeNull();
+    expect(parseFloat(marker.style.left)).toBeCloseTo(4000 * SCALE, 3);
+    expect(marker.textContent).toContain('Припев');
+  });
+
+  it('removes a marker on right-click', () => {
+    const { container, actions } = renderTimeline({ markers: MARKERS });
+    fireEvent.contextMenu(container.querySelector('.tl-marker'));
+    expect(actions.removeMarker).toHaveBeenCalledWith('mrk_1');
   });
 });
 

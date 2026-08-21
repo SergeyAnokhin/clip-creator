@@ -88,6 +88,7 @@ that isn't guaranteed under `uvicorn --reload` on Windows (this repo's dev
 environment) and has failed there before."""
 
 import asyncio
+import hashlib
 import math
 import shutil
 import subprocess
@@ -138,9 +139,76 @@ _LEGACY_DEFAULT_POSITION = 'bottom-right'
 # wipes/slides/etc.) - "dissolve" is a plain crossfade, "fadeblack"/
 # "fadewhite" blend through a solid colour (the "переход через чёрный" /
 # "вспышка" the feature was asked for).
-_TRANSITION_XFADE_NAME = {'dissolve': 'fade', 'fadeblack': 'fadeblack', 'fadewhite': 'fadewhite'}
+_TRANSITION_XFADE_NAME = {
+    'dissolve': 'fade', 'fadeblack': 'fadeblack', 'fadewhite': 'fadewhite',
+    'wipeleft': 'wipeleft', 'wiperight': 'wiperight', 'wipeup': 'wipeup', 'wipedown': 'wipedown',
+    'slideleft': 'slideleft', 'slideright': 'slideright', 'slideup': 'slideup', 'slidedown': 'slidedown',
+    'circleopen': 'circleopen', 'circleclose': 'circleclose', 'radial': 'radial', 'pixelize': 'pixelize',
+}
 _TRANSITION_MIN_S = 0.05
 _FADE_COLORS = {'black', 'white'}
+
+# `video_edit.audio` defaults - absent/`None` means exactly these, which is
+# also what this module did before the field existed (whole track, full
+# volume, from its very start), so no saved project needs migrating.
+_DEFAULT_AUDIO = {'volume': 1.0, 'fade_in_ms': 0.0, 'fade_out_ms': 0.0, 'offset_ms': 0.0}
+_MAX_AUDIO_VOLUME = 4.0
+
+# `clip.adjust` defaults - ffmpeg `eq` semantics. A clip whose adjust equals
+# these (or is absent) gets no `eq` filter at all, so an untouched project's
+# filter graph is byte-for-byte what it was before colour correction existed.
+_DEFAULT_ADJUST = {'brightness': 0.0, 'contrast': 1.0, 'saturation': 1.0, 'gamma': 1.0}
+
+# `video_edit.export` - output pixels/frames/encoder effort, independent of
+# `canvas_orientation` (which only picks portrait vs landscape). `'source'`
+# keeps whatever canvas the orientation heuristic resolved.
+_EXPORT_SHORT_SIDE = {'720p': 720, '1080p': 1080, '4k': 2160}
+_EXPORT_FPS_OPTIONS = (24, 30, 60)
+# (crf, x264 preset) per quality tier - crf is the real quality knob, the
+# preset trades encode time for file size at the same quality.
+_EXPORT_QUALITY = {
+    'high': (18, 'medium'),
+    'medium': (23, 'medium'),
+    'low': (28, 'veryfast'),
+}
+_DEFAULT_EXPORT = {'resolution': 'source', 'fps': _FPS, 'quality': 'high'}
+
+# `kind: 'text'` overlay fonts - the EDL stores a family name (the same one
+# the browser's Konva `Text` node draws with, see `lib/overlays.js`'s
+# `TEXT_FONTS`), and this maps it to an actual font file to rasterize with.
+# The candidates are tried in order, so a non-Windows host falls back to a
+# DejaVu face (also Cyrillic-capable) rather than failing the render; if none
+# of them exist, `_resolve_font` falls back to Pillow's built-in bitmap font,
+# which is ugly but never raises.
+_TEXT_FONT_FILES = {
+    'Arial': ('arial.ttf', 'Arial.ttf', 'DejaVuSans.ttf'),
+    'Segoe UI': ('segoeui.ttf', 'DejaVuSans.ttf'),
+    'Times New Roman': ('times.ttf', 'Times New Roman.ttf', 'DejaVuSerif.ttf'),
+    'Georgia': ('georgia.ttf', 'DejaVuSerif.ttf'),
+    'Verdana': ('verdana.ttf', 'DejaVuSans.ttf'),
+    'Trebuchet MS': ('trebuc.ttf', 'DejaVuSans.ttf'),
+    'Impact': ('impact.ttf', 'DejaVuSans-Bold.ttf'),
+    'Courier New': ('cour.ttf', 'DejaVuSansMono.ttf'),
+}
+_TEXT_FONT_DIRS = (
+    Path('C:/Windows/Fonts'),
+    Path('/usr/share/fonts/truetype/dejavu'),
+    Path('/usr/share/fonts'),
+    Path('/Library/Fonts'),
+)
+# Point size the text is rasterized at before the overlay's own
+# `width_pct`/`height_pct` scale it onto the canvas - mirrors
+# `lib/overlays.js`'s `TEXT_RASTER_FONT_SIZE`, which is what the live preview
+# measures with, so both sides agree on the block's aspect ratio.
+_TEXT_RASTER_FONT_SIZE = 160
+_DEFAULT_TEXT = {
+    'content': '', 'font': 'Arial', 'color': '#ffffff',
+    'outline_color': '#000000', 'outline_width': 4, 'align': 'center', 'line_spacing': 1.2,
+}
+
+# `_resolve_audio`'s output for the all-defaults case - what a plan dict
+# assembled by hand (or by an older version of this module) falls back to.
+_DEFAULT_AUDIO_RESOLVED = {'volume': 1.0, 'fade_in_s': 0.0, 'fade_out_s': 0.0, 'offset_s': 0.0}
 
 _jobs: dict[str, dict] = {}
 
@@ -193,7 +261,9 @@ def _resolve_track(project: dict, track_id: str) -> dict:
     return track
 
 
-def _resolve_overlay_source(project: dict, settings: dict, video_edit: dict, overlay: dict) -> str:
+def _resolve_overlay_source(
+    project: dict, settings: dict, video_edit: dict, overlay: dict, project_dir: Path | None = None,
+) -> str:
     """The overlay source's `file_path` - project-relative for a title card
     variant or a video-overlay source (both live under this project's own
     directory, joined against `project_dir` in `build_ffmpeg_command`, same
@@ -205,6 +275,19 @@ def _resolve_overlay_source(project: dict, settings: dict, video_edit: dict, ove
     always joins against `project_dir`."""
     kind = overlay.get('kind')
     source_id = overlay.get('source_id')
+    if kind == 'text':
+        # The only kind with no stored source file: it is rasterized from the
+        # overlay's own `text` block into a content-addressed cache under the
+        # project. The path is derived purely (so `build_render_plan` still
+        # works with no `project_dir` - the pure mode the tests use); the file
+        # is only actually written when a real render passes one in.
+        text = _resolve_text(overlay.get('text'))
+        file_path = _text_overlay_file_path(text)
+        if project_dir is not None:
+            dest = project_dir / file_path
+            if not dest.exists():
+                _render_text_png(text, dest)
+        return file_path
     if kind == 'title_card':
         variants = (project.get('title_card') or {}).get('variants') or []
         variant = next((v for v in variants if v.get('variant_id') == source_id), None)
@@ -224,6 +307,97 @@ def _resolve_overlay_source(project: dict, settings: dict, video_edit: dict, ove
             raise RenderPlanError(f'Оверлей: видео {source_id} не найдено')
         return source['file_path']
     raise RenderPlanError(f'Оверлей: неизвестный тип {kind!r}')
+
+
+def _resolve_font(family: str):
+    """A Pillow font object for one of `_TEXT_FONT_FILES`' family names, at
+    `_TEXT_RASTER_FONT_SIZE`. Falls back through that family's candidate file
+    names across `_TEXT_FONT_DIRS` and finally to Pillow's built-in bitmap
+    font - a text overlay must never be the reason a render fails, and a
+    wrong-looking face is a far better outcome than no video."""
+    from PIL import ImageFont  # noqa: PLC0415 - optional-at-import-time, see module docstring
+
+    for name in _TEXT_FONT_FILES.get(family, ()) or (family,):
+        for directory in _TEXT_FONT_DIRS:
+            candidate = directory / name
+            if candidate.exists():
+                try:
+                    return ImageFont.truetype(str(candidate), _TEXT_RASTER_FONT_SIZE)
+                except OSError:
+                    continue
+    try:
+        return ImageFont.truetype(_TEXT_FONT_FILES['Arial'][-1], _TEXT_RASTER_FONT_SIZE)
+    except OSError:
+        return ImageFont.load_default()
+
+
+def _resolve_text(raw: dict | None) -> dict:
+    """`kind: 'text'` overlay's own styling block, defaults filled in."""
+    text = {**_DEFAULT_TEXT, **(raw or {})}
+    text['content'] = str(text.get('content') or '')
+    if text.get('align') not in ('left', 'center', 'right'):
+        text['align'] = 'center'
+    text['outline_width'] = max(0, int(text.get('outline_width') or 0))
+    try:
+        text['line_spacing'] = max(0.5, float(text.get('line_spacing') or 1.2))
+    except (TypeError, ValueError):
+        text['line_spacing'] = 1.2
+    return text
+
+
+def _text_overlay_file_path(text: dict) -> str:
+    """Project-relative path of the PNG a given text+style rasterizes to.
+    Content-addressed (sha1 of the styling block), so editing the text writes
+    a new file and re-rendering an unchanged overlay reuses the cached one
+    instead of redrawing it - and so this stays a *pure* function that
+    `build_render_plan` can resolve without a `project_dir` (the pure/test
+    mode every existing test uses)."""
+    key = '|'.join(str(text[field]) for field in sorted(_DEFAULT_TEXT))
+    digest = hashlib.sha1(key.encode('utf-8')).hexdigest()[:16]
+    return f'editor/text_cache/{digest}.png'
+
+
+def _render_text_png(text: dict, dest: Path) -> None:
+    """Draws one text overlay to a transparent PNG at `dest`.
+
+    Text is deliberately *not* a new ffmpeg filter: `drawtext` needs a
+    fontfile path escaped for the filtergraph (a minefield on Windows, where
+    the path contains a drive colon), plus its own escaping for the text
+    itself - quotes, colons, newlines and Cyrillic all in play. Rasterizing
+    here instead means a text overlay reuses the *existing* image-overlay
+    compositing path in `build_ffmpeg_command` byte for byte, so it inherits
+    placement, rotation, opacity and fades for free and adds no new failure
+    mode to the filter graph.
+
+    `stroke_width` gives the outline that keeps white text readable over
+    bright footage, and is drawn by Pillow *around* the glyphs, so the image
+    is padded by it on every side. This mirrors what the preview's Konva
+    `Text` node draws with `stroke`/`strokeWidth`."""
+    from PIL import Image, ImageDraw  # noqa: PLC0415
+
+    font = _resolve_font(text['font'])
+    content = text['content'] or ' '
+    stroke = text['outline_width']
+    spacing = int(_TEXT_RASTER_FONT_SIZE * (text['line_spacing'] - 1))
+
+    # Measure on a throwaway 1x1 canvas first - Pillow has no "how big would
+    # this be" call that accounts for stroke and multi-line spacing other
+    # than asking a real ImageDraw for the bounding box.
+    probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+    left, top, right, bottom = probe.multiline_textbbox(
+        (0, 0), content, font=font, spacing=spacing, align=text['align'], stroke_width=stroke,
+    )
+    width = max(1, math.ceil(right - left) + stroke * 2)
+    height = max(1, math.ceil(bottom - top) + stroke * 2)
+
+    image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.multiline_text(
+        (stroke - left, stroke - top), content, font=font, spacing=spacing, align=text['align'],
+        fill=text['color'], stroke_width=stroke, stroke_fill=text['outline_color'],
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    image.save(dest)
 
 
 def _migrate_overlay_position(overlay: dict, canvas_width: int, canvas_height: int) -> dict:
@@ -275,11 +449,14 @@ def _migrate_overlay_position(overlay: dict, canvas_width: int, canvas_height: i
     }
 
 
-def _resolve_overlays(project: dict, settings: dict, video_edit: dict, canvas_width: int, canvas_height: int) -> list[dict]:
+def _resolve_overlays(
+    project: dict, settings: dict, video_edit: dict, canvas_width: int, canvas_height: int,
+    project_dir: Path | None = None,
+) -> list[dict]:
     resolved = []
     for raw_overlay in video_edit.get('overlays') or []:
         overlay = _migrate_overlay_position(raw_overlay, canvas_width, canvas_height)
-        file_path = _resolve_overlay_source(project, settings, video_edit, overlay)
+        file_path = _resolve_overlay_source(project, settings, video_edit, overlay, project_dir)
         duration_ms = overlay.get('duration_ms') or 0
         if duration_ms <= 0:
             raise RenderPlanError('Оверлей: некорректная длительность')
@@ -390,6 +567,84 @@ def _resolve_fade(raw: dict | None, max_ms: float | None) -> dict | None:
     return {'color': color, 'duration_s': duration_ms / 1000}
 
 
+def _resolve_audio(raw: dict | None, output_duration_s: float, audio_duration_s: float) -> dict:
+    """`video_edit.audio` resolved into `{volume, fade_in_s, fade_out_s,
+    offset_s}` for `build_ffmpeg_command`'s audio chain. Absent/`None` gives
+    exactly the pre-feature behaviour (full volume, no fades, no offset).
+
+    `offset_ms` is clamped so it can never swallow the whole track (which
+    would render silence), and the two fades are compressed proportionally if
+    together they would outlast the output - the same clamp
+    `_resolve_overlays` applies to an overlay's own fade pair, and for the
+    same reason: two ramps that cross over produce a dip in the middle that
+    nobody asked for."""
+    audio = {**_DEFAULT_AUDIO, **(raw or {})}
+    try:
+        volume = float(audio['volume'])
+    except (TypeError, ValueError):
+        volume = 1.0
+    volume = min(_MAX_AUDIO_VOLUME, max(0.0, volume))
+    offset_ms = min(max(0.0, float(audio.get('offset_ms') or 0.0)), max(0.0, audio_duration_s * 1000 - 1))
+    fade_in_ms = max(0.0, float(audio.get('fade_in_ms') or 0.0))
+    fade_out_ms = max(0.0, float(audio.get('fade_out_ms') or 0.0))
+    output_ms = max(0.0, output_duration_s * 1000)
+    if output_ms > 0 and fade_in_ms + fade_out_ms > output_ms:
+        scale = output_ms / (fade_in_ms + fade_out_ms)
+        fade_in_ms *= scale
+        fade_out_ms *= scale
+    return {
+        'volume': volume,
+        'fade_in_s': fade_in_ms / 1000,
+        'fade_out_s': fade_out_ms / 1000,
+        'offset_s': offset_ms / 1000,
+    }
+
+
+def _resolve_adjust(raw: dict | None) -> dict | None:
+    """`clip.adjust` resolved for the `eq` filter, or `None` when it is
+    absent or equal to "no correction" - in which case no filter is emitted
+    at all, keeping an untouched clip's chain identical to what it was before
+    colour correction existed."""
+    if not raw:
+        return None
+    adjust = {}
+    for key, default in _DEFAULT_ADJUST.items():
+        try:
+            adjust[key] = float(raw.get(key, default))
+        except (TypeError, ValueError):
+            adjust[key] = default
+    # ffmpeg `eq`'s own accepted ranges.
+    adjust['brightness'] = min(1.0, max(-1.0, adjust['brightness']))
+    adjust['contrast'] = min(2.0, max(-1000.0, adjust['contrast']))
+    adjust['saturation'] = min(3.0, max(0.0, adjust['saturation']))
+    adjust['gamma'] = min(10.0, max(0.1, adjust['gamma']))
+    if adjust == _DEFAULT_ADJUST:
+        return None
+    return adjust
+
+
+def _resolve_export(raw: dict | None, width: int, height: int) -> dict:
+    """`video_edit.export` resolved into `{width, height, fps, crf, preset}`.
+
+    Resolution scales the canvas the orientation heuristic already picked,
+    keeping its aspect ratio, so `'1080p'` means "1080 on the short side"
+    whether the canvas is portrait or landscape. Both dimensions are forced
+    even - libx264/yuv420p cannot encode an odd one."""
+    export = {**_DEFAULT_EXPORT, **(raw or {})}
+    short_side = _EXPORT_SHORT_SIDE.get(export.get('resolution'))
+    if short_side:
+        factor = short_side / min(width, height)
+        width = max(2, round(width * factor / 2) * 2)
+        height = max(2, round(height * factor / 2) * 2)
+    fps = export.get('fps')
+    if fps not in _EXPORT_FPS_OPTIONS:
+        fps = _FPS
+    crf, preset = _EXPORT_QUALITY.get(export.get('quality'), _EXPORT_QUALITY['high'])
+    return {
+        'width': width, 'height': height, 'fps': fps, 'crf': crf, 'preset': preset,
+    }
+
+
 def build_render_plan(
     project: dict, video_edit: dict, settings: dict | None = None, project_dir: Path | None = None,
 ) -> dict:
@@ -476,11 +731,20 @@ def build_render_plan(
             'trim_end_s': trim_end_ms / 1000 if trim_end_ms is not None else None,
             'speed': speed,
             'reverse': bool(clip.get('reverse')),
+            # A freeze clip holds the single frame at `trim_start_ms` for its
+            # whole trim window instead of playing it - see
+            # `build_ffmpeg_command`'s own branch. Its window length is
+            # therefore its *output* length, which is exactly what
+            # `effective_ms` above already computed (speed is forced to 1 for
+            # such a clip on the editing side), so nothing about the timeline
+            # arithmetic, transitions or the tail pad changes for it.
+            'freeze': bool(clip.get('freeze')),
             'tpad_s': 0.0,
             'transition_in': None,
             'fade_in': _resolve_fade(clip.get('fade_in'), known_ms),
             'fade_out': _resolve_fade(clip.get('fade_out'), known_ms),
             'fit': _resolve_fit(clip.get('fit')),
+            'adjust': _resolve_adjust(clip.get('adjust')),
         })
 
     # A transition eats into (overlaps) both the clip before it and this one
@@ -524,13 +788,22 @@ def build_render_plan(
         width, height = _DEFAULT_CANVAS
     else:
         width, height = _PORTRAIT_CANVAS if all_portrait else _DEFAULT_CANVAS
+    # The orientation heuristic above picks the canvas *shape*; the export
+    # settings then decide how many pixels and frames that shape gets, so
+    # they are resolved second and can only scale what was already chosen.
+    export = _resolve_export(video_edit.get('export'), width, height)
+    width, height = export['width'], export['height']
     return {
         'clips': resolved_clips,
-        'overlays': _resolve_overlays(project, settings or {}, video_edit, width, height),
+        'overlays': _resolve_overlays(project, settings or {}, video_edit, width, height, project_dir),
         'audio_file_path': track['file_path'],
         'audio_duration_s': audio_duration_s,
+        'audio': _resolve_audio(video_edit.get('audio'), audio_duration_s, audio_duration_s),
         'target_width': width,
         'target_height': height,
+        'fps': export['fps'],
+        'crf': export['crf'],
+        'preset': export['preset'],
         'output_duration_s': audio_duration_s,
     }
 
@@ -655,22 +928,44 @@ def _trim_plan_to_range(plan: dict, range_start_ms: float, range_end_ms: float) 
         new_overlay['duration_s'] = (new_end_ms - new_start_ms) / 1000
         trimmed_overlays.append(new_overlay)
 
+    output_duration_s = (range_end_ms - range_start_ms) / 1000
     return {
         **plan,
         'clips': trimmed_clips,
         'overlays': trimmed_overlays,
+        # A test render's window is usually far shorter than the whole song,
+        # so the user's fade-in/fade-out pair has to be re-clamped against it
+        # - otherwise a 5s fade-out on a 10s test render would start before
+        # the clip even appears. `range_start_ms` is carried separately as
+        # `audio_offset_s` and *added* to the user's own `offset_s` in
+        # `build_ffmpeg_command`, not substituted for it.
+        'audio': _resolve_audio(
+            {
+                'volume': plan['audio']['volume'],
+                'fade_in_ms': plan['audio']['fade_in_s'] * 1000,
+                'fade_out_ms': plan['audio']['fade_out_s'] * 1000,
+                'offset_ms': plan['audio']['offset_s'] * 1000,
+            },
+            output_duration_s,
+            plan['audio_duration_s'],
+        ),
         'audio_offset_s': range_start_ms / 1000,
-        'output_duration_s': (range_end_ms - range_start_ms) / 1000,
+        'output_duration_s': output_duration_s,
     }
 
 
-def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: int = _FPS) -> list[str]:
+def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: int | None = None) -> list[str]:
     """Pure command construction - every input path is resolved but nothing
     is executed here, so this is fully unit-testable without real ffmpeg or
     real files. Only ever maps the built `[vout]`/`[aout]` labels - never
     `-map {i}:a` on a video input, since an AI-generated clip can carry a
-    silent embedded audio track that must never leak into the final mux."""
+    silent embedded audio track that must never leak into the final mux.
+
+    `fps` is normally taken from the plan (`video_edit.export`, resolved by
+    `_resolve_export`); the explicit argument stays as an override and falls
+    back to `_FPS` for a plan built before the field existed."""
     clips = plan['clips']
+    fps = fps or plan.get('fps') or _FPS
     overlays = plan.get('overlays') or []
     w, h = plan['target_width'], plan['target_height']
 
@@ -741,14 +1036,38 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
         # reverse) and before the scale/crop `fit_chain`, which doesn't care
         # about frame order either way.
         reverse_part = 'reverse,' if clip['reverse'] else ''
-        chain = (
-            f"[{i}:v]trim=start={clip['trim_start_s']:.3f}{trim_end_part},"
-            f"setpts=(PTS-STARTPTS)/{clip['speed']:.4f},"
-            f"{reverse_part}{fit_chain},setsar=1,fps={fps}"
-        )
         content_duration_s = None
         if clip['trim_end_s'] is not None:
             content_duration_s = (clip['trim_end_s'] - clip['trim_start_s']) / clip['speed']
+        if clip.get('freeze') and content_duration_s is not None:
+            # Freeze frame: grab exactly one frame at the clip's trim start
+            # and clone it for the rest of the clip's own length, rather than
+            # playing the window. `reverse`/`speed` are meaningless on a still
+            # and are simply not applied (the editing side forces them to
+            # their defaults when it creates such a clip).
+            frame_s = 1 / fps
+            hold_s = max(0.0, content_duration_s - frame_s)
+            chain = (
+                f"[{i}:v]trim=start={clip['trim_start_s']:.3f}:end={clip['trim_start_s'] + frame_s:.3f},"
+                f"setpts=PTS-STARTPTS,"
+                f"tpad=stop_mode=clone:stop_duration={hold_s:.3f},"
+                f"{fit_chain},setsar=1,fps={fps}"
+            )
+        else:
+            chain = (
+                f"[{i}:v]trim=start={clip['trim_start_s']:.3f}{trim_end_part},"
+                f"setpts=(PTS-STARTPTS)/{clip['speed']:.4f},"
+                f"{reverse_part}{fit_chain},setsar=1,fps={fps}"
+            )
+        adjust = clip.get('adjust')
+        if adjust:
+            # After the scale/crop so it costs the fewest pixels, before the
+            # fades so a fade still ramps to real black/white rather than to
+            # the corrected version of it.
+            chain += (
+                f",eq=brightness={adjust['brightness']:.3f}:contrast={adjust['contrast']:.3f}"
+                f":saturation={adjust['saturation']:.3f}:gamma={adjust['gamma']:.3f}"
+            )
         if clip['fade_in']:
             chain += f",fade=t=in:st=0:d={clip['fade_in']['duration_s']:.3f}:color={clip['fade_in']['color']}"
         if clip['fade_out'] and content_duration_s is not None:
@@ -800,17 +1119,37 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
                     else cumulative_s + clip_durations_s[i]
                 )
             current_label = out_label
-    audio_offset_s = plan.get('audio_offset_s')
-    if audio_offset_s:
-        # A test render's audio track is a slice of the full one, starting
-        # `audio_offset_s` seconds in - `atrim` cuts it, `asetpts` resets the
-        # cut's own timestamps back to zero (same reason the video `trim`
-        # filter above is always followed by `setpts=(PTS-STARTPTS)/...`;
-        # without it the muxed output would start with `audio_offset_s` of
-        # silence instead of the trimmed content).
-        filter_parts.append(f"[{audio_index}:a]atrim=start={audio_offset_s:.3f},asetpts=PTS-STARTPTS,apad[aout]")
-    else:
-        filter_parts.append(f"[{audio_index}:a]apad[aout]")
+    # Audio chain: `video_edit.audio`'s own offset/volume/fades, plus a test
+    # render's window offset on top.
+    #
+    # The two offsets *add*: `audio['offset_s']` is an editing decision ("the
+    # song starts at its chorus") that applies to every render, while
+    # `audio_offset_s` is where in that already-offset output the test window
+    # begins. Substituting one for the other would silently ignore the user's
+    # own offset in every test render.
+    #
+    # `atrim` cuts, `asetpts` resets the cut's timestamps back to zero (same
+    # reason the video `trim` above is always followed by `setpts=PTS-
+    # STARTPTS`; without it the mux would start with that much silence),
+    # then `volume`/`afade` shape it and `apad` covers any tail the track
+    # itself is too short for.
+    audio = plan.get('audio') or _DEFAULT_AUDIO_RESOLVED
+    total_offset_s = audio['offset_s'] + (plan.get('audio_offset_s') or 0)
+    audio_parts = []
+    if total_offset_s > 0:
+        audio_parts.append(f"atrim=start={total_offset_s:.3f}")
+        audio_parts.append('asetpts=PTS-STARTPTS')
+    if abs(audio['volume'] - 1.0) > 1e-6:
+        audio_parts.append(f"volume={audio['volume']:.3f}")
+    if audio['fade_in_s'] > 0:
+        audio_parts.append(f"afade=t=in:st=0:d={audio['fade_in_s']:.3f}")
+    if audio['fade_out_s'] > 0:
+        # Anchored to the end of the *output*, so the ramp always lands on
+        # the final frame however the clips were trimmed.
+        fade_out_start_s = max(0.0, plan['output_duration_s'] - audio['fade_out_s'])
+        audio_parts.append(f"afade=t=out:st={fade_out_start_s:.3f}:d={audio['fade_out_s']:.3f}")
+    audio_parts.append('apad')
+    filter_parts.append(f"[{audio_index}:a]{','.join(audio_parts)}[aout]")
 
     if overlays:
         cur = f'[{concat_label}]'
@@ -895,7 +1234,11 @@ def build_ffmpeg_command(plan: dict, project_dir: Path, dest_path: Path, fps: in
     cmd += [
         '-filter_complex', ';'.join(filter_parts),
         '-map', '[vout]', '-map', '[aout]',
-        '-c:v', 'libx264', '-c:a', 'aac',
+        '-c:v', 'libx264',
+        '-preset', plan.get('preset') or _EXPORT_QUALITY['high'][1],
+        '-crf', str(plan.get('crf') if plan.get('crf') is not None else _EXPORT_QUALITY['high'][0]),
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
         '-t', f"{plan['output_duration_s']:.3f}",
         str(dest_path),
     ]

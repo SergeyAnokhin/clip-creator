@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Magnet, Maximize2, Minimize2 } from 'lucide-react';
+import Konva from 'konva';
 import {
-  Image as KonvaImage, Layer, Line, Stage,
+  Image as KonvaImage, Layer, Line, Stage, Text as KonvaText,
 } from 'react-konva';
 import { mediaUrl } from '../../api/client.js';
 import {
-  activeOverlaysAt, canvasLayerHeightPct, overlayOpacityAt, overlayPatchFromCanvasLayer,
+  activeOverlaysAt, canvasLayerHeightPct, DEFAULT_TEXT_OVERLAY, overlayOpacityAt, overlayPatchFromCanvasLayer,
+  TEXT_RASTER_FONT_SIZE,
 } from '../../lib/overlays.js';
+import { isDefaultAdjust } from '../../lib/timeline.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
 import { computeContentRect } from '../../lib/videoFrameRect.js';
 import { findActiveClip } from '../../lib/timeline.js';
@@ -71,6 +74,88 @@ function OverlayCanvasNode({
       }}
     >
       <KonvaImage image={image} width={naturalW} height={naturalH} opacity={overlayOpacityAt(overlay, playheadMs)} />
+    </CanvasLayer>
+  );
+}
+
+/** A `kind: 'text'` overlay's Konva node. Drawn live here with the same
+ * font/colour/outline values `providers/editor.py` later rasterizes with
+ * Pillow, so what the monitor shows is what the render composites (the two
+ * text engines' metrics differ slightly - that is covered by the preview's
+ * existing "приблизительный" disclaimer, same as everything else here).
+ *
+ * The text is laid out at a fixed `TEXT_RASTER_FONT_SIZE` and then *scaled*
+ * by `CanvasLayer` like any image overlay, rather than having its own
+ * font-size field: the overlay model already has exactly one notion of "how
+ * big is this on the canvas" (`width_pct`/`height_pct`), and a second one
+ * would fight it. The measured natural size goes to
+ * `resolveOverlayNaturalAspect` for the same reason an image's does - so a
+ * freshly added text block takes on its real aspect ratio instead of the
+ * square placeholder every new overlay starts as.
+ *
+ * Measuring happens on a detached probe node, not on the rendered one: the
+ * rendered `Text` is given an explicit `width` so `align` works, and Konva
+ * then splits lines against that width, so measuring it would echo back
+ * whatever width it already has. Same technique (and same reason) as
+ * `PosterCanvasLayers.jsx`'s text layer. */
+function OverlayTextNode({
+  overlay, containerW, containerH, playheadMs, isSelected, isPlaying, onSelect, onChange, onNaturalSize,
+  snapEnabled, setGuides,
+}) {
+  const text = { ...DEFAULT_TEXT_OVERLAY, ...(overlay.text || {}) };
+  const [box, setBox] = useState({ w: 1, h: 1 });
+
+  useEffect(() => {
+    function measure() {
+      const probe = new Konva.Text({
+        text: text.content || ' ',
+        fontFamily: text.font,
+        fontSize: TEXT_RASTER_FONT_SIZE,
+        lineHeight: text.line_spacing,
+        wrap: 'none',
+      });
+      setBox({ w: Math.max(1, probe.getTextWidth()), h: Math.max(1, probe.height()) });
+      probe.destroy();
+    }
+    measure();
+    // Web fonts (and, on a cold load, even locally installed ones) may not be
+    // ready on the first paint - remeasure once they are, or the block keeps
+    // whatever size the fallback face happened to produce.
+    if (document.fonts?.ready) document.fonts.ready.then(measure).catch(() => {});
+  }, [text.content, text.font, text.line_spacing]);
+
+  useEffect(() => {
+    if (box.w > 1 && box.h > 1) onNaturalSize(overlay.overlay_id, box.w, box.h);
+  }, [overlay.overlay_id, box.w, box.h, onNaturalSize]);
+
+  return (
+    <CanvasLayer
+      xPct={overlay.x_pct} yPct={overlay.y_pct} widthPct={overlay.width_pct}
+      heightPct={canvasLayerHeightPct(overlay, containerW, containerH)}
+      rotationDeg={overlay.rotation_deg}
+      naturalW={box.w} naturalH={box.h} containerW={containerW} containerH={containerH}
+      isSelected={isSelected} showOutline={!isPlaying}
+      onSelect={onSelect}
+      onDragMove={(e) => { if (snapEnabled) setGuides(snapNodeToCanvas(e.target, containerW, containerH)); }}
+      onChange={(patch) => {
+        setGuides({ v: null, h: null });
+        onChange(overlayPatchFromCanvasLayer(patch, containerW, containerH));
+      }}
+    >
+      <KonvaText
+        text={text.content}
+        width={box.w}
+        wrap="none"
+        align={text.align}
+        fontFamily={text.font}
+        fontSize={TEXT_RASTER_FONT_SIZE}
+        lineHeight={text.line_spacing}
+        fill={text.color}
+        stroke={text.outline_width > 0 ? text.outline_color : undefined}
+        strokeWidth={text.outline_width}
+        fillAfterStrokeEnabled
+        opacity={overlayOpacityAt(overlay, playheadMs)}
+      />
     </CanvasLayer>
   );
 }
@@ -194,6 +279,19 @@ export default function EditorPreview({
     height: localContentRect.height,
   };
 
+  // Live (approximate) preview of the active clip's own colour correction -
+  // CSS `filter` on the <video> maps closely enough onto ffmpeg `eq`'s
+  // brightness/contrast/saturation for "does this look right", which is all
+  // the monitor claims to answer. `gamma` has no CSS equivalent and is simply
+  // not previewed, the same way `fit`/`reverse` aren't (see the disclaimer).
+  const activeClipAdjust = useMemo(() => {
+    const active = findActiveClip(clips || [], playheadMs);
+    const adjust = active?.clip?.adjust;
+    if (isDefaultAdjust(adjust)) return undefined;
+    const brightness = 1 + (adjust.brightness ?? 0);
+    return `brightness(${brightness}) contrast(${adjust.contrast ?? 1}) saturate(${adjust.saturation ?? 1})`;
+  }, [clips, playheadMs]);
+
   const activeOverlays = activeOverlaysAt(overlays, playheadMs);
   return (
     <div className="editor-preview">
@@ -203,7 +301,8 @@ export default function EditorPreview({
           style={containerSize.width > 0 ? {
             position: 'absolute', left: canvasFitRect.x, top: canvasFitRect.y,
             width: canvasFitRect.width, height: canvasFitRect.height,
-          } : undefined}
+            filter: activeClipAdjust,
+          } : { filter: activeClipAdjust }}
         />
         {containerSize.width > 0 && (
           <div
@@ -218,6 +317,20 @@ export default function EditorPreview({
           >
             <Layer>
               {activeOverlays.map((overlay) => {
+                if (overlay.kind === 'text') {
+                  return (
+                    <OverlayTextNode
+                      key={overlay.overlay_id}
+                      overlay={overlay} playheadMs={playheadMs}
+                      containerW={canvasFitRect.width} containerH={canvasFitRect.height}
+                      isSelected={selectedOverlayId === overlay.overlay_id} isPlaying={isPlaying}
+                      onSelect={() => actions.selectOverlay(overlay.overlay_id)}
+                      onChange={(patch) => actions.setOverlayTransform(overlay.overlay_id, patch)}
+                      onNaturalSize={actions.resolveOverlayNaturalAspect}
+                      snapEnabled={snapEnabled} setGuides={setGuides}
+                    />
+                  );
+                }
                 const { src } = resolveOverlaySource(overlay, {
                   projectId, titleCardVariants, logos, overlayVideoSources, L,
                 });

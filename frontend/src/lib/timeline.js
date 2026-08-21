@@ -115,6 +115,13 @@ export function clampTrim(trimStartMs, trimEndMs, sourceDurationMs) {
   return { trimStartMs: start, trimEndMs: end };
 }
 
+// Output frame rate the timeline's own frame-stepping/timecode math assumes -
+// mirrors `providers/editor.py`'s `_FPS`. The render is the source of truth;
+// this is only how far one arrow-key press moves the playhead and how the
+// `M:SS:FF` timecode splits its last field.
+export const TIMELINE_FPS = 30;
+export const FRAME_MS = 1000 / TIMELINE_FPS;
+
 // Shortest clip the direct-manipulation gestures below (edge drag, split)
 // are allowed to leave behind, in source-clip milliseconds. Purely an
 // ergonomics floor - it keeps a clip from collapsing into an unclickable
@@ -172,13 +179,24 @@ export function nextSpeedPreset(currentSpeed) {
   return next ?? SPEED_PRESETS[0];
 }
 
-// `transition_in.type` - a deliberately small, curated set (not ffmpeg
-// xfade's full catalogue of wipes/slides/etc.), mirrors
-// `providers/editor.py`'s `_TRANSITION_XFADE_NAME`. 'none' means "no
-// transition_in object at all" on the clip, listed here only so the
-// inspector has a "remove transition" option in the same button row as the
-// real types.
-export const TRANSITION_TYPES = ['none', 'dissolve', 'fadeblack', 'fadewhite'];
+// `transition_in.type` - the set of boundary transitions the render can
+// produce, mirroring `providers/editor.py`'s `_TRANSITION_XFADE_NAME` key for
+// key. 'none' means "no transition_in object at all" on the clip, listed here
+// only so the inspector has a "remove transition" option in the same button
+// row as the real types.
+//
+// Grouped for the inspector's picker: a flat row of a dozen-plus chips is
+// unreadable, and CapCut/Movavi both group their transition browsers the same
+// way (dissolves / wipes / slides / shapes). The keys the first version
+// shipped with ('dissolve', 'fadeblack', 'fadewhite') keep their exact names
+// so no saved project's transitions change meaning.
+export const TRANSITION_GROUPS = [
+  { key: 'basic', types: ['none', 'dissolve', 'fadeblack', 'fadewhite'] },
+  { key: 'wipe', types: ['wipeleft', 'wiperight', 'wipeup', 'wipedown'] },
+  { key: 'slide', types: ['slideleft', 'slideright', 'slideup', 'slidedown'] },
+  { key: 'shape', types: ['circleopen', 'circleclose', 'radial', 'pixelize'] },
+];
+export const TRANSITION_TYPES = TRANSITION_GROUPS.flatMap((group) => group.types);
 export const DEFAULT_TRANSITION_MS = 500;
 export const MIN_TRANSITION_MS = 50;
 
@@ -193,6 +211,22 @@ export const FIT_MODES = ['cover', 'contain'];
 export const MIN_FIT_ZOOM = 1;
 export const MAX_FIT_ZOOM = 4;
 export const DEFAULT_FIT = { mode: 'cover', zoom: 1, offset_x_pct: 50, offset_y_pct: 50 };
+
+// Bounds for `clip.adjust` (per-clip colour correction) - ffmpeg `eq`
+// semantics, mirrored by `providers/editor.py`'s own `_resolve_adjust`.
+// Absent/`null` means exactly these values, and the render then emits no
+// `eq` filter at all rather than a no-op one.
+export const DEFAULT_ADJUST = {
+  brightness: 0, contrast: 1, saturation: 1, gamma: 1,
+};
+
+/** Whether a clip's `adjust` is (or is equivalent to) "no correction" - what
+ * the inspector's "нет" preset highlights against, and the same test the
+ * render uses to decide whether to emit the filter. */
+export function isDefaultAdjust(adjust) {
+  if (!adjust) return true;
+  return Object.entries(DEFAULT_ADJUST).every(([key, value]) => (adjust[key] ?? value) === value);
+}
 
 /** New `speed` after Ctrl+dragging one edge of a clip by `deltaOutputMs` on
  * the output timeline - the CapCut-style "speed ramp" gesture. Unlike
@@ -234,6 +268,66 @@ export function applyEdgeTrim(clip, sourceDurationMs, edge, deltaOutputMs) {
   }
   const end = Math.max(Math.min(maxEnd, trimEndMs + deltaSourceMs), trimStartMs + MIN_CLIP_MS);
   return { trimStartMs: Math.round(trimStartMs), trimEndMs: Math.round(end) };
+}
+
+/** New `{trimStartMs, trimEndMs}` after "trim this edge up to the playhead"
+ * (CapCut's Q/W): the clip keeps the side of itself the playhead leaves
+ * intact and gives up the rest, without moving anything else - the
+ * back-to-back layout re-flows on its own afterwards. `timelineClip` must be
+ * annotated by `computeTimelineClips` (it needs `startMs`/`trimStartMs`/
+ * `trimEndMs`). Returns `null` when the playhead isn't strictly inside the
+ * clip, or when the cut would leave less than `MIN_CLIP_MS` behind - same
+ * refusal `splitClipsAt` makes, so a no-op keystroke never silently
+ * collapses a clip into a sliver. */
+export function trimEdgeToPlayhead(timelineClip, playheadMs, edge) {
+  if (!timelineClip) return null;
+  if (playheadMs <= timelineClip.startMs || playheadMs >= timelineClip.endMs) return null;
+  const speed = timelineClip.speed || 1;
+  const cutSourceMs = Math.round(timelineClip.trimStartMs + (playheadMs - timelineClip.startMs) * speed);
+  if (edge === 'start') {
+    if (timelineClip.trimEndMs - cutSourceMs < MIN_CLIP_MS) return null;
+    return { trimStartMs: cutSourceMs, trimEndMs: Math.round(timelineClip.trimEndMs) };
+  }
+  if (cutSourceMs - timelineClip.trimStartMs < MIN_CLIP_MS) return null;
+  return { trimStartMs: Math.round(timelineClip.trimStartMs), trimEndMs: cutSourceMs };
+}
+
+// Default length of the still a "freeze frame" insert produces, in output ms
+// - CapCut inserts a fixed-length still at the playhead rather than asking
+// first, and the block is trimmable like any other afterwards.
+export const DEFAULT_FREEZE_MS = 2000;
+
+/** Splits the clip under the playhead and inserts a `freeze: true` clip
+ * (`DEFAULT_FREEZE_MS` long) between the halves - the still is just another
+ * clip over the same source whose `trim_start_ms` is the frozen instant, so
+ * every existing per-clip control (fades, fit, transitions, reorder) keeps
+ * working on it. `providers/editor.py` renders it by holding that one frame
+ * (`tpad`) instead of playing the window. Returns `clips` unchanged when the
+ * playhead sits outside the timeline or on a cut. `makeId` supplies the new
+ * clip ids. */
+export function freezeClipsAt(clips, sourceDurationsById, playheadMs, makeId) {
+  const timelineClips = computeTimelineClips(clips, sourceDurationsById);
+  const index = timelineClips.findIndex((c) => playheadMs > c.startMs && playheadMs < c.endMs);
+  if (index === -1) return clips;
+  const target = timelineClips[index];
+  const speed = target.speed || 1;
+  const cutSourceMs = Math.round(target.trimStartMs + (playheadMs - target.startMs) * speed);
+  const original = clips[index];
+  const left = { ...original, trim_start_ms: target.trimStartMs, trim_end_ms: cutSourceMs };
+  const still = {
+    ...original,
+    clip_id: makeId(),
+    trim_start_ms: cutSourceMs,
+    // The window's length *is* the still's output length, so speed must be 1
+    // and no transition should be inherited onto the frozen block.
+    trim_end_ms: cutSourceMs + DEFAULT_FREEZE_MS,
+    speed: 1,
+    reverse: false,
+    freeze: true,
+    transition_in: null,
+  };
+  const right = { ...original, clip_id: makeId(), trim_start_ms: cutSourceMs, trim_end_ms: target.trimEndMs, transition_in: null };
+  return [...clips.slice(0, index), left, still, right, ...clips.slice(index + 1)];
 }
 
 /** Splits whichever clip the playhead is inside into two clips that play

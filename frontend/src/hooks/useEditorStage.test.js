@@ -452,3 +452,162 @@ describe('useEditorStage preview engine', () => {
     expect(videoEl.play).not.toHaveBeenCalled();
   });
 });
+
+describe('useEditorStage markers', () => {
+  it('adds, renames, moves and removes a marker', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.addMarker(4200); });
+    const [marker] = project.video_edit.markers;
+    expect(marker.at_ms).toBe(4200);
+    expect(marker.label).toBe('');
+
+    act(() => { result.current.actions.renameMarker(marker.marker_id, 'Припев'); });
+    expect(project.video_edit.markers[0].label).toBe('Припев');
+
+    act(() => { result.current.actions.moveMarker(marker.marker_id, 5600.4); });
+    expect(project.video_edit.markers[0].at_ms).toBe(5600);
+
+    act(() => { result.current.actions.removeMarker(marker.marker_id); });
+    expect(project.video_edit.markers).toEqual([]);
+  });
+
+  it('never lets a marker land before the timeline start', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addMarker(1000); });
+    act(() => { result.current.actions.moveMarker(project.video_edit.markers[0].marker_id, -500); });
+    expect(project.video_edit.markers[0].at_ms).toBe(0);
+  });
+
+  it('beat markers replace the whole set rather than appending to it', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.addMarker(1000); });
+    act(() => { result.current.actions.setBeatMarkers([{ at_ms: 500 }, { at_ms: 1500 }]); });
+
+    expect(project.video_edit.markers.map((m) => m.at_ms)).toEqual([500, 1500]);
+
+    act(() => { result.current.actions.clearMarkers(); });
+    expect(project.video_edit.markers).toEqual([]);
+  });
+});
+
+describe('useEditorStage audio settings', () => {
+  it('reads through defaults and patches only what it is given', () => {
+    const { result, project } = setupMultiClip();
+
+    expect(result.current.state.audioSettings).toEqual({
+      volume: 1, fade_in_ms: 0, fade_out_ms: 0, offset_ms: 0,
+    });
+
+    act(() => { result.current.actions.setAudioSettings({ volume: 0.5 }); });
+    expect(project.video_edit.audio).toEqual({
+      volume: 0.5, fade_in_ms: 0, fade_out_ms: 0, offset_ms: 0,
+    });
+
+    act(() => { result.current.actions.setAudioSettings({ fade_out_ms: 2000 }); });
+    expect(project.video_edit.audio.volume).toBe(0.5);
+    expect(project.video_edit.audio.fade_out_ms).toBe(2000);
+  });
+
+  it('selecting the audio row clears the other three selections and vice versa', () => {
+    const { result } = setupMultiClip();
+
+    act(() => { result.current.actions.selectClip('clip_a'); });
+    act(() => { result.current.actions.selectAudio(); });
+    expect(result.current.state.isAudioSelected).toBe(true);
+    expect(result.current.state.selectedClipIds).toEqual(new Set());
+
+    act(() => { result.current.actions.selectClip('clip_b'); });
+    expect(result.current.state.isAudioSelected).toBe(false);
+  });
+});
+
+describe('useEditorStage export settings', () => {
+  it('reads through defaults and patches only what it is given', () => {
+    const { result, project } = setupMultiClip();
+
+    expect(result.current.state.exportSettings).toEqual({
+      resolution: 'source', fps: 30, quality: 'high',
+    });
+
+    act(() => { result.current.actions.setExportSettings({ resolution: '4k' }); });
+    expect(project.video_edit.export).toEqual({ resolution: '4k', fps: 30, quality: 'high' });
+  });
+});
+
+describe('useEditorStage clip edits', () => {
+  it('trims a clip up to the playhead, and no-ops when the playhead is outside it', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.seek(2000); });
+    act(() => { result.current.actions.trimClipToPlayhead('clip_a', 'end'); });
+    expect(project.video_edit.clips[0].trim_end_ms).toBe(2000);
+
+    // The playhead now sits outside clip_c entirely - nothing should change.
+    const before = JSON.stringify(project.video_edit.clips[2]);
+    act(() => { result.current.actions.trimClipToPlayhead('clip_c', 'end'); });
+    expect(JSON.stringify(project.video_edit.clips[2])).toBe(before);
+  });
+
+  it('freeze at the playhead splits the clip and inserts a held still', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.seek(2000); });
+    act(() => { result.current.actions.freezeAtPlayhead(); });
+
+    const clips = project.video_edit.clips;
+    expect(clips).toHaveLength(5);
+    expect(clips[0].trim_end_ms).toBe(2000);
+    expect(clips[1].freeze).toBe(true);
+    expect(clips[1].trim_end_ms - clips[1].trim_start_ms).toBe(2000);
+    expect(clips[2].trim_start_ms).toBe(2000);
+    expect(clips[2].trim_end_ms).toBe(5000);
+  });
+
+  it('applies one transition to every boundary but never to the first clip', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.setAllTransitions('dissolve', 400); });
+
+    expect(project.video_edit.clips[0].transition_in).toBeNull();
+    expect(project.video_edit.clips[1].transition_in).toEqual({ type: 'dissolve', duration_ms: 400 });
+    expect(project.video_edit.clips[2].transition_in).toEqual({ type: 'dissolve', duration_ms: 400 });
+  });
+
+  it('stores per-clip colour correction and clears it with null', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.setClipAdjust('clip_a', { brightness: 0.1, contrast: 1.2, saturation: 1, gamma: 1 }); });
+    expect(project.video_edit.clips[0].adjust.brightness).toBe(0.1);
+
+    act(() => { result.current.actions.setClipAdjust('clip_a', null); });
+    expect(project.video_edit.clips[0].adjust).toBeNull();
+  });
+});
+
+describe('useEditorStage text overlays', () => {
+  it('adds a text overlay with its own text block and selects it', () => {
+    const { result, project } = setupMultiClip();
+
+    act(() => { result.current.actions.addTextOverlay('Привет'); });
+
+    const [overlay] = project.video_edit.overlays;
+    expect(overlay.kind).toBe('text');
+    expect(overlay.source_id).toBeNull();
+    expect(overlay.text.content).toBe('Привет');
+    expect(overlay.text.font).toBeTruthy();
+    expect(result.current.state.selectedOverlayId).toBe(overlay.overlay_id);
+  });
+
+  it('patches only the given text fields, keeping the rest', () => {
+    const { result, project } = setupMultiClip();
+    act(() => { result.current.actions.addTextOverlay('Привет'); });
+    const id = project.video_edit.overlays[0].overlay_id;
+
+    act(() => { result.current.actions.setOverlayText(id, { color: '#ff0000' }); });
+
+    expect(project.video_edit.overlays[0].text.color).toBe('#ff0000');
+    expect(project.video_edit.overlays[0].text.content).toBe('Привет');
+  });
+});

@@ -28,11 +28,15 @@ def _track(track_id='trk_1', duration_ms=8000):
 
 
 def _clip(scene_index=0, video_id='vid_1', trim_start_ms=0, trim_end_ms=None, speed=1.0, reverse=False,
-          transition_in=None, fade_in=None, fade_out=None, fit=None):
+          transition_in=None, fade_in=None, fade_out=None, fit=None, adjust=None, freeze=False):
     clip = {
         'scene_index': scene_index, 'video_id': video_id,
         'trim_start_ms': trim_start_ms, 'trim_end_ms': trim_end_ms, 'speed': speed, 'reverse': reverse,
     }
+    if adjust is not None:
+        clip['adjust'] = adjust
+    if freeze:
+        clip['freeze'] = True
     if transition_in is not None:
         clip['transition_in'] = transition_in
     if fade_in is not None:
@@ -556,7 +560,7 @@ def test_build_render_plan_ignores_unknown_transition_type():
         'mureka_track_id': 'trk_1',
         'clips': [
             _clip(scene_index=0, video_id='vid_a'),
-            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'wipeleft', 'duration_ms': 500}),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': 'nosuchtransition', 'duration_ms': 500}),
         ],
     }
 
@@ -1928,3 +1932,345 @@ def test_render_to_file_real_ffmpeg_transition_between_two_unbounded_clips(tmp_p
     assert r0 > 240 and g0 < 15 and b0 < 15, f'expected plain red, got {(r0, g0, b0)}'
     r, g, b = _frame_rgb(dest, 1.6)
     assert r < 60 and g < 60 and b < 60, f'expected a near-black blend frame, got {(r, g, b)}'
+
+
+# ---------------------------------------------------------------------------
+# Audio settings (`video_edit.audio`) - volume / fades / offset
+# ---------------------------------------------------------------------------
+
+def _audio_chain(cmd):
+    """The `[N:a]...[aout]` fragment out of a built filter_complex."""
+    graph = cmd[cmd.index('-filter_complex') + 1]
+    return next(part for part in graph.split(';') if part.endswith('[aout]'))
+
+
+def test_audio_chain_is_unchanged_without_audio_settings():
+    project = _project(_video(), _track())
+    video_edit = {'mureka_track_id': 'trk_1', 'clips': [_clip()]}
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    cmd = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))
+
+    assert _audio_chain(cmd) == '[1:a]apad[aout]'
+
+
+def test_audio_volume_fades_and_offset_reach_the_filter_chain():
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip()],
+        'audio': {'volume': 0.5, 'fade_in_ms': 1000, 'fade_out_ms': 2000, 'offset_ms': 3000},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    chain = _audio_chain(editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4')))
+
+    assert 'atrim=start=3.000' in chain
+    assert 'asetpts=PTS-STARTPTS' in chain
+    assert 'volume=0.500' in chain
+    assert 'afade=t=in:st=0:d=1.000' in chain
+    # Output is the 8s track, so the 2s fade-out starts at 6s.
+    assert 'afade=t=out:st=6.000:d=2.000' in chain
+    assert chain.endswith('apad[aout]')
+
+
+def test_audio_offset_is_clamped_inside_the_track():
+    project = _project(_video(), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'audio': {'offset_ms': 999999},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert plan['audio']['offset_s'] == pytest.approx(7.999)
+
+
+def test_audio_fades_are_compressed_when_they_would_overlap():
+    project = _project(_video(), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'audio': {'fade_in_ms': 6000, 'fade_out_ms': 6000},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert plan['audio']['fade_in_s'] == pytest.approx(4.0)
+    assert plan['audio']['fade_out_s'] == pytest.approx(4.0)
+
+
+def test_test_range_offset_adds_to_the_users_own_audio_offset():
+    """The window offset of a test render and the user's own "start the song
+    later" offset are different decisions - one must not replace the other."""
+    project = _project(_video(duration_seconds=8), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip(trim_end_ms=8000)],
+        'audio': {'offset_ms': 2000},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    trimmed = editor._trim_plan_to_range(plan, 1000, 4000)
+    chain = _audio_chain(editor.build_ffmpeg_command(trimmed, Path('/p'), Path('/p/out.mp4')))
+
+    assert 'atrim=start=3.000' in chain
+
+
+def test_test_range_reclamps_audio_fades_to_the_shorter_output():
+    project = _project(_video(duration_seconds=8), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip(trim_end_ms=8000)],
+        'audio': {'fade_in_ms': 3000, 'fade_out_ms': 3000},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    trimmed = editor._trim_plan_to_range(plan, 0, 2000)
+
+    # 3s + 3s of fades cannot fit a 2s window - both are halved to 1s.
+    assert trimmed['audio']['fade_in_s'] == pytest.approx(1.0)
+    assert trimmed['audio']['fade_out_s'] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Per-clip colour correction (`clip.adjust`)
+# ---------------------------------------------------------------------------
+
+def test_no_eq_filter_without_colour_correction():
+    project = _project(_video(), _track())
+    plan = editor.build_render_plan(project, {'mureka_track_id': 'trk_1', 'clips': [_clip()]}, {})
+    cmd = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))
+
+    assert plan['clips'][0]['adjust'] is None
+    assert 'eq=' not in cmd[cmd.index('-filter_complex') + 1]
+
+
+def test_default_valued_adjust_still_emits_no_filter():
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(adjust={'brightness': 0, 'contrast': 1, 'saturation': 1, 'gamma': 1})],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert plan['clips'][0]['adjust'] is None
+
+
+def test_adjust_becomes_an_eq_filter_after_the_fit_chain():
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(adjust={'brightness': 0.1, 'contrast': 1.2, 'saturation': 0.5, 'gamma': 0.9})],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    graph = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))[
+        editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4')).index('-filter_complex') + 1
+    ]
+
+    assert 'eq=brightness=0.100:contrast=1.200:saturation=0.500:gamma=0.900' in graph
+    assert graph.index('setsar=1') < graph.index('eq=brightness')
+
+
+def test_adjust_values_are_clamped_to_ffmpeg_eq_ranges():
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(adjust={'brightness': 9, 'contrast': 1, 'saturation': 99, 'gamma': 0})],
+    }
+
+    adjust = editor.build_render_plan(project, video_edit, {})['clips'][0]['adjust']
+
+    assert adjust['brightness'] == 1.0
+    assert adjust['saturation'] == 3.0
+    assert adjust['gamma'] == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# Freeze frame (`clip.freeze`)
+# ---------------------------------------------------------------------------
+
+def test_freeze_clip_holds_one_frame_for_its_whole_window():
+    project = _project(_video(duration_seconds=8), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(trim_start_ms=2000, trim_end_ms=4000, freeze=True)],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    cmd = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))
+    graph = cmd[cmd.index('-filter_complex') + 1]
+
+    assert plan['clips'][0]['freeze'] is True
+    # One frame at 30fps starting from the trim start...
+    assert 'trim=start=2.000:end=2.033' in graph
+    # ...cloned for the remaining 2s window minus that frame.
+    assert 'tpad=stop_mode=clone:stop_duration=1.967' in graph
+
+
+def test_freeze_clip_still_contributes_its_full_window_to_the_timeline():
+    project = _project(_video(duration_seconds=8), _track(duration_ms=8000))
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [_clip(trim_start_ms=0, trim_end_ms=2000, freeze=True)],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    # 2s of frozen frame + a 6s tail pad = the 8s track.
+    assert plan['clips'][0]['tpad_s'] == pytest.approx(6.0)
+
+
+# ---------------------------------------------------------------------------
+# Export settings (`video_edit.export`)
+# ---------------------------------------------------------------------------
+
+def test_export_defaults_keep_the_canvas_and_add_quality_flags():
+    project = _project(_video(), _track())
+    plan = editor.build_render_plan(project, {'mureka_track_id': 'trk_1', 'clips': [_clip()]}, {})
+    cmd = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))
+
+    assert (plan['target_width'], plan['target_height']) == (1920, 1080)
+    assert plan['fps'] == 30
+    assert cmd[cmd.index('-crf') + 1] == '18'
+    assert cmd[cmd.index('-preset') + 1] == 'medium'
+
+
+def test_export_resolution_scales_the_canvas_keeping_its_shape():
+    project = _project(_video(aspect_ratio='9:16'), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'export': {'resolution': '4k', 'fps': 60, 'quality': 'low'},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    cmd = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))
+
+    # Portrait canvas (1080x1920) with 2160 on the short side.
+    assert (plan['target_width'], plan['target_height']) == (2160, 3840)
+    assert plan['fps'] == 60
+    assert 'fps=60' in cmd[cmd.index('-filter_complex') + 1]
+    assert cmd[cmd.index('-crf') + 1] == '28'
+    assert cmd[cmd.index('-preset') + 1] == 'veryfast'
+
+
+def test_export_falls_back_on_unknown_preset_values():
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()],
+        'export': {'resolution': 'nope', 'fps': 137, 'quality': 'ultra'},
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+
+    assert (plan['target_width'], plan['target_height']) == (1920, 1080)
+    assert plan['fps'] == 30
+    assert plan['crf'] == 18
+
+
+# ---------------------------------------------------------------------------
+# Extended transition catalogue
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('kind', ['wipeleft', 'slideup', 'circleopen', 'radial', 'pixelize'])
+def test_extended_transition_types_map_to_their_xfade_names(kind):
+    project = _two_clip_project()
+    video_edit = {
+        'mureka_track_id': 'trk_1',
+        'clips': [
+            _clip(scene_index=0, video_id='vid_a'),
+            _clip(scene_index=1, video_id='vid_b', transition_in={'type': kind, 'duration_ms': 500}),
+        ],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    cmd = editor.build_ffmpeg_command(plan, Path('/p'), Path('/p/out.mp4'))
+
+    assert plan['clips'][1]['transition_in']['type'] == kind
+    assert f'xfade=transition={kind}:' in cmd[cmd.index('-filter_complex') + 1]
+
+
+# ---------------------------------------------------------------------------
+# Text overlays (`kind: 'text'`)
+# ---------------------------------------------------------------------------
+
+def _text_overlay(content='Привет', **style):
+    return {
+        'overlay_id': 'ov_txt', 'kind': 'text', 'source_id': None,
+        'start_ms': 0, 'duration_ms': 2000,
+        'x_pct': 10, 'y_pct': 10, 'width_pct': 40, 'height_pct': 10,
+        'rotation_deg': 0, 'opacity': 1.0, 'fade_in_ms': 0, 'fade_out_ms': 0, 'height_axis': 'width',
+        'text': {'content': content, **style},
+    }
+
+
+def test_text_overlay_resolves_to_a_content_addressed_cache_path_without_disk():
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_text_overlay()],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {})
+    overlay = plan['overlays'][0]
+
+    assert overlay['kind'] == 'text'
+    assert overlay['file_path'].startswith('editor/text_cache/')
+    assert overlay['file_path'].endswith('.png')
+
+
+def test_text_overlay_path_changes_with_the_text_and_its_styling():
+    project = _project(_video(), _track())
+
+    def path_for(**kwargs):
+        video_edit = {
+            'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_text_overlay(**kwargs)],
+        }
+        return editor.build_render_plan(project, video_edit, {})['overlays'][0]['file_path']
+
+    base = path_for()
+    assert path_for() == base
+    assert path_for(content='Другое') != base
+    assert path_for(color='#ff0000') != base
+
+
+def test_text_overlay_composites_through_the_normal_image_overlay_path(tmp_path):
+    """A text overlay must add no new ffmpeg filter of its own - it becomes a
+    PNG and rides the same `overlay=` chain every image overlay uses."""
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_text_overlay()],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {}, tmp_path)
+    cmd = editor.build_ffmpeg_command(plan, tmp_path, tmp_path / 'out.mp4')
+    graph = cmd[cmd.index('-filter_complex') + 1]
+
+    assert 'drawtext' not in graph
+    assert 'overlay=x=' in graph
+    # `-loop 1` marks it as a still image input, same as a logo/title card.
+    assert '-loop' in cmd
+    # The real render writes the PNG, and it is a genuine RGBA image.
+    written = tmp_path / plan['overlays'][0]['file_path']
+    assert written.exists()
+    from PIL import Image
+    with Image.open(written) as image:
+        assert image.mode == 'RGBA'
+        assert image.width > 1 and image.height > 1
+
+
+def test_text_overlay_png_is_cached_not_redrawn(tmp_path):
+    """The cache is content-addressed, so re-rendering an unchanged overlay
+    must reuse the existing PNG rather than redraw it - proved here by
+    replacing the file's bytes with a sentinel and checking they survive."""
+    project = _project(_video(), _track())
+    video_edit = {
+        'mureka_track_id': 'trk_1', 'clips': [_clip()], 'overlays': [_text_overlay()],
+    }
+
+    plan = editor.build_render_plan(project, video_edit, {}, tmp_path)
+    written = tmp_path / plan['overlays'][0]['file_path']
+    written.write_bytes(b'sentinel')
+
+    editor.build_render_plan(project, video_edit, {}, tmp_path)
+
+    assert written.read_bytes() == b'sentinel'
+    assert len(list((tmp_path / 'editor' / 'text_cache').iterdir())) == 1

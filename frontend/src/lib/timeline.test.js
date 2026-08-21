@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MAX_SPEED, MIN_CLIP_MS, MIN_SPEED, UNKNOWN_DURATION_FALLBACK_MS, applyEdgeSpeed, applyEdgeTrim, clampTrim,
-  computeClipDurationMs, computeTimelineClips, dropIndexForStart, findActiveClip, getTotalDurationMs, moveClip,
-  nextSpeedPreset, resolveTrimEndMs, splitClipsAt,
+  DEFAULT_ADJUST, DEFAULT_FREEZE_MS, MAX_SPEED, MIN_CLIP_MS, MIN_SPEED, UNKNOWN_DURATION_FALLBACK_MS,
+  applyEdgeSpeed, applyEdgeTrim, clampTrim, computeClipDurationMs, computeTimelineClips, dropIndexForStart,
+  findActiveClip, freezeClipsAt, getTotalDurationMs, isDefaultAdjust, moveClip, nextSpeedPreset,
+  resolveTrimEndMs, splitClipsAt, trimEdgeToPlayhead,
 } from './timeline.js';
 
 describe('resolveTrimEndMs', () => {
@@ -287,5 +288,82 @@ describe('splitClipsAt', () => {
     expect(splitClipsAt(clips, durations, 4000, makeId)).toBe(clips);
     expect(splitClipsAt(clips, durations, 99999, makeId)).toBe(clips);
     expect(splitClipsAt(clips, durations, 50, makeId)).toBe(clips);
+  });
+});
+
+describe('trimEdgeToPlayhead', () => {
+  const CLIPS = computeTimelineClips(
+    [
+      { clip_id: 'a', video_id: 'v1', trim_start_ms: 0, trim_end_ms: 4000, speed: 1 },
+      { clip_id: 'b', video_id: 'v1', trim_start_ms: 0, trim_end_ms: 4000, speed: 2 },
+    ],
+    { v1: 10000 },
+  );
+
+  it('gives up the part of the clip the playhead has already passed', () => {
+    expect(trimEdgeToPlayhead(CLIPS[0], 1500, 'start')).toEqual({ trimStartMs: 1500, trimEndMs: 4000 });
+  });
+
+  it('gives up the part the playhead has not reached yet', () => {
+    expect(trimEdgeToPlayhead(CLIPS[0], 1500, 'end')).toEqual({ trimStartMs: 0, trimEndMs: 1500 });
+  });
+
+  it('converts the playhead into source time through the clip speed', () => {
+    // clip b runs 4000ms of source at 2x, so it occupies 4000..6000 on the
+    // output timeline; 1000ms into it is 2000ms into the source.
+    expect(trimEdgeToPlayhead(CLIPS[1], 5000, 'end')).toEqual({ trimStartMs: 0, trimEndMs: 2000 });
+  });
+
+  it('refuses when the playhead is outside the clip or would leave a sliver', () => {
+    expect(trimEdgeToPlayhead(CLIPS[0], 4000, 'end')).toBeNull();
+    expect(trimEdgeToPlayhead(CLIPS[0], 0, 'start')).toBeNull();
+    expect(trimEdgeToPlayhead(CLIPS[0], 50, 'end')).toBeNull();
+    expect(trimEdgeToPlayhead(CLIPS[0], 3950, 'start')).toBeNull();
+    expect(trimEdgeToPlayhead(null, 1000, 'end')).toBeNull();
+  });
+});
+
+describe('freezeClipsAt', () => {
+  const CLIPS = [{ clip_id: 'a', video_id: 'v1', trim_start_ms: 0, trim_end_ms: 4000, speed: 1 }];
+  const DURATIONS = { v1: 10000 };
+  let counter = 0;
+  const makeId = () => `new_${(counter += 1)}`;
+
+  it('splits the clip and inserts a held still of the exact frame', () => {
+    counter = 0;
+    const result = freezeClipsAt(CLIPS, DURATIONS, 1500, makeId);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toMatchObject({ clip_id: 'a', trim_start_ms: 0, trim_end_ms: 1500 });
+    expect(result[1]).toMatchObject({
+      freeze: true, trim_start_ms: 1500, trim_end_ms: 1500 + DEFAULT_FREEZE_MS, speed: 1, reverse: false,
+    });
+    expect(result[2]).toMatchObject({ trim_start_ms: 1500, trim_end_ms: 4000 });
+  });
+
+  it('gives the still and the right half their own ids', () => {
+    counter = 0;
+    const result = freezeClipsAt(CLIPS, DURATIONS, 1500, makeId);
+    const ids = result.map((c) => c.clip_id);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it('does nothing when the playhead sits outside the timeline or on a cut', () => {
+    expect(freezeClipsAt(CLIPS, DURATIONS, 0, makeId)).toBe(CLIPS);
+    expect(freezeClipsAt(CLIPS, DURATIONS, 4000, makeId)).toBe(CLIPS);
+    expect(freezeClipsAt(CLIPS, DURATIONS, 9999, makeId)).toBe(CLIPS);
+  });
+});
+
+describe('isDefaultAdjust', () => {
+  it('treats absent, empty and all-default corrections as "no correction"', () => {
+    expect(isDefaultAdjust(null)).toBe(true);
+    expect(isDefaultAdjust(undefined)).toBe(true);
+    expect(isDefaultAdjust({ ...DEFAULT_ADJUST })).toBe(true);
+    expect(isDefaultAdjust({ brightness: 0 })).toBe(true);
+  });
+
+  it('detects any single value moved off its default', () => {
+    expect(isDefaultAdjust({ ...DEFAULT_ADJUST, saturation: 0 })).toBe(false);
   });
 });

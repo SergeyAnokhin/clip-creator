@@ -15,7 +15,27 @@ function randomId(prefix) {
 // agree on it without one importing internals from the other.
 export const EMPTY_VIDEO_EDIT = {
   mureka_track_id: null, clips: [], overlays: [], overlay_video_sources: [], renders: [], canvas_orientation: 'auto',
+  markers: [], audio: null, export: null,
 };
+
+/** `video_edit.audio` - how the picked Mureka track is laid under the video.
+ * Absent/`null` on an older document means exactly these values, which is
+ * also what the renderer did before the field existed (full track, full
+ * volume, from the very start), so nothing has to be migrated. */
+export const DEFAULT_AUDIO_SETTINGS = {
+  volume: 1, fade_in_ms: 0, fade_out_ms: 0, offset_ms: 0,
+};
+
+/** `video_edit.export` - the output file's own shape, independent of the
+ * `canvas_orientation` heuristic (which decides portrait vs landscape; this
+ * decides how many pixels and how many frames that canvas gets). `'source'`
+ * keeps whatever the canvas heuristic resolved, i.e. today's behaviour. */
+export const DEFAULT_EXPORT_SETTINGS = {
+  resolution: 'source', fps: 30, quality: 'high',
+};
+export const EXPORT_RESOLUTIONS = ['source', '720p', '1080p', '4k'];
+export const EXPORT_FPS_OPTIONS = [24, 30, 60];
+export const EXPORT_QUALITIES = ['high', 'medium', 'low'];
 
 /** One clip per scene that already has an `is_selected` video, in scene
  * order - scenes with no selected video are simply skipped (the user can

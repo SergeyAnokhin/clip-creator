@@ -16,7 +16,7 @@ function sceneThumb(scene) {
  * `clips.map(...)` because a hook can't be called from inside a loop. */
 export default function TimelineClipBlock({
   clip, scene, projectId, selectedClipIds, isDragging, left, width,
-  onBlockPointerDown, onTrimStartPointerDown, onTrimEndPointerDown, onKeyDown, nodeRef,
+  onBlockPointerDown, onTrimStartPointerDown, onTrimEndPointerDown, onKeyDown, onContextMenu, nodeRef,
 }) {
   const video = (scene?.videos || []).find((v) => v.video_id === clip.video_id);
   const frames = useClipThumbnails({
@@ -35,6 +35,7 @@ export default function TimelineClipBlock({
         backgroundImage: staticThumb ? `url(${mediaUrl(`projects/${projectId}/${staticThumb}`)})` : undefined,
       }}
       onPointerDown={onBlockPointerDown}
+      onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       title={sceneLabel(scene, clip.scene_index)}
       role="button"

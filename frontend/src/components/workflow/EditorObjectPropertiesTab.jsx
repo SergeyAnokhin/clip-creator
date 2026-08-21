@@ -1,14 +1,18 @@
+import TimelineAudioInspector from './TimelineAudioInspector.jsx';
 import TimelineClipInspector from './TimelineClipInspector.jsx';
 import TimelineOverlayInspector from './TimelineOverlayInspector.jsx';
 import TimelineTransitionInspector from './TimelineTransitionInspector.jsx';
 
-/** "Свойства объекта" tab: shows whichever of clip / overlay / transition
- * inspector matches the current selection - the same 3-way switch that used
- * to live inline in EditorTimelineTools.jsx, unchanged logic, just relocated
- * into its own tab (see EditorSidePanel.jsx, which auto-switches here on any
- * new selection). */
+/** "Свойства объекта" tab: shows whichever of clip / overlay / transition /
+ * audio inspector matches the current selection - the same switch that used
+ * to live inline in EditorTimelineTools.jsx, just relocated into its own tab
+ * (see EditorSidePanel.jsx, which auto-switches here on any new selection).
+ * The audio branch is the newest of the four: the waveform row became a
+ * selectable object once it grew properties of its own (volume/fades/offset),
+ * matching how CapCut treats an audio clip. */
 export default function EditorObjectPropertiesTab({
   L, projectId, scenes, clips, overlays, selectedClipIds, selectedOverlayId, selectedTransitionClipId,
+  isAudioSelected, audioSettings, selectedTrack,
   titleCardVariants, logos, overlayVideoSources, actions,
 }) {
   const selectedClip = selectedClipIds.size === 1
@@ -25,6 +29,9 @@ export default function EditorObjectPropertiesTab({
     ? clips.find((c) => c.clip_id === selectedTransitionClipId) || null
     : null;
 
+  if (isAudioSelected) {
+    return <TimelineAudioInspector L={L} track={selectedTrack} audio={audioSettings} actions={actions} />;
+  }
   if (selectedOverlayId) {
     return (
       <TimelineOverlayInspector

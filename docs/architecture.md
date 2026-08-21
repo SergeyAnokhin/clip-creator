@@ -131,23 +131,70 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    to reorder, drag its edges to trim, **Ctrl/Cmd+drag an edge instead ramps
    `speed`** (the trim window stays put; only how fast it plays back changes
    - see `applyEdgeSpeed` in `lib/timeline.js`), drag the ruler to scrub, the
-   razor button (or `S`) to split the clip under the playhead, ctrl+wheel /
-   the toolbar to zoom. The clip inspector strip below the toolbar mirrors
+   razor button (or `S`/`Ctrl+B`) to split the clip under the playhead, the
+   wheel to scroll and ctrl+wheel / the toolbar to zoom.
+
+   Every drag is **magnetic** (`lib/timelineSnap.js`, applied in
+   `useTimelineDrag.js` — CapCut's Track Magnet): a clip edge, an overlay, a
+   marker or the scrub playhead snaps to the nearest clip boundary, overlay
+   edge, marker, the playhead itself, or either end of the timeline, with a
+   dashed guide line drawn where it landed. The threshold is a screen-pixel
+   distance divided by the current scale, so it feels equally sticky at any
+   zoom; holding **Alt** bypasses it for a frame-exact placement without
+   turning the global toggle (magnet button in the toolbar, persisted) off.
+   Snapping is decided in the hook rather than inside `lib/timeline.js`'s
+   math, which stays pure "apply this delta".
+
+   The keyboard model matches a desktop NLE: **left/right step the playhead
+   one frame** (Shift = 10), up/down walk between clips, Home/End jump to the
+   ends, `Q`/`W` trim the selected clip up to the playhead, `M` drops a
+   marker, `Ctrl+T` adds a text overlay, `Ctrl +/-/0` zoom. `EditorTimeline.
+   jsx`'s `onKeyDown` guards only against text fields — an earlier
+   `target !== currentTarget` guard silently killed every shortcut once focus
+   sat on a clip block, which arrow navigation does *by design*, so "walk to a
+   clip, press Delete" did nothing; `EditorTimeline.test.jsx` keeps a
+   regression test for that. `KeyboardShortcutsModal.jsx` is the single
+   published list of these bindings and is meant to be updated in the same
+   change as the handler.
+
+   **Markers** (`video_edit.markers[]`) are labelled moments on the ruler
+   (`TimelineMarker.jsx`) that the renderer never reads — they exist to be
+   snapped to. Besides `M`, the toolbar can place one per detected beat:
+   `lib/beats.js` runs onset detection over the bass envelope the waveform
+   decode already produced (`hooks/useAudioPeaks.js`, lifted out of
+   `TimelineAudioTrack.jsx` once it had two consumers), so nothing is decoded
+   twice. That batch replaces the whole marker set rather than appending, so
+   it is idempotent and undoes in one step. For a tool whose whole purpose is
+   cutting footage to a generated song, "cut on the beat" is the single
+   highest-leverage thing the timeline can offer.
+
+   The clip inspector strip below the toolbar mirrors
    both gestures as exact-value fields, adds a **reverse** toggle next to the
    speed field (plays the trimmed window back to front - a real ffmpeg
    `reverse` filter at render time, not simulated by the in-browser preview,
    see `docs/data-model.md`'s `EditorClip` section), and a reset button (back
    to "full source clip, forward, 1x") per clip. Right-clicking the program
    monitor itself opens `EditorPreviewContextMenu.jsx`, a shortcut to the same
-   split/copy/paste/duplicate/speed/reverse/reset actions for whichever clip
-   is currently selected, or - if none is - whichever sits under the playhead
-   (`lib/timeline.js`'s `findActiveClip`), so the user doesn't have to go find
-   the clip on the timeline first. `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every
+   split/freeze/trim-to-playhead/copy/paste/duplicate/speed/reverse/reset/
+   delete actions for whichever clip is currently selected, or - if none is -
+   whichever sits under the playhead (`lib/timeline.js`'s `findActiveClip`),
+   so the user doesn't have to go find the clip on the timeline first. The
+   *same* component opens on a right-click on a timeline clip block, targeting
+   that block — one menu, two surfaces.
+
+   The inspector also carries **colour correction** (`clip.adjust`, four
+   sliders plus warm/cool/mono/punch presets → one ffmpeg `eq` filter, and no
+   filter at all when it is untouched) and a **freeze-frame** button
+   (`clip.freeze` — splits at the playhead and inserts a held still, exactly
+   what CapCut's freeze does). Colour correction is previewed live as a CSS
+   `filter` on the monitor's `<video>`, within the same "approximate preview"
+   tolerance as everything else here. `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` undo/redo every
    `video_edit` edit (`useEditorStage.js`'s `past`/`future` history, coalescing
    rapid edits - a drag's continuous pointermoves, a fast run of keystrokes -
    into one step the same way `PosterConstructor.jsx`'s `commit()` does;
    renders aren't part of the undoable document, only clip order/trim/speed/
-   reverse/transitions/fades, overlays, and the picked track). Above the clip row sits
+   reverse/transitions/fades, overlays, markers, audio settings and the picked
+   track). Above the clip row sits
    a track for **overlays** - title-card variants, global logos, or an
    uploaded video, placed over the video for their own
    `[start_ms, start_ms+duration_ms)` window, added from a collapsible picker
@@ -241,6 +288,35 @@ blocks   style +  real audio  story-   images    poster text  animate  zip the  
    normal scrolling stack and stay mouse-only below the mobile/tablet
    breakpoint — a keyboard alternative (Tab to a clip, arrow keys between
    clips, Enter/Space to select) covers non-mouse desktop use instead.
+
+   The **audio row is itself a selectable object** — clicking the waveform
+   shows `TimelineAudioInspector.jsx` (volume, fade in/out, and a track
+   offset that skips the song's head so the video can start on the chorus),
+   writing `video_edit.audio`. This is the fourth mutually-exclusive
+   selection kind alongside clip/overlay/transition, and it exists because
+   both CapCut and Movavi put volume and fades on the audio clip itself; the
+   renderer had no audio controls at all before it. The offset is mirrored in
+   `useEditorPreview.js` by shifting the playhead↔`<audio>.currentTime`
+   relationship, so the playhead means the same moment in the preview and in
+   the render.
+
+   **Export settings** (`video_edit.export` — resolution / fps / quality) live
+   in the Клип tab next to the canvas orientation: orientation picks the
+   canvas *shape*, export scales it and sets `fps` plus `-crf`/`-preset`.
+   Before this, 1920×1080 / 30fps / no explicit CRF were hard-coded.
+
+   **Text overlays** (`kind: 'text'`) are the one overlay kind with no stored
+   source file: the EDL carries the text and its styling, the preview draws it
+   with a Konva `Text` node, and the render rasterizes the same values to a
+   transparent PNG with Pillow that then rides the **existing** image-overlay
+   compositing path (`providers/editor.py`'s `_render_text_png`, cached
+   content-addressed under `editor/text_cache/`). Rasterizing rather than
+   reaching for ffmpeg's `drawtext` is deliberate: `drawtext` would need both
+   the fontfile path (a drive colon, on this project's Windows dev host) and
+   the text itself (quotes, colons, newlines, Cyrillic) escaped into the
+   filtergraph, and would add a fresh failure mode to it; a PNG adds none. The
+   font list is restricted to faces that exist both in the browser and on the
+   render host so the two sides agree — see `docs/data-model.md`.
 
    `TestRangeModal.jsx` (opened by the test-render icon button in
    `EditorBottomToolbar.jsx`, not a ruler gesture) picks an ephemeral `{startMs,

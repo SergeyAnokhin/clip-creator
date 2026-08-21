@@ -1,18 +1,56 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Film, Keyboard, Maximize2, Plus, Upload, X, ZoomIn, ZoomOut,
+  Film, Flag, FlagOff, Keyboard, Magnet, Maximize2, Plus, Type, Upload, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { mediaUrl } from '../../api/client.js';
 import { sceneLabel } from '../../lib/editorClipLabel.js';
+import { formatTimecode, parseTimecode } from '../../lib/format.js';
+import { TIMELINE_FPS } from '../../lib/timeline.js';
+import { detectBeats } from '../../lib/beats.js';
 import { PickerRow, PickerThumb } from './PosterPanels.jsx';
 
-function formatTimecode(ms) {
-  const total = Math.max(0, Math.round(ms / 1000));
-  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
+/** The playhead position as an editable `M:SS:FF` field - readable *and*
+ * typeable to the frame, the way a desktop NLE's timecode box works. Local
+ * `draft` state exists only while the field has focus, so the value keeps
+ * following the playhead during playback but doesn't fight what is being
+ * typed. An unparseable entry is simply discarded on blur (`parseTimecode`
+ * returns null) rather than seeking to 0. */
+function TimecodeField({ L, playheadMs, onSeek }) {
+  const [draft, setDraft] = useState(null);
+  const value = draft ?? formatTimecode(playheadMs, TIMELINE_FPS);
+
+  function commit() {
+    const ms = draft == null ? null : parseTimecode(draft, TIMELINE_FPS);
+    if (ms != null) onSeek(ms);
+    setDraft(null);
+  }
+
+  return (
+    <input
+      className="field tl-timecode-input"
+      value={value}
+      aria-label={L.editor_timecodeLabel}
+      title={L.editor_timecodeLabel}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => setDraft(formatTimecode(playheadMs, TIMELINE_FPS))}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(null);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
 }
 
-/** The Editor timeline's portaled toolbar-strip content: zoom, the test-range
- * chip, and the add-scene/add-overlay pickers - what's left here after the
+/** The Editor timeline's portaled toolbar-strip content: the editable
+ * timecode, the snap (magnet) toggle, zoom (buttons + slider), the beat/clear
+ * marker buttons, the test-range chip, and the add-scene/add-overlay pickers -
+ * what's left here after the
  * split/undo/redo buttons and the object inspector moved into
  * EditorBottomToolbar.jsx/EditorObjectPropertiesTab.jsx (EditorSidePanel.jsx's
  * tab shell). Split out of EditorTimeline.jsx, which still owns the
@@ -24,9 +62,24 @@ function formatTimecode(ms) {
 export default function EditorTimelineTools({
   L, projectId, scenes, clips, titleCardVariants, logos, overlayVideoSources, actions,
   playheadMs, contentDurationMs, scale, fitScale, maxScale,
-  testRange, onClearTestRange, onZoomIn, onZoomOut, onZoomFit, onOpenShortcuts,
+  testRange, onClearTestRange, onZoomIn, onZoomOut, onZoomFit, onZoomTo, onOpenShortcuts,
+  snapEnabled, onToggleSnap, audioPeaks, audioDurationMs, markerCount, onSeek,
 }) {
   const overlayVideoInputRef = useRef(null);
+  // Beat detection runs over the decoded bass envelope the waveform already
+  // produced (hooks/useAudioPeaks.js) - nothing is decoded a second time, so
+  // this is a cheap synchronous pass, but it still only runs on demand rather
+  // than on every render.
+  const [beatsBusy, setBeatsBusy] = useState(false);
+  useEffect(() => { setBeatsBusy(false); }, [audioPeaks]);
+
+  function placeBeatMarkers() {
+    if (!audioPeaks || !audioDurationMs) return;
+    setBeatsBusy(true);
+    const beats = detectBeats(audioPeaks.bass, audioDurationMs);
+    actions.setBeatMarkers(beats);
+    setBeatsBusy(false);
+  }
   async function handleOverlayVideoFile(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -46,8 +99,17 @@ export default function EditorTimelineTools({
   return (
     <>
       <div className="tl-toolbar">
-        <span className="tl-timecode">{formatTimecode(playheadMs)}<span className="tl-timecode-total"> / {formatTimecode(contentDurationMs)}</span></span>
+        <TimecodeField L={L} playheadMs={playheadMs} onSeek={onSeek} />
+        <span className="tl-timecode-total">/ {formatTimecode(contentDurationMs, TIMELINE_FPS)}</span>
         <div className="tl-toolbar-spacer" />
+        <button
+          className={`icon-btn${snapEnabled ? ' is-active' : ''}`}
+          title={snapEnabled ? L.editor_timelineSnapOn : L.editor_timelineSnapOff}
+          aria-pressed={!!snapEnabled}
+          onClick={() => onToggleSnap(!snapEnabled)}
+        >
+          <Magnet size={14} />
+        </button>
         <button className="icon-btn" title={L.editor_toolZoomOut} onClick={onZoomOut} disabled={scale <= fitScale}>
           <ZoomOut size={14} />
         </button>
@@ -61,12 +123,49 @@ export default function EditorTimelineTools({
           <Keyboard size={14} />
         </button>
       </div>
+
+      {/* Zoom as a continuous slider as well as +/- steps - dragging straight
+          to a rough zoom level is how CapCut/Movavi's own timeline zoom
+          works, and the stepped buttons alone need many clicks to cross the
+          fit..max range. Exponential, so each half of the travel doubles/
+          halves the same way the buttons' own ZOOM_FACTOR does. */}
+      <div className="tl-toolbar tl-zoom-row">
+        <input
+          type="range" className="tl-zoom-slider"
+          min={0} max={1000} step={1}
+          value={Math.round(
+            maxScale > fitScale ? (Math.log(scale / fitScale) / Math.log(maxScale / fitScale)) * 1000 : 0,
+          )}
+          aria-label={L.editor_zoomSliderLabel}
+          title={L.editor_zoomSliderLabel}
+          onChange={(e) => {
+            if (!(maxScale > fitScale)) return;
+            const t = Number(e.target.value) / 1000;
+            onZoomTo(fitScale * ((maxScale / fitScale) ** t));
+          }}
+        />
+        <button
+          className="icon-btn" title={L.editor_beatMarkers}
+          onClick={placeBeatMarkers} disabled={!audioPeaks || beatsBusy}
+        >
+          <Flag size={14} />
+        </button>
+        <button
+          className="icon-btn" title={L.editor_markersClear}
+          onClick={() => actions.clearMarkers()} disabled={!markerCount}
+        >
+          <FlagOff size={14} />
+        </button>
+      </div>
+
       <span className="tl-hint">{L.editor_timelineHint}</span>
 
       {testRange && (
         <span className="tl-inspector-label tl-inspector-row">
           <span className="tl-inspector-rowlabel">{L.editor_testRangeLabel}</span>
-          <span className="tl-timecode">{formatTimecode(testRange.startMs)} → {formatTimecode(testRange.endMs)}</span>
+          <span className="tl-timecode">
+            {formatTimecode(testRange.startMs, TIMELINE_FPS)} → {formatTimecode(testRange.endMs, TIMELINE_FPS)}
+          </span>
           <button className="icon-btn" title={L.editor_testRangeClear} onClick={onClearTestRange}>
             <X size={13} />
           </button>
@@ -131,6 +230,11 @@ export default function EditorTimelineTools({
             </span>
           </PickerThumb>
         ))}
+        <PickerThumb title={`${L.overlay_kindText} (Ctrl+T)`} onClick={() => actions.addTextOverlay()}>
+          <span style={{ display: 'flex', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
+            <Type size={20} color="var(--text-dim)" />
+          </span>
+        </PickerThumb>
         <PickerThumb title={L.overlay_kindVideoUpload} onClick={() => overlayVideoInputRef.current?.click()}>
           <span style={{ display: 'flex', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
             <Upload size={18} color="var(--text-dim)" />

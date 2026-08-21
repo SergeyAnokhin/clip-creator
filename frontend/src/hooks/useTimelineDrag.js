@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { applyEdgeSpeed, applyEdgeTrim, dropIndexForStart } from '../lib/timeline.js';
 import { applyOverlayEdgeResize, applyOverlayMove } from '../lib/overlays.js';
+import { buildSnapTargets, snapDelta, snapMs, SNAP_PX } from '../lib/timelineSnap.js';
 
 /** EditorTimeline.jsx's direct-manipulation gesture state machine - every
  * pointer drag on the timeline (reorder a clip, trim/speed-ramp its edges,
@@ -15,15 +16,47 @@ import { applyOverlayEdgeResize, applyOverlayMove } from '../lib/overlays.js';
  * is read fresh on every render (not memoized), so an in-progress drag keeps
  * using up-to-date math if the timeline is zoomed mid-drag (the pointermove
  * effect's own `[drag, scale]` dependency array re-subscribes when it
- * changes, exactly as when this lived inline in EditorTimeline.jsx). */
+ * changes, exactly as when this lived inline in EditorTimeline.jsx).
+ *
+ * Magnetic snapping (`lib/timelineSnap.js`, CapCut's Track Magnet) is applied
+ * here rather than inside the gesture-specific `lib/` helpers, because it is
+ * a property of the *interaction*, not of the math: `applyEdgeTrim` and
+ * friends stay pure "apply this delta" functions, and this hook decides what
+ * the delta actually was once the pointer has been pulled to a nearby clip
+ * boundary / overlay edge / marker / the playhead. Holding Alt at any moment
+ * during a drag bypasses it, so a frame-exact placement never needs the
+ * global toggle turned off. `drag.snapMs` carries whichever target won, for
+ * EditorTimeline.jsx to draw a guide line at. */
 export function useTimelineDrag({
-  actions, scenes, clips, scale,
+  actions, scenes, clips, overlays, markers, scale, playheadMs, totalDurationMs, snapEnabled,
 }) {
   const contentRef = useRef(null);
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
   const [drag, setDrag] = useState(null);
   const [dragDx, setDragDx] = useState(0);
+
+  const snapThresholdMs = SNAP_PX / scale;
+  function targetsFor({ excludeOverlayId, excludeClipId, includePlayhead = true } = {}) {
+    return buildSnapTargets({
+      clips: clipsRef.current,
+      overlays,
+      markers,
+      playheadMs: includePlayhead ? playheadMs : undefined,
+      totalDurationMs,
+      excludeOverlayId,
+      excludeClipId,
+    });
+  }
+  /** Whether snapping should run for this pointer event - the global toggle,
+   * unless Alt is held right now. Checked per move rather than once per drag
+   * so the user can reach for Alt mid-drag to place something exactly. */
+  function snapActive(e) {
+    return snapEnabled && !e.altKey;
+  }
+  function setSnapIndicator(snappedTo) {
+    setDrag((current) => (current && current.snapMs !== snappedTo ? { ...current, snapMs: snappedTo } : current));
+  }
 
   function pointerToMs(clientX) {
     const rect = contentRef.current?.getBoundingClientRect();
@@ -36,17 +69,50 @@ export function useTimelineDrag({
 
     function onMove(e) {
       if (drag.mode === 'scrub') {
-        actions.seek(pointerToMs(e.clientX));
+        const raw = pointerToMs(e.clientX);
+        const snapped = snapActive(e)
+          ? snapMs(raw, targetsFor({ includePlayhead: false }), snapThresholdMs)
+          : { ms: raw, snappedTo: null };
+        setSnapIndicator(snapped.snappedTo);
+        actions.seek(snapped.ms);
+        return;
+      }
+      if (drag.mode === 'marker') {
+        const raw = pointerToMs(e.clientX);
+        const snapped = snapActive(e)
+          ? snapMs(raw, targetsFor(), snapThresholdMs)
+          : { ms: raw, snappedTo: null };
+        setSnapIndicator(snapped.snappedTo);
+        actions.moveMarker(drag.marker.marker_id, snapped.ms);
         return;
       }
       const dx = e.clientX - drag.startX;
-      if (drag.mode === 'move' || drag.mode === 'marquee' || drag.mode === 'overlay-move') {
+      if (drag.mode === 'move' || drag.mode === 'marquee') {
         setDragDx(dx);
+        return;
+      }
+      if (drag.mode === 'overlay-move') {
+        // Both edges are snap candidates - whichever needs the smaller nudge
+        // wins, so an overlay lines up by its end just as easily as by its
+        // start (CapCut behaves the same way).
+        const targets = targetsFor({ excludeOverlayId: drag.overlay.overlay_id });
+        const rawDeltaMs = dx / scale;
+        const endMs = drag.overlay.start_ms + drag.overlay.duration_ms;
+        const byStart = snapDelta(drag.overlay.start_ms, rawDeltaMs, targets, snapThresholdMs, snapActive(e));
+        const byEnd = snapDelta(endMs, rawDeltaMs, targets, snapThresholdMs, snapActive(e));
+        const best = Math.abs(byStart.deltaMs - rawDeltaMs) <= Math.abs(byEnd.deltaMs - rawDeltaMs) ? byStart : byEnd;
+        setSnapIndicator(best.snappedTo);
+        setDragDx(best.deltaMs * scale);
         return;
       }
       if (drag.mode === 'overlay-trim-start' || drag.mode === 'overlay-trim-end') {
         const edge = drag.mode === 'overlay-trim-start' ? 'start' : 'end';
-        const { startMs, durationMs } = applyOverlayEdgeResize(drag.overlay, edge, dx / scale);
+        const anchorMs = edge === 'start' ? drag.overlay.start_ms : drag.overlay.start_ms + drag.overlay.duration_ms;
+        const snapped = snapDelta(
+          anchorMs, dx / scale, targetsFor({ excludeOverlayId: drag.overlay.overlay_id }), snapThresholdMs, snapActive(e),
+        );
+        setSnapIndicator(snapped.snappedTo);
+        const { startMs, durationMs } = applyOverlayEdgeResize(drag.overlay, edge, snapped.deltaMs);
         actions.setOverlayTiming(drag.overlay.overlay_id, startMs, durationMs);
         return;
       }
@@ -56,7 +122,12 @@ export function useTimelineDrag({
         actions.setClipSpeed(drag.clip.clip_id, speed);
         return;
       }
-      const { trimStartMs, trimEndMs } = applyEdgeTrim(drag.clip, drag.sourceDurationMs, edge, dx / scale);
+      const anchorMs = edge === 'start' ? drag.clip.startMs : drag.clip.endMs;
+      const snapped = snapDelta(
+        anchorMs, dx / scale, targetsFor({ excludeClipId: drag.clip.clip_id }), snapThresholdMs, snapActive(e),
+      );
+      setSnapIndicator(snapped.snappedTo);
+      const { trimStartMs, trimEndMs } = applyEdgeTrim(drag.clip, drag.sourceDurationMs, edge, snapped.deltaMs);
       actions.setClipTrim(drag.clip.clip_id, trimStartMs, trimEndMs);
     }
 
@@ -66,7 +137,11 @@ export function useTimelineDrag({
         const toIndex = dropIndexForStart(clipsRef.current, drag.index, newStartMs);
         if (toIndex !== drag.index) actions.reorderClip(drag.index, toIndex);
       } else if (drag.mode === 'overlay-move') {
-        const { startMs } = applyOverlayMove(drag.overlay, (e.clientX - drag.startX) / scale);
+        // `dragDx` is already the *snapped* offset the block was drawn at
+        // (see onMove) - re-deriving it from the raw pointer here would drop
+        // the snap on release, i.e. the "it looked aligned until I let go"
+        // bug.
+        const { startMs } = applyOverlayMove(drag.overlay, dragDx / scale);
         actions.setOverlayTiming(drag.overlay.overlay_id, startMs, drag.overlay.duration_ms);
       } else if (drag.mode === 'marquee') {
         const endMs = pointerToMs(e.clientX);
@@ -87,7 +162,7 @@ export function useTimelineDrag({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, scale]);
+  }, [drag, dragDx, scale, snapEnabled, playheadMs, overlays, markers, totalDurationMs]);
 
   function startScrub(e) {
     if (e.button !== 0) return;
@@ -169,6 +244,15 @@ export function useTimelineDrag({
     setDrag({ mode: edge === 'start' ? 'overlay-trim-start' : 'overlay-trim-end', startX: e.clientX, overlay });
   }
 
+  /** Drag a ruler marker to a new moment - snapped like everything else, so
+   * a beat marker nudged by hand still lands on a clip boundary if that is
+   * what the user was aiming at. */
+  function startMarkerDrag(e, marker) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    setDrag({ mode: 'marker', startX: e.clientX, marker });
+  }
+
   function onOverlayKeyDown(e, overlay) {
     if (e.code === 'Enter' || e.code === 'Space') {
       e.preventDefault();
@@ -180,6 +264,6 @@ export function useTimelineDrag({
   return {
     contentRef, drag, dragDx,
     startScrub, startContentPointerDown, startClipDrag, onClipKeyDown,
-    startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown,
+    startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown, startMarkerDrag,
   };
 }

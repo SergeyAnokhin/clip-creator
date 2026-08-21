@@ -2,9 +2,9 @@
  * Pure Editor-stage overlay-lane math, kept out of components/hooks so it can
  * be unit tested the same way `lib/timeline.js` is.
  *
- * An overlay is `{overlay_id, kind: 'title_card'|'logo'|'video', source_id,
- * start_ms, duration_ms, x_pct, y_pct, width_pct, height_pct, rotation_deg,
- * opacity}` - unlike a clip, overlays don't tile back to back: `start_ms`/
+ * An overlay is `{overlay_id, kind: 'title_card'|'logo'|'video'|'text',
+ * source_id, start_ms, duration_ms, x_pct, y_pct, width_pct, height_pct,
+ * rotation_deg, opacity}` - unlike a clip, overlays don't tile back to back: `start_ms`/
  * `duration_ms` are free-floating coordinates on the same output-timeline
  * millisecond axis `lib/timeline.js`'s `computeTimelineClips` uses, so an
  * overlay can sit anywhere, overlap another overlay, or leave gaps.
@@ -31,6 +31,13 @@
  * rotating the overlay directly on the program monitor (`EditorPreview.jsx`,
  * via the shared `components/shared/CanvasLayer.jsx` primitive) - mirrors
  * `providers/editor.py`'s overlay compositing on the render side.
+ *
+ * `kind: 'text'` is the one kind with no `source_id`: it carries its own
+ * `text` block (see `DEFAULT_TEXT_OVERLAY` below) and is turned into a
+ * transparent PNG by `providers/editor.py` at render time, which then feeds
+ * the *same* overlay compositing path as an image. Everything else about it -
+ * placement, timing, rotation, opacity, fades - is identical to an image
+ * overlay, so nothing in this file special-cases it.
  */
 
 export const DEFAULT_OVERLAY_DURATION_MS = 3000;
@@ -38,6 +45,45 @@ export const DEFAULT_OVERLAY_WIDTH_PCT = 20;
 export const MIN_OVERLAY_WIDTH_PCT = 5;
 export const MAX_OVERLAY_WIDTH_PCT = 60;
 export const MIN_OVERLAY_MS = 200;
+
+// `kind: 'text'` overlay fonts. Deliberately *not* the Google-Font list
+// `lib/posterLayers.js` uses: a text overlay is drawn live with Konva in the
+// browser but rasterized with Pillow on the render side
+// (`providers/editor.py`), so both sides have to resolve the same face or the
+// preview lies. These eight ship with Windows *and* are web-safe *and* carry
+// Cyrillic, which is the intersection that keeps the two renderers in
+// agreement. `value` is what goes into the EDL and into Konva's
+// `fontFamily`; `providers/editor.py`'s `_TEXT_FONT_FILES` maps the same keys
+// to real font files.
+export const TEXT_FONTS = [
+  { value: 'Arial', label: 'Arial' },
+  { value: 'Segoe UI', label: 'Segoe UI' },
+  { value: 'Times New Roman', label: 'Times New Roman' },
+  { value: 'Georgia', label: 'Georgia' },
+  { value: 'Verdana', label: 'Verdana' },
+  { value: 'Trebuchet MS', label: 'Trebuchet MS' },
+  { value: 'Impact', label: 'Impact' },
+  { value: 'Courier New', label: 'Courier New' },
+];
+
+// Font size a text overlay is *rasterized* at, in px. It is not a user-facing
+// control: how big the text ends up on screen is `width_pct`/`height_pct`,
+// exactly like every other overlay. A generously large raster keeps the text
+// crisp after that scale-up on a 4K canvas without making the PNG enormous.
+export const TEXT_RASTER_FONT_SIZE = 160;
+
+/** The `text` block a freshly added text overlay starts with - white text
+ * with a thin dark outline reads on any footage, which is the same reason
+ * the poster constructor's default text layer has a halo. */
+export const DEFAULT_TEXT_OVERLAY = {
+  content: '',
+  font: TEXT_FONTS[0].value,
+  color: '#ffffff',
+  outline_color: '#000000',
+  outline_width: 4,
+  align: 'center',
+  line_spacing: 1.2,
+};
 
 // Older saved overlays (before free x/y/w/h/rotation placement existed) used
 // a 9-point grid instead: `position` (one of the keys below) pinned the

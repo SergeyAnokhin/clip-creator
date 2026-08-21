@@ -1,8 +1,9 @@
 import {
-  Copy, Rewind, RotateCcw, Trash2,
+  Copy, Rewind, RotateCcw, Snowflake, Trash2,
 } from 'lucide-react';
 import {
-  DEFAULT_FADE_MS, DEFAULT_FIT, MAX_FIT_ZOOM, MAX_SPEED, MIN_FIT_ZOOM, MIN_SPEED, clampTrim,
+  DEFAULT_ADJUST, DEFAULT_FADE_MS, DEFAULT_FIT, MAX_FIT_ZOOM, MAX_SPEED, MIN_FIT_ZOOM, MIN_SPEED,
+  clampTrim, isDefaultAdjust,
 } from '../../lib/timeline.js';
 import { EffectSlider } from './PosterPanels.jsx';
 
@@ -93,6 +94,68 @@ function ClipFitRow({ L, fit, onChange }) {
           />
         </>
       )}
+    </div>
+  );
+}
+
+/** Colour correction for one clip - `{brightness, contrast, saturation,
+ * gamma}` in ffmpeg `eq` semantics, which `providers/editor.py` appends as a
+ * single `eq=` filter (and skips entirely when everything is at its default,
+ * so an untouched clip's filter graph is byte-for-byte what it was before
+ * this control existed). This is CapCut/Movavi's "Adjust" panel, the one
+ * post-processing control users reach for on nearly every clip.
+ *
+ * The presets are just those same four numbers - there is no separate "LUT"
+ * concept in the EDL, so picking one and then nudging a slider works exactly
+ * as expected. A top-level component for the same remount/focus reason
+ * `FadeRow` is. */
+function ClipAdjustRow({ L, adjust, onChange }) {
+  const value = { ...DEFAULT_ADJUST, ...(adjust || {}) };
+  const presets = [
+    { key: 'none', patch: null },
+    { key: 'warm', patch: { brightness: 0.04, contrast: 1.08, saturation: 1.25, gamma: 1 } },
+    { key: 'cool', patch: { brightness: -0.02, contrast: 1.12, saturation: 0.85, gamma: 1 } },
+    { key: 'mono', patch: { brightness: 0, contrast: 1.15, saturation: 0, gamma: 1 } },
+    { key: 'punch', patch: { brightness: 0, contrast: 1.35, saturation: 1.15, gamma: 0.95 } },
+  ];
+
+  function patch(next) {
+    onChange({ ...value, ...next });
+  }
+
+  return (
+    <div className="tl-inspector-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span className="tl-inspector-label">
+        <span className="tl-inspector-rowlabel">{L.editor_clipAdjustLabel}</span>
+      </span>
+      <div className="tl-inspector-row tl-transition-types">
+        {presets.map((preset) => (
+          <button
+            key={preset.key} type="button"
+            className={`tl-transition-chip${
+              preset.key === 'none' && isDefaultAdjust(adjust) ? ' is-selected' : ''}`}
+            onClick={() => onChange(preset.patch)}
+          >
+            {L[`editor_clipAdjustPreset${preset.key[0].toUpperCase()}${preset.key.slice(1)}`]}
+          </button>
+        ))}
+      </div>
+      <EffectSlider
+        label={L.editor_clipAdjustBrightness} value={Math.round(value.brightness * 100)} min={-100} max={100}
+        unit="%" onChange={(v) => patch({ brightness: v / 100 })} L={L}
+      />
+      <EffectSlider
+        label={L.editor_clipAdjustContrast} value={Math.round(value.contrast * 100)} min={0} max={300}
+        unit="%" onChange={(v) => patch({ contrast: v / 100 })} L={L}
+      />
+      <EffectSlider
+        label={L.editor_clipAdjustSaturation} value={Math.round(value.saturation * 100)} min={0} max={300}
+        unit="%" onChange={(v) => patch({ saturation: v / 100 })} L={L}
+      />
+      <EffectSlider
+        label={L.editor_clipAdjustGamma} value={Math.round(value.gamma * 100)} min={10} max={300}
+        unit="%" onChange={(v) => patch({ gamma: v / 100 })} L={L}
+      />
     </div>
   );
 }
@@ -192,12 +255,21 @@ export default function TimelineClipInspector({
 
       <ClipFitRow L={L} fit={clip.fit} onChange={(fit) => actions.setClipFit(clip.clip_id, fit)} />
 
+      <ClipAdjustRow L={L} adjust={clip.adjust} onChange={(adjust) => actions.setClipAdjust(clip.clip_id, adjust)} />
+
       <FadeRow L={L} label={L.editor_fadeInLabel} fade={clip.fade_in} onSet={(color, ms) => actions.setClipFadeIn(clip.clip_id, color, ms)} />
       <FadeRow L={L} label={L.editor_fadeOutLabel} fade={clip.fade_out} onSet={(color, ms) => actions.setClipFadeOut(clip.clip_id, color, ms)} />
 
+      {!!clip.freeze && <span className="tl-inspector-warn tl-inspector-row">❄ {L.editor_clipFreezeHint}</span>}
       {!sourceDurationMs && <span className="tl-inspector-warn tl-inspector-row">⚠ {L.editor_unknownDuration}</span>}
 
       <div className="tl-inspector-actions">
+        <button
+          className="icon-btn" title={L.editor_ctxMenuFreeze}
+          onClick={() => actions.freezeAtPlayhead()}
+        >
+          <Snowflake size={14} />
+        </button>
         <button
           className="icon-btn" title={L.editor_clipReset} disabled={isDefault}
           onClick={() => actions.resetClip(clip.clip_id)}

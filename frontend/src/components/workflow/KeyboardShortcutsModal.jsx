@@ -7,9 +7,20 @@ const GROUPS = [
     titleKey: 'editor_shortcutsGroupPlayback',
     items: [
       { keys: ['Space'], labelKey: 'editor_kbd_playPause' },
-      { keys: ['←', '→'], labelKey: 'editor_kbd_navigate' },
-      { keys: ['Ctrl', 'Wheel'], labelKey: 'editor_kbd_zoom' },
+      { keys: ['←', '→'], labelKey: 'editor_kbd_frameStep' },
+      { keys: ['Shift', '←/→'], labelKey: 'editor_kbd_frameStepBig' },
+      { keys: ['↑', '↓'], labelKey: 'editor_kbd_navigate' },
+      { keys: ['Home', 'End'], labelKey: 'editor_kbd_homeEnd' },
       { keys: ['Esc'], labelKey: 'editor_kbd_fullscreenExit' },
+    ],
+  },
+  {
+    titleKey: 'editor_shortcutsGroupView',
+    items: [
+      { keys: ['Ctrl', 'Wheel'], labelKey: 'editor_kbd_zoom' },
+      { keys: ['Wheel'], labelKey: 'editor_kbd_scroll' },
+      { keys: ['Ctrl', '+/−/0'], labelKey: 'editor_kbd_zoomKeys' },
+      { keys: ['Alt', 'Drag'], labelKey: 'editor_kbd_snapBypass' },
     ],
   },
   {
@@ -20,11 +31,24 @@ const GROUPS = [
       { keys: ['Ctrl', 'Click'], labelKey: 'editor_kbd_toggleSelect' },
       { keys: ['Ctrl', 'A'], labelKey: 'editor_kbd_selectAll' },
       { keys: ['S'], labelKey: 'editor_kbd_split' },
+      { keys: ['Ctrl', 'B'], labelKey: 'editor_kbd_split' },
+      { keys: ['Q'], labelKey: 'editor_kbd_trimStart' },
+      { keys: ['W'], labelKey: 'editor_kbd_trimEnd' },
       { keys: ['Delete'], labelKey: 'editor_kbd_delete' },
       { keys: ['Ctrl', 'D'], labelKey: 'editor_kbd_duplicate' },
       { keys: ['Ctrl', 'C'], labelKey: 'editor_kbd_copy' },
       { keys: ['Ctrl', 'V'], labelKey: 'editor_kbd_paste' },
       { keys: ['Ctrl', 'Edge drag'], labelKey: 'editor_kbd_ctrlEdge' },
+      { keys: ['Right click'], labelKey: 'editor_kbd_clipMenu' },
+    ],
+  },
+  {
+    titleKey: 'editor_shortcutsGroupMarkers',
+    items: [
+      { keys: ['M'], labelKey: 'editor_kbd_marker' },
+      { keys: ['Drag'], labelKey: 'editor_kbd_markerMove' },
+      { keys: ['Double click'], labelKey: 'editor_kbd_markerRename' },
+      { keys: ['Right click'], labelKey: 'editor_kbd_markerDelete' },
     ],
   },
   {
@@ -37,6 +61,7 @@ const GROUPS = [
   {
     titleKey: 'editor_shortcutsGroupOverlays',
     items: [
+      { keys: ['Ctrl', 'T'], labelKey: 'editor_kbd_addText' },
       { keys: ['Drag'], labelKey: 'editor_kbd_overlayMove' },
       { keys: ['Edge drag'], labelKey: 'editor_kbd_overlayResize' },
       { keys: ['Delete'], labelKey: 'editor_kbd_overlayDelete' },

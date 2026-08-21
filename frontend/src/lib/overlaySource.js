@@ -20,6 +20,14 @@ import { mediaUrl } from '../api/client.js';
 export function resolveOverlaySource(overlay, {
   projectId, titleCardVariants, logos, overlayVideoSources, L,
 }) {
+  // A text overlay has no source file at all until the render rasterizes it
+  // (`providers/editor.py`), so there is nothing to show a thumbnail from -
+  // the label carries the actual text instead, which is what the timeline
+  // block and the inspector both want to display anyway.
+  if (overlay.kind === 'text') {
+    const content = (overlay.text?.content || '').trim();
+    return { src: null, label: content || L.overlay_kindText };
+  }
   if (overlay.kind === 'logo') {
     const logo = (logos || []).find((item) => item.id === overlay.source_id);
     return {

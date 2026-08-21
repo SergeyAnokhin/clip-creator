@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import {
-  ClipboardCopy, ClipboardPaste, Copy, Gauge, RotateCcw, Rewind, Scissors,
+  ArrowLeftToLine, ArrowRightToLine, ClipboardCopy, ClipboardPaste, Copy, Gauge,
+  RotateCcw, Rewind, Scissors, Snowflake, Trash2,
 } from 'lucide-react';
 import { nextSpeedPreset } from '../../lib/timeline.js';
 
@@ -22,14 +23,13 @@ function MenuItem({
   );
 }
 
-/** Right-click menu for the program monitor (`EditorPreview.jsx`) - a
- * shortcut to actions that already exist elsewhere (the toolbar, the clip
- * inspector, keyboard shortcuts) for whichever clip sits under the playhead,
- * without making the user go find the timeline block first. `clip` is
- * already the resolved target (see EditorPreview.jsx's own comment on how
- * it's picked - the single selected clip if there is exactly one, else
- * whatever's under the playhead) - this component only renders, it doesn't
- * decide who the target is.
+/** Right-click menu for a clip - used from both the program monitor
+ * (`EditorPreview.jsx`, targeting whatever sits under the playhead) and the
+ * timeline itself (`EditorTimeline.jsx`, targeting the block that was
+ * right-clicked). A shortcut to actions that already exist elsewhere (the
+ * toolbar, the clip inspector, keyboard shortcuts) so neither surface makes
+ * the user go find the other one first; `clip` is already the resolved
+ * target - this component only renders, it doesn't decide who the target is.
  *
  * `Paste` is the one row not gated on `clip` - `actions.pasteClips` always
  * appends to the *end* of the timeline regardless of where the user right-
@@ -75,6 +75,19 @@ export default function EditorPreviewContextMenu({
         icon={Scissors} label={L.editor_ctxMenuSplit} disabled={!clip}
         onClick={() => run(actions.splitAtPlayhead)}
       />
+      <MenuItem
+        icon={Snowflake} label={L.editor_ctxMenuFreeze} disabled={!clip}
+        onClick={() => run(actions.freezeAtPlayhead)}
+      />
+      <div className="editor-ctxmenu-sep" />
+      <MenuItem
+        icon={ArrowLeftToLine} label={L.editor_ctxMenuTrimStart} disabled={!clip}
+        onClick={() => run(() => actions.trimClipToPlayhead(clip.clip_id, 'start'))}
+      />
+      <MenuItem
+        icon={ArrowRightToLine} label={L.editor_ctxMenuTrimEnd} disabled={!clip}
+        onClick={() => run(() => actions.trimClipToPlayhead(clip.clip_id, 'end'))}
+      />
       <div className="editor-ctxmenu-sep" />
       <MenuItem
         icon={ClipboardCopy} label={L.editor_ctxMenuCopy} disabled={!clip}
@@ -101,6 +114,10 @@ export default function EditorPreviewContextMenu({
       <MenuItem
         icon={RotateCcw} label={L.editor_ctxMenuReset} disabled={!clip || isDefault}
         onClick={() => run(() => actions.resetClip(clip.clip_id))}
+      />
+      <MenuItem
+        icon={Trash2} label={L.editor_ctxMenuDelete} disabled={!clip}
+        onClick={() => run(() => actions.removeClips([clip.clip_id]))}
       />
       {!clip && <div className="editor-ctxmenu-hint">{L.editor_ctxMenuNoClip}</div>}
     </div>

@@ -6,6 +6,7 @@ import { WAVEFORM_SCALE_MODES } from './EditorClipSettingsTab.jsx';
 import KeyboardShortcutsModal from './KeyboardShortcutsModal.jsx';
 import TestRangeModal from './TestRangeModal.jsx';
 import { resolveCanvasSize } from '../../lib/canvasOrientation.js';
+import { useAudioPeaks } from '../../hooks/useAudioPeaks.js';
 
 const SIDE_WIDTH_STORAGE_KEY = 'editorSideWidthPx';
 const DEFAULT_SIDE_WIDTH = 320;
@@ -15,6 +16,11 @@ const TEST_RANGE_STORAGE_KEY_PREFIX = 'editorTestRange_';
 const DEFAULT_TEST_RANGE_MS = 10000;
 const WAVEFORM_SCALE_STORAGE_KEY = 'editorWaveformScale';
 const WAVEFORM_COLOR_STORAGE_KEY = 'editorWaveformColorByFreq';
+const TIMELINE_SNAP_STORAGE_KEY = 'editorTimelineSnap';
+const TIMELINE_HEIGHT_STORAGE_KEY = 'editorTimelineHeightPx';
+const DEFAULT_TIMELINE_HEIGHT = 210;
+const MIN_TIMELINE_HEIGHT = 150;
+const MAX_TIMELINE_HEIGHT = 620;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -58,6 +64,27 @@ function loadStoredWaveformColor() {
   }
 }
 
+// Snapping defaults to on, like CapCut's own Track Magnet - only an explicit
+// 'false' turns it off, so a first-time user gets the sticky behaviour.
+function loadStoredSnap() {
+  try {
+    return localStorage.getItem(TIMELINE_SNAP_STORAGE_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+function loadStoredTimelineHeight() {
+  try {
+    const stored = Number(localStorage.getItem(TIMELINE_HEIGHT_STORAGE_KEY));
+    return Number.isFinite(stored) && stored > 0
+      ? clamp(stored, MIN_TIMELINE_HEIGHT, MAX_TIMELINE_HEIGHT)
+      : DEFAULT_TIMELINE_HEIGHT;
+  } catch {
+    return DEFAULT_TIMELINE_HEIGHT;
+  }
+}
+
 /** Editor stage - the final step: assembles the project's picked scene
  * video clips into one rendered file, synced to the project's selected
  * Mureka track. Laid out like a real NLE app, not a scrolling page: the
@@ -76,9 +103,11 @@ function loadStoredWaveformColor() {
  * (EditorPreview.jsx -> EditorFloatingTransport.jsx). See useEditorStage.js
  * for the state/preview-engine design; this component is layout only. */
 export default function EditorStage({
-  L, project, isMobile, videoEdit, clips, overlays, overlayVideoSources, totalDurationMs, selectedTrack, tracks,
+  L, project, isMobile, videoEdit, clips, overlays, overlayVideoSources, markers, audioSettings, exportSettings,
+  totalDurationMs, selectedTrack, tracks,
   playheadMs, isPlaying, renderLoading, renderError, elapsedSeconds, selectedClipIds,
-  selectedOverlayId, selectedTransitionClipId, logos, videoRef, audioRef, canUndo, canRedo, actions,
+  selectedOverlayId, selectedTransitionClipId, isAudioSelected,
+  logos, videoRef, audioRef, canUndo, canRedo, actions,
 }) {
   const [toolsSlot, setToolsSlot] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -93,6 +122,12 @@ export default function EditorStage({
   // share instead of the flat accent color - same kind of viewing
   // preference as waveformScale, persisted the same way.
   const [colorByFrequency, setColorByFrequency] = useState(loadStoredWaveformColor);
+  // Timeline magnet (lib/timelineSnap.js) and the timeline panel's own
+  // height - both viewing/interaction preferences rather than part of the
+  // EDL, persisted exactly like `sideWidthPx` above.
+  const [snapEnabled, setSnapEnabled] = useState(loadStoredSnap);
+  const [timelineHeightPx, setTimelineHeightPx] = useState(loadStoredTimelineHeight);
+  const [timelineResizeDrag, setTimelineResizeDrag] = useState(null);
   // The test-render range picked in TestRangeModal.jsx - a render-time
   // input, not part of the EDL, so it's plain local state here (persisted to
   // localStorage per project, not `video_edit`/undo history - see
@@ -171,12 +206,47 @@ export default function EditorStage({
     try { localStorage.setItem(WAVEFORM_COLOR_STORAGE_KEY, String(colorByFrequency)); } catch { /* ignore */ }
   }, [colorByFrequency]);
 
+  useEffect(() => {
+    try { localStorage.setItem(TIMELINE_SNAP_STORAGE_KEY, String(snapEnabled)); } catch { /* ignore */ }
+  }, [snapEnabled]);
+
+  useEffect(() => {
+    try { localStorage.setItem(TIMELINE_HEIGHT_STORAGE_KEY, String(timelineHeightPx)); } catch { /* ignore */ }
+  }, [timelineHeightPx]);
+
+  // Same pointer-capture pattern as the side-panel resizer above, only
+  // vertical: dragging up grows the timeline and the program monitor gives up
+  // the height, since `.editor-layout` is the flexible row above it.
+  useEffect(() => {
+    if (!timelineResizeDrag) return undefined;
+    function onMove(e) {
+      setTimelineHeightPx(clamp(
+        timelineResizeDrag.startHeight - (e.clientY - timelineResizeDrag.startY),
+        MIN_TIMELINE_HEIGHT,
+        MAX_TIMELINE_HEIGHT,
+      ));
+    }
+    function onUp() {
+      setTimelineResizeDrag(null);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [timelineResizeDrag]);
+
   const scenes = project.scenes || [];
   const titleCardVariants = project.title_card?.variants || [];
   const canRender = clips.length > 0 && !!selectedTrack;
   const timelineMs = Math.max(totalDurationMs, selectedTrack?.duration_ms || 0);
   const canvasOrientation = videoEdit.canvas_orientation || 'auto';
   const canvasSize = resolveCanvasSize(clips, scenes, canvasOrientation);
+  // One decode per track for the whole stage - the waveform draws from it and
+  // `lib/beats.js` reads its bass envelope for the beat-marker button, so it
+  // is lifted here rather than owned by TimelineAudioTrack.jsx as it once was.
+  const audioPeaks = useAudioPeaks(project.id, selectedTrack);
 
   return (
     <div className={`editor-stage${isMobile ? ' is-mobile' : ''}${isFullscreen ? ' editor-fullscreen' : ''}`}>
@@ -206,7 +276,8 @@ export default function EditorStage({
             L={L} projectId={project.id} videoEdit={videoEdit} clips={clips} scenes={scenes} overlays={overlays}
             overlayVideoSources={overlayVideoSources} titleCardVariants={titleCardVariants} logos={logos}
             selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
-            selectedTransitionClipId={selectedTransitionClipId}
+            selectedTransitionClipId={selectedTransitionClipId} isAudioSelected={isAudioSelected}
+            audioSettings={audioSettings} exportSettings={exportSettings}
             tracks={tracks} selectedTrack={selectedTrack} totalDurationMs={totalDurationMs}
             canvasOrientation={canvasOrientation} canvasSize={canvasSize}
             actions={actions} canUndo={canUndo} canRedo={canRedo}
@@ -219,13 +290,26 @@ export default function EditorStage({
         </div>
       </div>
 
+      {!isMobile && (
+        <div
+          className={`editor-timeline-resizer${timelineResizeDrag ? ' is-dragging' : ''}`}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            setTimelineResizeDrag({ startY: e.clientY, startHeight: timelineHeightPx });
+          }}
+        />
+      )}
+
       <EditorTimeline
-        L={L} projectId={project.id} scenes={scenes} clips={clips} overlays={overlays} totalDurationMs={totalDurationMs}
+        L={L} projectId={project.id} scenes={scenes} clips={clips} overlays={overlays} markers={markers}
+        totalDurationMs={totalDurationMs}
         selectedTrack={selectedTrack} playheadMs={playheadMs} isPlaying={isPlaying}
         selectedClipIds={selectedClipIds} selectedOverlayId={selectedOverlayId}
-        selectedTransitionClipId={selectedTransitionClipId}
+        selectedTransitionClipId={selectedTransitionClipId} isAudioSelected={isAudioSelected}
         titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources}
         actions={actions} toolsSlotNode={toolsSlot} waveformScale={waveformScale} colorByFrequency={colorByFrequency}
+        audioPeaks={audioPeaks} snapEnabled={snapEnabled} onToggleSnap={setSnapEnabled}
+        heightPx={isMobile ? undefined : timelineHeightPx}
         testRange={testRange} onClearTestRange={() => setTestRange(null)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
       />

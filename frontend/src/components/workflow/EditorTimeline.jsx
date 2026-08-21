@@ -2,12 +2,16 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { assignOverlayLanes } from '../../lib/overlays.js';
 import { resolveOverlaySource } from '../../lib/overlaySource.js';
+import { formatClock } from '../../lib/format.js';
+import { FRAME_MS } from '../../lib/timeline.js';
 import { useTimelineDrag } from '../../hooks/useTimelineDrag.js';
 import TimelineAudioTrack from './TimelineAudioTrack.jsx';
 import TimelineClipBlock from './TimelineClipBlock.jsx';
+import TimelineMarker from './TimelineMarker.jsx';
 import TimelineOverlayBlock from './TimelineOverlayBlock.jsx';
 import TimelineTransitionMarker from './TimelineTransitionMarker.jsx';
 import EditorTimelineTools from './EditorTimelineTools.jsx';
+import EditorPreviewContextMenu from './EditorPreviewContextMenu.jsx';
 
 // A zoomed-in timeline is one very wide DOM element (and one equally wide
 // waveform <canvas>) - this caps how wide it may get, both for the browser's
@@ -30,6 +34,12 @@ const LANE_H = 22;
 // "too narrow to interact with, wait for more zoom" precedent as
 // useClipThumbnails.js's MIN_SLOT_PX.
 const MIN_CLIP_WIDTH_FOR_TRANSITION_PX = 28;
+// How far one arrow-key press moves the playhead. CapCut steps a single
+// frame, and Shift multiplies it - the point is that the playhead can be put
+// exactly where a cut belongs, which "jump to the next clip" (what the arrows
+// used to do, now on the up/down arrows) can never do.
+const SHIFT_FRAME_STEP = 10;
+
 const VIDEO_TRACK_H = 66;
 const AUDIO_TRACK_H = 42;
 // Mirrors .tl-ruler's CSS height and .tl-track's margin-top - only needed so
@@ -40,11 +50,6 @@ const AUDIO_TRACK_H = 42;
 // component body below, not as a module constant.
 const RULER_H = 20;
 const TRACK_GAP = 6;
-
-function formatTimecode(ms) {
-  const total = Math.max(0, Math.round(ms / 1000));
-  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
-}
 
 function rulerStepMs(scale) {
   return RULER_STEPS_MS.find((step) => step * scale >= MIN_TICK_GAP_PX) || RULER_STEPS_MS[RULER_STEPS_MS.length - 1];
@@ -77,15 +82,21 @@ function rulerStepMs(scale) {
  * keep this file to "timeline layout" rather than growing to also own every
  * gesture and every side-panel control. */
 export default function EditorTimeline({
-  L, projectId, scenes, clips, overlays, totalDurationMs, selectedTrack, playheadMs, isPlaying,
-  selectedClipIds, selectedOverlayId, selectedTransitionClipId, titleCardVariants, logos, overlayVideoSources,
+  L, projectId, scenes, clips, overlays, markers, totalDurationMs, selectedTrack, playheadMs, isPlaying,
+  selectedClipIds, selectedOverlayId, selectedTransitionClipId, isAudioSelected,
+  titleCardVariants, logos, overlayVideoSources,
   actions, toolsSlotNode, testRange, onClearTestRange, onOpenShortcuts, waveformScale, colorByFrequency,
+  audioPeaks, snapEnabled, onToggleSnap, heightPx,
 }) {
   const scrollRef = useRef(null);
   const clipNodesRef = useRef({});
   const pendingScrollRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(900);
   const [zoomPxPerMs, setZoomPxPerMs] = useState(null); // null = fit the whole timeline
+  // Right-click menu on a clip block - the same component the program monitor
+  // uses (EditorPreviewContextMenu.jsx), just with the clicked block as the
+  // target instead of whatever sits under the playhead.
+  const [clipMenu, setClipMenu] = useState(null);
 
   const audioDurationMs = selectedTrack?.duration_ms || 0;
   const contentDurationMs = Math.max(totalDurationMs, audioDurationMs, MIN_CONTENT_MS);
@@ -101,9 +112,9 @@ export default function EditorTimeline({
 
   const {
     contentRef, drag, dragDx, startContentPointerDown, startClipDrag, onClipKeyDown,
-    startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown,
+    startTrimDrag, startOverlayDrag, startOverlayTrimDrag, onOverlayKeyDown, startMarkerDrag,
   } = useTimelineDrag({
-    actions, scenes, clips, scale,
+    actions, scenes, clips, overlays, markers, scale, playheadMs, totalDurationMs, snapEnabled,
   });
 
   useEffect(() => {
@@ -145,20 +156,33 @@ export default function EditorTimeline({
     pendingScrollRef.current = null;
   }, [scale]);
 
-  // Ctrl+wheel zoom has to be a native, explicitly non-passive listener:
+  // Wheel handling has to be a native, explicitly non-passive listener:
   // React registers its own `wheel` handlers as passive, where
-  // `preventDefault()` is ignored and the browser zooms the whole page
+  // `preventDefault()` is ignored and the browser zooms/scrolls the whole page
   // instead. Kept subscribed once, driving through refs, so a playing
   // playhead doesn't re-subscribe it 60 times a second.
+  //
+  // Ctrl+wheel zooms (unchanged); a bare wheel scrolls the timeline
+  // horizontally and Shift+wheel does the same but faster. A vertical wheel
+  // over a horizontally-scrolling box otherwise does nothing at all in most
+  // browsers, which made the zoomed-in timeline reachable only by dragging
+  // its scrollbar - every desktop NLE scrolls it with the wheel instead.
   const zoomRef = useRef(null);
   zoomRef.current = (factor) => applyZoom(scale * factor);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return undefined;
     function onWheel(e) {
-      if (!e.ctrlKey) return;
+      if (e.ctrlKey) {
+        e.preventDefault();
+        zoomRef.current(e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR);
+        return;
+      }
+      // `deltaX` first so a trackpad's own horizontal gesture keeps working.
+      const delta = e.deltaX || e.deltaY;
+      if (!delta) return;
       e.preventDefault();
-      zoomRef.current(e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR);
+      el.scrollLeft += delta * (e.shiftKey ? 3 : 1);
     }
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -175,21 +199,46 @@ export default function EditorTimeline({
     }
   }, [playheadMs, isPlaying, scale, drag]);
 
+  /** The timeline's own keyboard surface. Everything here is bound to match
+   * a desktop NLE (CapCut's set, see KeyboardShortcutsModal.jsx which lists
+   * exactly these): left/right step the playhead by a *frame*, up/down walk
+   * between clips (what left/right used to do - a clip jump can never put the
+   * playhead where a cut belongs, which is what the frame step is for),
+   * Home/End go to the ends, Q/W trim the selected clip up to the playhead,
+   * S / Ctrl+B split, M drops a marker.
+   *
+   * The old guard here was `if (e.target !== e.currentTarget) return`, which
+   * silently killed every one of these the moment focus sat on a clip block -
+   * and arrow navigation *focuses a clip block by design*, so "walk to a clip
+   * with the arrows, press Delete" did nothing at all. Guarding against text
+   * fields instead (the same check EditorStage.jsx's undo listener uses) is
+   * what actually needs excluding. */
   function onKeyDown(e) {
+    const tag = e.target?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+    const withMod = e.ctrlKey || e.metaKey;
+
     if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      e.preventDefault();
+      const frames = e.shiftKey ? SHIFT_FRAME_STEP : 1;
+      const direction = e.code === 'ArrowLeft' ? -1 : 1;
+      actions.seek(playheadMs + direction * frames * FRAME_MS);
+      return;
+    }
+    if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
       if (!clips.length) return;
       e.preventDefault();
       // With a multi-selection, continue from its far edge in the arrow's
-      // direction (rightmost clip for ArrowRight, leftmost for ArrowLeft) -
+      // direction (rightmost clip for ArrowDown, leftmost for ArrowUp) -
       // matches the single-select case exactly when only one is selected.
       const selectedIndices = clips.reduce((acc, c, i) => {
         if (selectedClipIds.has(c.clip_id)) acc.push(i);
         return acc;
       }, []);
       const currentIndex = selectedIndices.length
-        ? (e.code === 'ArrowRight' ? Math.max(...selectedIndices) : Math.min(...selectedIndices))
+        ? (e.code === 'ArrowDown' ? Math.max(...selectedIndices) : Math.min(...selectedIndices))
         : -1;
-      const nextIndex = e.code === 'ArrowLeft'
+      const nextIndex = e.code === 'ArrowUp'
         ? Math.max(0, (currentIndex === -1 ? clips.length : currentIndex) - 1)
         : Math.min(clips.length - 1, currentIndex + 1);
       const nextClip = clips[nextIndex];
@@ -197,13 +246,43 @@ export default function EditorTimeline({
       clipNodesRef.current[nextClip.clip_id]?.focus();
       return;
     }
-    if (e.target !== e.currentTarget) return;
-    const withMod = e.ctrlKey || e.metaKey;
-    if (e.code === 'Space') {
+    if (e.code === 'Home') {
+      e.preventDefault();
+      actions.seek(0);
+      return;
+    }
+    if (e.code === 'End') {
+      e.preventDefault();
+      actions.seek(contentDurationMs);
+      return;
+    }
+
+    if (withMod && (e.code === 'Equal' || e.code === 'NumpadAdd')) {
+      e.preventDefault();
+      zoomIn();
+    } else if (withMod && (e.code === 'Minus' || e.code === 'NumpadSubtract')) {
+      e.preventDefault();
+      zoomOut();
+    } else if (withMod && (e.code === 'Digit0' || e.code === 'Numpad0')) {
+      e.preventDefault();
+      zoomFit();
+    } else if (e.code === 'Space') {
       e.preventDefault();
       (isPlaying ? actions.pause : actions.play)();
-    } else if (e.code === 'KeyS') {
+    } else if (e.code === 'KeyM' && !withMod) {
+      e.preventDefault();
+      actions.addMarker();
+    } else if (withMod && e.code === 'KeyT') {
+      e.preventDefault();
+      actions.addTextOverlay();
+    } else if (e.code === 'KeyS' && !withMod) {
       actions.splitAtPlayhead();
+    } else if (withMod && e.code === 'KeyB') {
+      e.preventDefault();
+      actions.splitAtPlayhead();
+    } else if ((e.code === 'KeyQ' || e.code === 'KeyW') && !withMod && selectedClipIds.size === 1) {
+      e.preventDefault();
+      actions.trimClipToPlayhead(Array.from(selectedClipIds)[0], e.code === 'KeyQ' ? 'start' : 'end');
     } else if (withMod && e.code === 'KeyA') {
       e.preventDefault();
       actions.selectAll();
@@ -242,14 +321,17 @@ export default function EditorTimeline({
       titleCardVariants={titleCardVariants} logos={logos} overlayVideoSources={overlayVideoSources} actions={actions}
       playheadMs={playheadMs} contentDurationMs={contentDurationMs}
       scale={scale} fitScale={fitScale} maxScale={maxScale}
-      onZoomIn={zoomIn} onZoomOut={zoomOut} onZoomFit={zoomFit}
+      onZoomIn={zoomIn} onZoomOut={zoomOut} onZoomFit={zoomFit} onZoomTo={applyZoom}
       testRange={testRange} onClearTestRange={onClearTestRange}
       onOpenShortcuts={onOpenShortcuts}
+      snapEnabled={snapEnabled} onToggleSnap={onToggleSnap}
+      audioPeaks={audioPeaks} audioDurationMs={audioDurationMs} markerCount={(markers || []).length}
+      onSeek={actions.seek}
     />
   );
 
   const timelineJsx = (
-    <div className="tl-panel">
+    <div className="tl-panel" style={heightPx ? { height: heightPx } : undefined}>
       {/* The scroll box is the timeline's own keyboard surface (arrows move
           between clips, Space/S/Delete act on them), so it has to be
           focusable and listen for keys while staying a container rather than
@@ -264,16 +346,28 @@ export default function EditorTimeline({
           <div className="tl-ruler">
             {Array.from({ length: tickCount }, (_, i) => (
               <div key={i} className="tl-tick" style={{ left: i * stepMs * scale }}>
-                <span>{formatTimecode(i * stepMs)}</span>
+                <span>{formatClock(i * stepMs)}</span>
               </div>
             ))}
             {testRange && (
               <div
                 className="tl-test-range-tick"
                 style={{ left: testRange.startMs * scale, width: (testRange.endMs - testRange.startMs) * scale }}
-                title={`${L.editor_testRangeLabel}: ${formatTimecode(testRange.startMs)} → ${formatTimecode(testRange.endMs)}`}
+                title={`${L.editor_testRangeLabel}: ${formatClock(testRange.startMs)} → ${formatClock(testRange.endMs)}`}
               />
             )}
+            {(markers || []).map((marker) => (
+              <TimelineMarker
+                key={marker.marker_id}
+                L={L}
+                marker={marker}
+                left={marker.at_ms * scale}
+                isDragging={drag?.mode === 'marker' && drag.marker.marker_id === marker.marker_id}
+                onPointerDown={(e) => startMarkerDrag(e, marker)}
+                onRemove={() => actions.removeMarker(marker.marker_id)}
+                onRename={(label) => actions.renameMarker(marker.marker_id, label)}
+              />
+            ))}
           </div>
 
           <div className="tl-track tl-track-overlay" style={{ height: overlayTrackHeight }}>
@@ -320,6 +414,12 @@ export default function EditorTimeline({
                   width={width}
                   nodeRef={(el) => { if (el) clipNodesRef.current[clip.clip_id] = el; else delete clipNodesRef.current[clip.clip_id]; }}
                   onBlockPointerDown={(e) => startClipDrag(e, clip, index)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    actions.selectClip(clip.clip_id);
+                    setClipMenu({ x: e.clientX, y: e.clientY, clip });
+                  }}
                   onKeyDown={(e) => onClipKeyDown(e, clip)}
                   onTrimStartPointerDown={(e) => startTrimDrag(e, clip, 'start')}
                   onTrimEndPointerDown={(e) => startTrimDrag(e, clip, 'end')}
@@ -348,10 +448,34 @@ export default function EditorTimeline({
             })}
           </div>
 
-          <div className="tl-track tl-track-audio" style={{ height: AUDIO_TRACK_H }}>
+          {/* The audio row is a selectable object of its own (volume/fades/
+              offset live in TimelineAudioInspector.jsx), so clicking it must
+              select rather than fall through to the background scrub -
+              `stopPropagation` on pointerdown is what keeps
+              `startContentPointerDown` from also grabbing the playhead. */}
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+          <div
+            className={`tl-track tl-track-audio${isAudioSelected ? ' is-selected' : ''}`}
+            style={{ height: AUDIO_TRACK_H }}
+            role="button"
+            tabIndex={selectedTrack ? 0 : -1}
+            aria-label={L.editor_audioTrackLabel}
+            onPointerDown={(e) => {
+              if (!selectedTrack || e.button !== 0) return;
+              e.stopPropagation();
+              actions.selectAudio();
+            }}
+            onKeyDown={(e) => {
+              if (e.code === 'Enter' && selectedTrack) {
+                e.preventDefault();
+                e.stopPropagation();
+                actions.selectAudio();
+              }
+            }}
+          >
             {selectedTrack ? (
               <TimelineAudioTrack
-                projectId={projectId} track={selectedTrack} scaleMode={waveformScale}
+                peaks={audioPeaks} scaleMode={waveformScale}
                 colorByFrequency={colorByFrequency}
                 widthPx={audioDurationMs * scale} heightPx={AUDIO_TRACK_H}
               />
@@ -361,6 +485,10 @@ export default function EditorTimeline({
           </div>
 
           <div className="tl-playhead" style={{ left: playheadMs * scale }}><span /></div>
+
+          {drag?.snapMs != null && (
+            <div className="tl-snap-guide" style={{ left: drag.snapMs * scale }} />
+          )}
 
           {drag?.mode === 'marquee' && (() => {
             const startPx = drag.startMs * scale;
@@ -384,6 +512,12 @@ export default function EditorTimeline({
     <>
       {timelineJsx}
       {toolsSlotNode ? createPortal(toolsContent, toolsSlotNode) : <div className="tl-panel tl-tools-fallback">{toolsContent}</div>}
+      {clipMenu && (
+        <EditorPreviewContextMenu
+          L={L} x={clipMenu.x} y={clipMenu.y} clip={clipMenu.clip} actions={actions}
+          onClose={() => setClipMenu(null)}
+        />
+      )}
     </>
   );
 }

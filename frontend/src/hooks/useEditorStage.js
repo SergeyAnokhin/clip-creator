@@ -1,8 +1,14 @@
 import { useRef, useState } from 'react';
 import { api } from '../api/client.js';
-import { buildDefaultClips, defaultMurekaTrackId, EMPTY_VIDEO_EDIT } from '../lib/editorDefaults.js';
-import { DEFAULT_OVERLAY_DURATION_MS, defaultOverlayTransform, migrateOverlay } from '../lib/overlays.js';
-import { computeTimelineClips, getTotalDurationMs, moveClip, splitClipsAt } from '../lib/timeline.js';
+import {
+  buildDefaultClips, DEFAULT_AUDIO_SETTINGS, DEFAULT_EXPORT_SETTINGS, defaultMurekaTrackId, EMPTY_VIDEO_EDIT,
+} from '../lib/editorDefaults.js';
+import {
+  DEFAULT_OVERLAY_DURATION_MS, DEFAULT_TEXT_OVERLAY, defaultOverlayTransform, migrateOverlay,
+} from '../lib/overlays.js';
+import {
+  computeTimelineClips, freezeClipsAt, getTotalDurationMs, moveClip, splitClipsAt, trimEdgeToPlayhead,
+} from '../lib/timeline.js';
 import { resolveCanvasSize } from '../lib/canvasOrientation.js';
 import { useEditorPreview } from './useEditorPreview.js';
 import { useEditorRender } from './useEditorRender.js';
@@ -55,6 +61,11 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   const [selectedClipIds, setSelectedClipIds] = useState(() => new Set());
   const [selectedOverlayId, setSelectedOverlayId] = useState(null);
   const [selectedTransitionClipId, setSelectedTransitionClipId] = useState(null);
+  // The audio row itself as a selectable object (CapCut: click the audio clip,
+  // see its own volume/fades) - the fourth member of the mutually-exclusive
+  // selection set below, a plain boolean since there is only ever one audio
+  // track on this timeline.
+  const [isAudioSelected, setIsAudioSelected] = useState(false);
   const [past, setPast] = useState([]);
   const [future, setFuture] = useState([]);
   const lastCommitAtRef = useRef(0);
@@ -89,6 +100,9 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   // needed (see `migrateOverlay`'s own docstring).
   const overlays = (videoEdit.overlays || []).map((o) => migrateOverlay(o, canvasSize.width, canvasSize.height));
   const overlayVideoSources = videoEdit.overlay_video_sources || [];
+  const markers = videoEdit.markers || [];
+  const audioSettings = { ...DEFAULT_AUDIO_SETTINGS, ...(videoEdit.audio || {}) };
+  const exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...(videoEdit.export || {}) };
   const sourceDurationsById = buildSourceDurations(scenes);
   const timelineClips = computeTimelineClips(clips, sourceDurationsById);
   const totalDurationMs = getTotalDurationMs(clips, sourceDurationsById);
@@ -105,6 +119,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     setSelectedClipIds(new Set());
     setSelectedOverlayId(null);
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     setPast([]);
     setFuture([]);
     lastCommitAtRef.current = 0;
@@ -120,7 +135,8 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       updateProject((p) => ({
         ...p,
         video_edit: {
-          mureka_track_id, clips: clipsSeed, overlays: [], overlay_video_sources: [], renders: [], canvas_orientation: 'auto',
+          mureka_track_id, clips: clipsSeed, overlays: [], overlay_video_sources: [], renders: [],
+          canvas_orientation: 'auto', markers: [], audio: null, export: null,
         },
       }));
     }
@@ -143,7 +159,10 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
    * here on purpose - they're an append-only log of past exports, not an
    * edit decision to undo. */
   function currentDoc() {
-    return { clips: videoEdit.clips, overlays: videoEdit.overlays, mureka_track_id: videoEdit.mureka_track_id };
+    return {
+      clips: videoEdit.clips, overlays: videoEdit.overlays, markers: videoEdit.markers,
+      audio: videoEdit.audio, mureka_track_id: videoEdit.mureka_track_id,
+    };
   }
   function commitVideoEdit(mutator, opts) {
     const now = Date.now();
@@ -163,8 +182,12 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     setSelectedClipIds(new Set());
     setSelectedOverlayId(null);
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     lastCommitAtRef.current = 0;
-    patchVideoEdit((edit) => ({ ...edit, clips: prev.clips, overlays: prev.overlays, mureka_track_id: prev.mureka_track_id }));
+    patchVideoEdit((edit) => ({
+      ...edit, clips: prev.clips, overlays: prev.overlays, markers: prev.markers,
+      audio: prev.audio, mureka_track_id: prev.mureka_track_id,
+    }));
   }
   function redo() {
     if (!future.length) return;
@@ -175,8 +198,12 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     setSelectedClipIds(new Set());
     setSelectedOverlayId(null);
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     lastCommitAtRef.current = 0;
-    patchVideoEdit((edit) => ({ ...edit, clips: next.clips, overlays: next.overlays, mureka_track_id: next.mureka_track_id }));
+    patchVideoEdit((edit) => ({
+      ...edit, clips: next.clips, overlays: next.overlays, markers: next.markers,
+      audio: next.audio, mureka_track_id: next.mureka_track_id,
+    }));
   }
 
   /** Drag-and-drop reorder on the timeline - array indices, not clip ids,
@@ -213,6 +240,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
     const { additive, range } = opts;
     setSelectedOverlayId(null);
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     if (clipId == null) {
       setSelectedClipIds(new Set());
       selectionAnchorRef.current = null;
@@ -245,11 +273,13 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   function setSelection(clipIds) {
     setSelectedOverlayId(null);
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     setSelectedClipIds(new Set(clipIds));
   }
   function selectAll() {
     setSelectedOverlayId(null);
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     setSelectedClipIds(new Set(timelineClips.map((c) => c.clip_id)));
   }
   /** Single-select for the overlay lane (no marquee/multi-select - overlays
@@ -260,6 +290,7 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   function selectOverlay(overlayId) {
     setSelectedClipIds(new Set());
     setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
     setSelectedOverlayId(overlayId);
   }
   /** Single-select for the boundary between two clips - `clipId` is the
@@ -268,7 +299,18 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   function selectTransition(clipId) {
     setSelectedClipIds(new Set());
     setSelectedOverlayId(null);
+    setIsAudioSelected(false);
     setSelectedTransitionClipId(clipId);
+  }
+  /** Selects the audio row itself, so `EditorObjectPropertiesTab.jsx` shows
+   * `TimelineAudioInspector.jsx` (volume/fades/offset) - the same
+   * "click the object, edit the object" model the other three selections
+   * follow. */
+  function selectAudio() {
+    setSelectedClipIds(new Set());
+    setSelectedOverlayId(null);
+    setSelectedTransitionClipId(null);
+    setIsAudioSelected(true);
   }
   function duplicateClips(clipIds) {
     const idSet = new Set(clipIds);
@@ -384,11 +426,112 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
       )),
     }));
   }
+  /** Q/W on the timeline (CapCut's "trim to playhead"): the selected clip
+   * gives up whichever side of itself the playhead has already passed (or
+   * hasn't reached yet). A no-op when the playhead isn't inside the clip or
+   * the cut would leave a sliver - see `trimEdgeToPlayhead`. */
+  function trimClipToPlayhead(clipId, edge) {
+    const target = timelineClips.find((c) => c.clip_id === clipId);
+    const next = trimEdgeToPlayhead(target, preview.playheadMs, edge);
+    if (!next) return;
+    invalidatePreviewClip();
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (
+        c.clip_id === clipId ? { ...c, trim_start_ms: next.trimStartMs, trim_end_ms: next.trimEndMs } : c
+      )),
+    }));
+  }
+  /** Freeze frame: splits the clip under the playhead and drops a held still
+   * of that exact frame between the halves (`freezeClipsAt`). */
+  function freezeAtPlayhead() {
+    invalidatePreviewClip();
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: freezeClipsAt(edit.clips, sourceDurationsById, preview.playheadMs, () => randomId('clip')),
+    }));
+  }
+  /** Per-clip colour correction - `{brightness, contrast, saturation, gamma}`
+   * in ffmpeg `eq` semantics (`providers/editor.py`), `null` to remove it
+   * entirely. Previewed approximately as a CSS `filter` on the monitor's
+   * `<video>` (EditorPreview.jsx), same tolerance the rest of the preview
+   * already carries. */
+  function setClipAdjust(clipId, adjust) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c) => (c.clip_id === clipId ? { ...c, adjust } : c)),
+    }), { immediate: false });
+  }
+
   function setMurekaTrackId(trackId) {
     commitVideoEdit((edit) => ({ ...edit, mureka_track_id: trackId }));
   }
   function setCanvasOrientation(orientation) {
     commitVideoEdit((edit) => ({ ...edit, canvas_orientation: orientation }));
+  }
+
+  /** Partial patch of `video_edit.audio` (`{volume, fade_in_ms, fade_out_ms,
+   * offset_ms}`) - how the picked track is laid under the video. `offset_ms`
+   * skips that much of the track's own head, so the song can start from its
+   * chorus; the in-browser preview mirrors it in `useEditorPreview.js` so the
+   * playhead still means the same moment in both. */
+  function setAudioSettings(patch) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      audio: { ...DEFAULT_AUDIO_SETTINGS, ...(edit.audio || {}), ...patch },
+    }), { immediate: false });
+  }
+  /** Partial patch of `video_edit.export` (`{resolution, fps, quality}`) -
+   * output pixels/frames/bitrate, independent of `canvas_orientation` (which
+   * only picks portrait vs landscape). */
+  function setExportSettings(patch) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      export: { ...DEFAULT_EXPORT_SETTINGS, ...(edit.export || {}), ...patch },
+    }));
+  }
+
+  // ---------- markers ----------
+  /** A labelled moment on the ruler - purely an editing aid (the renderer
+   * never reads `video_edit.markers`), but a snap target for every timeline
+   * gesture, which is the whole point: cut on the beat without eyeballing
+   * the waveform. */
+  function addMarker(atMs) {
+    const at = Math.round(atMs ?? preview.playheadMs);
+    commitVideoEdit((edit) => ({
+      ...edit,
+      markers: [...(edit.markers || []), { marker_id: randomId('mrk'), at_ms: at, label: '' }],
+    }));
+  }
+  /** Replaces every marker with one per detected beat (`lib/beats.js`) -
+   * "replace", not "append", so pressing it twice doesn't double up, and so
+   * one undo takes the whole batch back. */
+  function setBeatMarkers(beats) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      markers: beats.map((beat) => ({ marker_id: randomId('mrk'), at_ms: Math.round(beat.at_ms), label: '' })),
+    }));
+  }
+  function moveMarker(markerId, atMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      markers: (edit.markers || []).map((m) => (m.marker_id === markerId ? { ...m, at_ms: Math.max(0, Math.round(atMs)) } : m)),
+    }), { immediate: false });
+  }
+  function renameMarker(markerId, label) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      markers: (edit.markers || []).map((m) => (m.marker_id === markerId ? { ...m, label } : m)),
+    }), { immediate: false });
+  }
+  function removeMarker(markerId) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      markers: (edit.markers || []).filter((m) => m.marker_id !== markerId),
+    }));
+  }
+  function clearMarkers() {
+    commitVideoEdit((edit) => ({ ...edit, markers: [] }));
   }
 
   // ---------- transitions & fades ----------
@@ -403,6 +546,19 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
         c.clip_id === clipId
           ? { ...c, transition_in: type === 'none' ? null : { type, duration_ms: durationMs } }
           : c
+      )),
+    }));
+  }
+  /** Same transition on every boundary at once - the single most repeated
+   * action in CapCut/Movavi once a rough cut exists. The first clip has no
+   * boundary before it, so it is always left alone. */
+  function setAllTransitions(type, durationMs) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      clips: edit.clips.map((c, i) => (
+        i === 0
+          ? { ...c, transition_in: null }
+          : { ...c, transition_in: type === 'none' ? null : { type, duration_ms: durationMs } }
       )),
     }));
   }
@@ -456,6 +612,39 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
         const heightPct = o.width_pct * (naturalH / naturalW);
         return { ...o, y_pct: o.y_pct + (o.height_pct - heightPct), height_pct: heightPct };
       }),
+    }), { immediate: false });
+  }
+  /** A `kind: 'text'` overlay - carries its own `text` block (content +
+   * styling) instead of a `source_id`, and is rasterized to a PNG by
+   * `providers/editor.py` at render time so it rides the exact same overlay
+   * compositing path every image overlay already uses. Starts wider than an
+   * image overlay's default square because a line of text is wide;
+   * `resolveOverlayNaturalAspect` corrects the height once the preview's
+   * Konva `Text` node reports its measured size. */
+  function addTextOverlay(content) {
+    const overlay = {
+      overlay_id: randomId('ovl'), kind: 'text', source_id: null,
+      start_ms: Math.round(preview.playheadMs), duration_ms: DEFAULT_OVERLAY_DURATION_MS,
+      ...defaultOverlayTransform(), opacity: 1, fade_in_ms: 0, fade_out_ms: 0,
+      text: { ...DEFAULT_TEXT_OVERLAY, content: content ?? DEFAULT_TEXT_OVERLAY.content },
+    };
+    pendingAspectFitOverlayIdRef.current = overlay.overlay_id;
+    commitVideoEdit((edit) => ({ ...edit, overlays: [...(edit.overlays || []), overlay] }));
+    setSelectedOverlayId(overlay.overlay_id);
+    setSelectedClipIds(new Set());
+    setSelectedTransitionClipId(null);
+    setIsAudioSelected(false);
+  }
+  /** Partial patch of a text overlay's own `text` block (content, font,
+   * colour, outline, alignment) - placement/timing/opacity still go through
+   * `setOverlayTransform`/`setOverlayTiming`/`setOverlayOpacity` like any
+   * other overlay. */
+  function setOverlayText(overlayId, patch) {
+    commitVideoEdit((edit) => ({
+      ...edit,
+      overlays: (edit.overlays || []).map((o) => (
+        o.overlay_id === overlayId ? { ...o, text: { ...DEFAULT_TEXT_OVERLAY, ...(o.text || {}), ...patch } } : o
+      )),
     }), { immediate: false });
   }
   function setOverlayTiming(overlayId, startMs, durationMs) {
@@ -551,21 +740,26 @@ export function useEditorStage({ activeProject, setActiveProject, updateProject,
   return {
     state: {
       videoEdit, clips: timelineClips, overlays, overlayVideoSources, totalDurationMs, selectedTrack, tracks,
+      markers, audioSettings, exportSettings,
       playheadMs: preview.playheadMs, isPlaying: preview.isPlaying,
       renderLoading: render.renderLoading, renderError: render.renderError, elapsedSeconds: render.elapsedSeconds,
-      selectedClipIds, selectedOverlayId, selectedTransitionClipId,
+      selectedClipIds, selectedOverlayId, selectedTransitionClipId, isAudioSelected,
       videoRef: preview.videoRef, audioRef: preview.audioRef,
       canUndo: past.length > 0, canRedo: future.length > 0,
     },
     resetForProject,
     actions: {
       reorderClip, splitAtPlayhead, removeClips, addSceneClip, addAllSceneClips, changeClipVideo,
-      setClipTrim, setClipSpeed, setClipReverse, setClipFit, resetClip, setMurekaTrackId, setCanvasOrientation,
-      selectClip, setSelection, selectAll,
+      setClipTrim, setClipSpeed, setClipReverse, setClipFit, setClipAdjust, resetClip,
+      trimClipToPlayhead, freezeAtPlayhead,
+      setMurekaTrackId, setCanvasOrientation, setAudioSettings, setExportSettings,
+      addMarker, setBeatMarkers, moveMarker, renameMarker, removeMarker, clearMarkers,
+      selectClip, setSelection, selectAll, selectAudio,
       duplicateClips, copyClips, pasteClips, undo, redo,
-      addOverlay, setOverlayTiming, setOverlayTransform, setOverlayOpacity, setOverlayReverse, setOverlayFade,
+      addOverlay, addTextOverlay, setOverlayText,
+      setOverlayTiming, setOverlayTransform, setOverlayOpacity, setOverlayReverse, setOverlayFade,
       removeOverlay, selectOverlay, uploadOverlayVideo, deleteOverlayVideo, resolveOverlayNaturalAspect,
-      setClipTransition, setClipFadeIn, setClipFadeOut, selectTransition,
+      setClipTransition, setAllTransitions, setClipFadeIn, setClipFadeOut, selectTransition,
       play: preview.play, pause: preview.pause, seek: preview.seek,
       startRender: render.startRender, deleteRender: render.deleteRender, downloadRender: render.downloadRender,
     },
